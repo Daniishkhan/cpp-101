@@ -1,0 +1,791 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>08 · Strings, program arguments, randomness — C++ from zero to Life</title>
+<link rel="stylesheet" href="assets/book.css?v=9">
+<link rel="stylesheet" href="assets/tutor.css?v=9">
+<script src="assets/theme.js?v=9"></script>
+<script defer src="assets/book.js?v=9"></script>
+<script defer src="assets/tutor.js?v=9"></script>
+</head>
+<body>
+<nav class="sidebar" aria-label="Chapters"></nav>
+<main>
+<p class="chapter-kicker">Chapter 08</p>
+<h1>Strings, program arguments, randomness</h1>
+<p class="lede">At the end of this chapter you will be able to build a piece of text one character at a time, read the options a user types after your program's name (<code>--width 80 --seed 7</code>), turn that text into numbers, and ask the machine for a stream of "random" numbers that comes out identical every time you ask with the same seed. Those are the three things the Game of Life still needs that no earlier chapter gave you.</p>
+
+<div class="callout note"><span class="label">In this chapter</span>
+<ul>
+<li><code>std::string</code>: a vector of characters with extras. Create, append, measure, compare, join.</li>
+<li>Reading a string one character at a time, and why <code>'a'</code> and <code>"a"</code> are different things.</li>
+<li>Building a whole picture into one string and printing it once.</li>
+<li>Program arguments: what the operating system hands to <code>main</code>, and how to walk through it.</li>
+<li>Parsing <code>--flag value</code> pairs, converting text to numbers with <code>std::stoi</code> and <code>std::stod</code>, defaults, and a usage message.</li>
+<li>Pseudo-random numbers: a formula, a seed, and why "same seed, same sequence" is a feature.</li>
+<li><code>std::mt19937</code> and <code>std::uniform_real_distribution</code>: the three lines <code>random_cells</code> needs, and nothing more (the rest of <code>&lt;random&gt;</code> waits for week 5).</li>
+</ul>
+</div>
+
+<h2>Three things Life still cannot do</h2>
+<p>Look at the contract in <code>phase1-terminal/01-life/src/life.hpp</code>. By now you can read most of it. <code>index_of</code> and <code>wrap</code> take <code>int</code>s and return an <code>int</code>. <code>count_neighbours</code> and <code>step</code> take a <code>const Cells&amp;</code>, which <a href="05-references-and-const.html">chapter 5</a> taught you to read as "look, don't copy, don't change". Three pieces are still foreign:</p>
+<ul>
+<li><code>std::string render(const Cells&amp; cells, int width, int height);</code> returns a <code>std::string</code>. You have not met that type properly. The comment says the string holds one row per line, <code>'#'</code> for alive and <code>'.'</code> for dead.</li>
+<li><code>Cells random_cells(int width, int height, unsigned int seed, double fill);</code> wants a <strong>seed</strong> and a <strong>fill</strong>, and promises that "the same seed must always give the same grid". That is randomness, but a controlled kind.</li>
+<li>The stub <code>main.cpp</code> says the finished program is run as <code>./build/life --width 80 --height 24 --seed 7</code>. Nothing you have written so far can see what the user typed after the program's name.</li>
+</ul>
+<p>This chapter closes those three gaps: strings first, then program arguments, then randomness. Each is taught on a problem one step away from Life, so that the Life code stays yours to write.</p>
+
+<h2>std::string: a vector of characters with extras</h2>
+<p>You know <code>std::vector&lt;int&gt;</code> from <a href="06-vector.html">chapter 6</a>: a row of boxes in memory, with a <code>.size()</code>, an index operator <code>[]</code>, and <code>push_back</code> to grow it. Nothing stops you writing <code>std::vector&lt;char&gt;</code>: the same row of boxes, each one byte. A <strong>string</strong> is text, and text is a row of characters. So a type for text could simply be a vector of <code>char</code>. The standard library gives you something very close to that, called <code>std::string</code>. On top of the vector behaviour it adds the conveniences that text needs all the time. You can write one in double quotes. You can append with <code>+=</code>, join two with <code>+</code>, and compare two with <code>==</code>. And <code>std::println</code> prints one with a plain <code>{}</code>.</p>
+<p>Here is the smallest program that does something with one. You need <code>#include &lt;string&gt;</code> the same way you need <code>#include &lt;vector&gt;</code> for vectors.</p>
+
+<pre class="code" data-lang="cpp" data-file="first_string.cpp" data-check="run"><code>#include &lt;print&gt;
+#include &lt;string&gt;
+
+int main() {
+    std::string greeting = "Hello";
+    std::println("{}", greeting);
+    std::println("size: {}", greeting.size());
+
+    greeting += ", world";          // append more text to the end
+    std::println("{}", greeting);
+    std::println("size: {}", greeting.size());
+
+    greeting += '!';                // append ONE character
+    std::println("{}", greeting);
+    std::println("size: {}", greeting.size());
+
+    std::string empty;              // no characters at all
+    std::println("empty has size {}", empty.size());
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="first_string.cpp"><code>Hello
+size: 5
+Hello, world
+size: 12
+Hello, world!
+size: 13
+empty has size 0
+</code></pre>
+<p>Read the sizes. <code>"Hello"</code> is 5 characters. After <code>+= ", world"</code> it is 12: seven characters were added. After <code>+= '!'</code> it is 13. The <code>+=</code> from <a href="02-values-and-types.html">chapter 2</a> ("add this to what is there") means for a string "put these characters after what is there", and it works both with text in double quotes and with a single character in single quotes. A string declared with no value, <code>std::string empty;</code>, has zero characters. That is unlike <code>int x;</code>, which <a href="02-values-and-types.html">chapter 2</a> warned you holds whatever bytes happened to be there (reading it is undefined behaviour): a string is always in a sensible state.</p>
+<p><code>.size()</code> is the same as for a vector: the number of elements, here characters, as a <code>std::size_t</code>. Behind the scenes a <code>std::string</code> really is a block of bytes in memory plus a count, exactly like a <code>std::vector&lt;char&gt;</code>. When you append and the block is full, the string finds a bigger block and moves the bytes across, just as <code>push_back</code> does.</p>
+
+<div class="callout analogy"><span class="label">Analogy</span><p>A string is a line of letter tiles on a rack, like in a word game. You can count the tiles, look at the tile in position 3, and push more tiles on at the right-hand end. Two racks spell the same word if they have the same tiles in the same order.</p>
+<p>Where it breaks: a rack has a fixed number of slots. A <code>std::string</code> grows as far as memory allows; a million characters is nothing to it (<a href="05-references-and-const.html">chapter 5</a> made one). And tiles are letters, while a string's elements are <code>char</code> values: any byte, including a newline <code>'\n'</code>, a space, or the digit <code>'7'</code>, which is a character and not the number seven.</p></div>
+
+<h3>Joining and comparing</h3>
+<p>Where <code>+=</code> changes a string in place, <code>+</code> makes a brand new string out of two pieces and leaves both pieces alone. And <code>==</code> asks "same characters in the same order?", which is what you mean by "same text". It is case-sensitive: an upper-case <code>L</code> is a different byte from a lower-case <code>l</code>.</p>
+
+<pre class="code" data-lang="cpp" data-file="concat_compare.cpp" data-check="run"><code>#include &lt;print&gt;
+#include &lt;string&gt;
+
+int main() {
+    std::string first = "Game";
+    std::string second = "Life";
+    std::string title = first + " of " + second;   // + makes a NEW string
+    std::println("{}", title);
+    std::println("first is still: {}", first);
+
+    std::string a = "life";
+    std::string b = "life";
+    std::string c = "Life";
+    std::println("a == b: {}", a == b);
+    std::println("a == c: {}", a == c);
+    std::println("a != c: {}", a != c);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="concat_compare.cpp"><code>Game of Life
+first is still: Game
+a == b: true
+a == c: false
+a != c: true
+</code></pre>
+<p>Notice that <code>a == b</code> is true even though <code>a</code> and <code>b</code> are two separate variables, two separate blocks of bytes. The comparison looks at the contents, not at where they live. This will matter in a moment, when you compare what the user typed against <code>"--width"</code>.</p>
+
+<h3>A number is not text</h3>
+<p>The characters <code>'4'</code> and <code>'2'</code> next to each other in a string are two bytes with the codes for those digits. The <code>int</code> 42 is four bytes holding the binary pattern for forty-two. They look alike on your screen and have nothing to do with each other in memory. The compiler will not quietly turn one into the other:</p>
+
+<pre class="code" data-lang="cpp" data-file="number_not_text.cpp" data-check="error"><code>#include &lt;print&gt;
+#include &lt;string&gt;
+
+int main() {
+    std::string s = 42;     // a number is not text
+    std::println("{}", s);
+    return 0;
+}
+</code></pre>
+<pre class="output"><code>number_not_text.cpp:5:17: error: no viable conversion from 'int' to 'std::string' (aka 'basic_string&lt;char&gt;')
+    5 |     std::string s = 42;     // a number is not text
+      |                 ^   ~~
+1 error generated.
+</code></pre>
+<p>(Clang follows that error with several <code>note:</code> lines listing every way a string <em>can</em> be made, none of which take an <code>int</code>. You can ignore them; the first line is the message.) "No viable conversion" means: I know how to make a string from text in quotes, from another string, and from a few other things, but not from an <code>int</code>. When you want the digits of a number as text, you must ask for the conversion by name. The function is <code>std::to_string</code>:</p>
+
+<pre class="code" data-lang="cpp" data-file="to_string.cpp" data-check="run"><code>#include &lt;print&gt;
+#include &lt;string&gt;
+
+int main() {
+    int width = 80;
+    int height = 24;
+    std::string label = "grid: " + std::to_string(width) + "x" + std::to_string(height);
+    std::println("{}", label);
+    std::println("label has {} characters", label.size());
+
+    double fill = 0.35;
+    std::string f = std::to_string(fill);
+    std::println("to_string(0.35) gives \"{}\"", f);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="to_string.cpp"><code>grid: 80x24
+label has 11 characters
+to_string(0.35) gives "0.350000"
+</code></pre>
+<p><code>std::to_string(80)</code> produces the two-character string <code>"80"</code>, and <code>+</code> then joins the pieces. For a <code>double</code> it always writes six digits after the point, which is why you see <code>0.350000</code>. To merely print a number, <code>std::println("{}", width)</code> is simpler; <code>std::to_string</code> is for when the digits must end up <em>inside</em> a string.</p>
+
+<div class="callout trap"><span class="label">Trap</span><p><code>"Score: " + 42</code> compiles, and it is wrong. The left side is not yet a <code>std::string</code>; it is the raw quoted text, which C++ inherited from the C language, and adding an <code>int</code> to raw quoted text means "start 42 characters further along", which here is far past the end of the seven characters you wrote. Clang does warn you. This is the whole program and the exact message it produces with <code>-Wall -Wextra</code>:</p>
+<pre class="code" data-lang="cpp" data-file="plus_int.cpp" data-check="fragment"><code>#include &lt;print&gt;
+#include &lt;string&gt;
+
+int main() {
+    std::string s = "Score: " + 42;     // compiles, with a warning; does NOT make "Score: 42"
+    std::println("{}", s);
+    return 0;
+}
+</code></pre>
+<pre class="output"><code>plus_int.cpp:5:31: warning: adding 'int' to a string does not append to the string [-Wstring-plus-int]
+    5 |     std::string s = "Score: " + 42;     // compiles, with a warning; does NOT make "Score: 42"
+      |                     ~~~~~~~~~~^~~~
+1 warning generated.
+</code></pre>
+<p>(The program is kept out of the book's automatic checks because it is not warning-free; do not run it. Reading 42 bytes past the end of your seven characters is undefined behaviour, the same category as <a href="02-values-and-types.html">chapter 2</a>'s overflow.) Treat that warning as an error. The fix is always <code>std::to_string(42)</code>, or make the left side a <code>std::string</code> first. Once either side of <code>+</code> is a <code>std::string</code>, <code>+</code> means "join".</p></div>
+
+<div class="callout principle"><span class="label">First principle</span><p>A <code>std::string</code> is a count plus a block of bytes, one byte per character, exactly like a <code>std::vector&lt;char&gt;</code>. Everything it does (append, index, compare, measure) is a loop over those bytes that somebody has already written for you. Nothing in it understands words or meaning; <code>"42"</code> is just the bytes 52 and 50 sitting next to each other.</p></div>
+
+<h2>Reading a string one character at a time</h2>
+<p>Because a string is a row of boxes, you reach any one box with <code>[]</code> and a position counted from zero, and you can walk the whole row with a range-for, exactly as you did with vectors in chapter 6. Each element is a <code>char</code>.</p>
+
+<pre class="code" data-lang="cpp" data-file="chars.cpp" data-check="run"><code>#include &lt;print&gt;
+#include &lt;string&gt;
+
+int main() {
+    std::string row = "#..#.#";
+
+    // Read one character at a time by position.
+    for (std::size_t i = 0; i &lt; row.size(); ++i) {
+        std::println("position {}: '{}'", i, row[i]);
+    }
+
+    // Or let the loop hand you each character in turn.
+    int hashes = 0;
+    for (char ch : row) {
+        if (ch == '#') {
+            hashes += 1;
+        }
+    }
+    std::println("{} of {} characters are '#'", hashes, row.size());
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="chars.cpp"><code>position 0: '#'
+position 1: '.'
+position 2: '.'
+position 3: '#'
+position 4: '.'
+position 5: '#'
+3 of 6 characters are '#'
+</code></pre>
+<p>Both loops are the vector loops from chapter 6 with the word <code>string</code> in place of <code>vector</code>. The index loop uses <code>std::size_t</code> because that is what <code>.size()</code> returns. The comparison <code>ch == '#'</code> compares two <code>char</code> values, two single bytes. The same rule from vectors applies to <code>[]</code>: asking for <code>row[6]</code> on a six-character string reads past the end, and nothing stops you. Keep the index below <code>.size()</code>.</p>
+
+<div class="callout try"><span class="label">Try it</span><p>Write <code>int count_char(const std::string&amp; text, char target)</code>, a function that returns how many times <code>target</code> appears in <code>text</code>. Pass the string by <code>const</code> reference, as <a href="05-references-and-const.html">chapter 5</a> taught. Call it on <code>"#..\n..#\n"</code> three times, with <code>'#'</code>, <code>'.'</code> and <code>'\n'</code>, and predict all three answers before you run it. (The third answer is the number of rows in that picture: a trick you can use on your own <code>render</code> output later.)</p>
+<details class="hint"><summary>Stuck? First nudge</summary><p>It is the second loop of <code>chars.cpp</code> with <code>'#'</code> replaced by the parameter <code>target</code>, wrapped in a function that returns the counter. Expected: 2, 4, 2.</p></details></div>
+
+<h3>'a' is a char, "a" is a string</h3>
+<p>Single quotes and double quotes mean different things, and this is a mistake you will make at least once, so let the compiler show you the message now. <code>'a'</code> is a <strong>character literal</strong>: a single <code>char</code>, one byte. <code>"a"</code> is a <strong>string literal</strong>: a piece of text that happens to be one character long, plus an invisible <strong>terminator</strong>, a byte with the value 0 that the compiler adds after the last character to mark where the text ends. (That is how quoted text, which carries no count with it, knows its own length: something walks the bytes until it meets the 0. A <code>std::string</code> stores a count instead and does not need the trick.) They are not interchangeable:</p>
+
+<pre class="code" data-lang="cpp" data-file="char_vs_string.cpp" data-check="error"><code>#include &lt;string&gt;
+
+int main() {
+    char c = "a";           // "a" is a string, not a single character
+    std::string s = c;
+    return 0;
+}
+</code></pre>
+<pre class="output"><code>char_vs_string.cpp:4:10: error: cannot initialize a variable of type 'char' with an lvalue of type 'const char[2]'
+    4 |     char c = "a";           // "a" is a string, not a single character
+      |          ^   ~~~
+char_vs_string.cpp:5:17: error: no viable conversion from 'char' to 'std::string' (aka 'basic_string&lt;char&gt;')
+    5 |     std::string s = c;
+      |                 ^   ~
+2 errors generated.
+</code></pre>
+<p>The first message names the type of <code>"a"</code>: <code>const char[2]</code>, an array of two characters, the <code>a</code> and the terminator. (The word <code>lvalue</code> in front of it is compiler jargon for "a thing that has a place in memory"; you can ignore it this week.) You cannot put two bytes into a one-byte box. The second message is the mirror image: you cannot <em>initialise</em> a string from a single <code>char</code> either, though you can append one with <code>+=</code>, as <code>greeting += '!'</code> showed.</p>
+<p>The rules you need: <code>'x'</code> with single quotes is a <code>char</code>. <code>"x"</code> with double quotes is text. A <code>char</code> goes into <code>s += ch</code> or <code>s[i]</code> or a comparison with another <code>char</code>. Text goes into a <code>std::string</code>.</p>
+
+<h3>A char is a small number</h3>
+<p><a href="02-values-and-types.html">Chapter 2</a> showed that a <code>char</code> is a one-byte ASCII code (<code>'#'</code> is 35, <code>'.'</code> is 46, <code>'A'</code> is 65); a string is a row of those bytes, so <code>ch == '#'</code> is an ordinary integer comparison, and <code>static_cast&lt;int&gt;(ch)</code> shows the number behind any character.</p>
+
+<div class="callout trap"><span class="label">Trap</span><p>Because a <code>char</code> is a number, this compiles without a word of complaint:</p>
+<pre class="code" data-lang="cpp" data-file="string_assign_char.cpp" data-check="run"><code>#include &lt;print&gt;
+#include &lt;string&gt;
+
+int main() {
+    std::string s = "abc";
+    s = 65;                 // compiles! but means: the single character with code 65
+    std::println("{}", s);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="string_assign_char.cpp"><code>A
+</code></pre>
+<p>Assigning an <code>int</code> to an <em>existing</em> string is allowed, because assigning a <code>char</code> is allowed and 65 fits in a <code>char</code>. The string becomes the one-character text <code>"A"</code>, not <code>"65"</code>. If you meant the digits, you wanted <code>std::to_string(65)</code>. If you ever see a single strange letter where a number should be, this is why.</p></div>
+
+<h2>Building a picture row by row</h2>
+<p>Now the problem that <code>render</code> solves, on a different picture. You want a 4-wide, 3-high checkerboard as text: <code>'#'</code> where <code>x + y</code> is even, <code>'.'</code> where it is odd, and a line break after each row. The shape of the solution is the nested loop from <a href="03-control-flow.html">chapter 3</a> (rows outside, columns inside) with one new habit: instead of printing each character as you decide it, you <em>append</em> it to a string, and you print the string once at the very end.</p>
+
+<pre class="code" data-lang="cpp" data-file="checkerboard.cpp" data-check="run"><code>#include &lt;print&gt;
+#include &lt;string&gt;
+
+int main() {
+    const int width = 4;
+    const int height = 3;
+
+    std::string frame;                       // starts empty
+    for (int y = 0; y &lt; height; ++y) {
+        for (int x = 0; x &lt; width; ++x) {
+            if ((x + y) % 2 == 0) {
+                frame += '#';
+            } else {
+                frame += '.';
+            }
+        }
+        frame += '\n';                       // end of this row
+    }
+
+    std::print("{}", frame);                 // ONE print for the whole picture
+    std::println("the frame holds {} characters", frame.size());
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="checkerboard.cpp"><code>#.#.
+.#.#
+#.#.
+the frame holds 15 characters
+</code></pre>
+<p>Walk through the size. Three rows of four characters is 12. Each row ends with a <code>'\n'</code>, the <strong>newline</strong> character, which is a <code>char</code> like any other (its code is 10) and takes one byte; three of them make 15. When the terminal receives a byte 10 it moves to the start of the next line, which is how one flat string becomes three visible rows. Note that the last row also ends in <code>'\n'</code>, so the string is printed with <code>std::print</code>, not <code>std::println</code>: the line break is already inside the text, and <code>println</code> would add a second, empty line.</p>
+<p>Here is the same idea as a function, which is the form you will actually want. It takes the dimensions and <em>returns</em> the text; the caller decides what to do with it.</p>
+
+<pre class="code" data-lang="cpp" data-file="checkerboard_fn.cpp" data-check="run"><code>#include &lt;print&gt;
+#include &lt;string&gt;
+
+// The picture as text: '#' where x + y is even, '.' elsewhere,
+// and a '\n' after every row.
+std::string checkerboard(int width, int height) {
+    std::string out;
+    for (int y = 0; y &lt; height; ++y) {
+        for (int x = 0; x &lt; width; ++x) {
+            if ((x + y) % 2 == 0) {
+                out += '#';
+            } else {
+                out += '.';
+            }
+        }
+        out += '\n';
+    }
+    return out;
+}
+
+int main() {
+    std::print("{}", checkerboard(4, 3));
+    std::println("---");
+    std::print("{}", checkerboard(8, 2));
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="checkerboard_fn.cpp"><code>#.#.
+.#.#
+#.#.
+---
+#.#.#.#.
+.#.#.#.#
+</code></pre>
+<p>Returning a string from a function is fine and cheap in modern C++: the characters are not copied twice, the string that <code>out</code> built simply becomes the caller's. (The mechanism behind that, "move", is a week 4 topic. For now: return strings and vectors from functions freely.)</p>
+<p>Why build the whole picture before printing any of it? Two reasons. First, a function that returns text can be <em>tested</em>. The test for <code>render</code> in <code>tests/life_test.cpp</code> is <code>CHECK(render(g, 3, 2) == "#..\n..#\n");</code>, which is only possible because <code>render</code> hands back a string instead of printing; printed output cannot be compared with <code>==</code>. Second, the terminal draws bytes as they arrive. If you print an 80×24 Life grid as 1,920 separate one-character prints (80 × 24 = 1,920), the terminal may show a half-drawn frame between any two of them, and when you redraw thirty times a second that is visible as <strong>flicker</strong>. One string, handed over in a single print, arrives as one block. <a href="09-terminal.html">Chapter 9</a> builds on exactly this.</p>
+
+<div class="callout note"><span class="label">Not render, but its shape</span><p>Your <code>render</code> in <code>life.cpp</code> is not the checkerboard. It takes a <code>const Cells&amp;</code> and decides <code>'#'</code> or <code>'.'</code> from the value stored at each cell, using the flat index from <a href="07-flat-grid.html">chapter 7</a> to find it. But the skeleton is this one: an empty string, rows outside, columns inside, one <code>+=</code> per cell, one <code>+= '\n'</code> per row, <code>return</code>. <a href="14-build-life.html">Chapter 14</a> reminds you of this when you reach milestone 2.</p></div>
+
+<div class="callout try"><span class="label">Try it</span><p>Change <code>checkerboard</code> so that the border cells (first and last row, first and last column) are always <code>'#'</code> and the inside is always <code>'.'</code>: a picture frame. Check with <code>.size()</code> that a 6×4 frame has 28 characters. Then write the condition in words first: when is a cell on the border?</p>
+<details class="hint"><summary>Stuck? First nudge</summary><p>A cell is on the border when <code>x == 0</code>, or <code>x == width - 1</code>, or <code>y == 0</code>, or <code>y == height - 1</code>. Chapter 3's <code>||</code> joins those four. 6×4 is 24 cells plus 4 newlines.</p></details></div>
+
+<h2>Program arguments: what the OS hands to main</h2>
+<p>Every program you have written so far started with <code>int main()</code>, empty brackets, and ignored the outside world. But when you type <code>./life --width 80 --height 24 --seed 7</code> in the terminal, the shell splits that line on spaces into seven words (the program name counts), starts your program, and hands it the list. C++ lets <code>main</code> receive it by declaring two parameters:</p>
+<pre class="code" data-lang="cpp" data-file="main_sig_fragment.cpp" data-check="fragment"><code>int main(int argc, char* argv[])
+</code></pre>
+<p><strong><code>argc</code></strong> is the <strong>argument count</strong>: how many words there are, as an <code>int</code>. <strong><code>argv</code></strong> is the <strong>argument vector</strong>: the words themselves, numbered from 0, so <code>argv[0]</code> is the first word and <code>argv[argc - 1]</code> is the last. You could name them anything, but every C and C++ programmer recognises these two, so keep them.</p>
+<p>The type <code>char* argv[]</code> contains a <code>*</code>, which you have not met. It is a <strong>pointer</strong>, and pointers are the subject of week 7. For this week take <code>argv[i]</code> on trust as "a C-style text": a row of bytes that ends at a terminator byte 0, the same raw quoted-text form you glimpsed in the <code>"Score: " + 42</code> trap above, with no count and no <code>.size()</code> of its own. Convert it to a <code>std::string</code> the moment you touch it:</p>
+<pre class="code" data-lang="cpp" data-file="argv_convert_fragment.cpp" data-check="fragment"><code>std::string arg = argv[i];   // from C-style text to a real std::string, immediately
+</code></pre>
+<p>After that line, <code>arg</code> is an ordinary string with <code>.size()</code> and <code>==</code> and everything else from this chapter, and you never have to think about what <code>argv[i]</code> really is. Here is a program that prints every argument it is given. It cannot be a "run" block in this book because its output depends on what you type, so the block below is followed by a real terminal session instead.</p>
+
+<pre class="code" data-lang="cpp" data-file="args_print.cpp" data-check="compile"><code>#include &lt;print&gt;
+#include &lt;string&gt;
+
+int main(int argc, char* argv[]) {
+    std::println("argc = {}", argc);
+    for (int i = 0; i &lt; argc; ++i) {
+        std::string arg = argv[i];     // convert the C-style text to a std::string at once
+        std::println("argv[{}] = \"{}\"  ({} characters)", i, arg, arg.size());
+    }
+    return 0;
+}
+</code></pre>
+<pre class="shell"><code>$ clang++ -std=c++23 -Wall -Wextra args_print.cpp -o args_print
+$ ./args_print --width 80 --height 24 --seed 7
+argc = 7
+argv[0] = "./args_print"  (12 characters)
+argv[1] = "--width"  (7 characters)
+argv[2] = "80"  (2 characters)
+argv[3] = "--height"  (8 characters)
+argv[4] = "24"  (2 characters)
+argv[5] = "--seed"  (6 characters)
+argv[6] = "7"  (1 characters)
+$ ./args_print
+argc = 1
+argv[0] = "./args_print"  (12 characters)
+$ ./args_print "two words" x
+argc = 3
+argv[0] = "./args_print"  (12 characters)
+argv[1] = "two words"  (9 characters)
+argv[2] = "x"  (1 characters)
+</code></pre>
+<p>Three things to take from the session. First, <code>argv[0]</code> is the name the program was started with, so the user's own words start at <code>argv[1]</code>, and a program run with no arguments still has <code>argc == 1</code>. Second, every argument is text: <code>"80"</code> is the two characters <code>8</code> and <code>0</code>, not the number eighty, and converting it is your job (the next section). Third, the splitting is done by the shell, not your program: shell quotes keep <code>"two words"</code> as one argument, and the quotes themselves are removed before your program sees anything.</p>
+
+<div class="callout analogy"><span class="label">Analogy</span><p>The command line is an order slip handed through a kitchen hatch. The customer (you, at the shell) writes words on it; the waiter (the operating system) carries it to the kitchen (your program) without reading it. The kitchen gets a count of words and the words, and must decide for itself what <code>"80"</code> means.</p>
+<p>Where it breaks: a real waiter would notice that "--widht" is a spelling mistake. The operating system notices nothing. Every check, every default and every error message is yours to write.</p></div>
+
+<div class="callout principle"><span class="label">First principle</span><p>When your program starts, the operating system has already copied the command-line words into your program's memory and placed their count in <code>argc</code>. <code>main</code> is just a function being called with those two values. Nothing happens by magic between the shell and your first line.</p></div>
+
+<h2>Parsing a flag and its value</h2>
+<p>A <strong>flag</strong> is an argument that names a setting, by convention beginning with two dashes: <code>--width</code>. In the style this book uses, the flag is followed by its <strong>value</strong> as the next argument: <code>--width 80</code>. To find the width, you walk the arguments from 1, and whenever you see <code>"--width"</code>, the value is the <em>next</em> one, <code>argv[i + 1]</code>.</p>
+<p>That <code>i + 1</code> is where the first bug hides. If <code>--width</code> is the <em>last</em> argument, there is no next one. The slot <code>argv[argc]</code>, one past the last word, does not hold text at all: the operating system puts a special "nothing here" marker in it (a <strong>null pointer</strong>, week 7). Turn that marker into a <code>std::string</code>, or hand it to <code>std::stoi</code>, and the program dies on the spot. Here is the naive version, so that you have seen the crash once on purpose rather than by surprise at midnight:</p>
+
+<pre class="code" data-lang="cpp" data-file="parse_width_unguarded.cpp" data-check="compile"><code>#include &lt;print&gt;
+#include &lt;string&gt;
+
+int main(int argc, char* argv[]) {
+    int width = 60;
+    for (int i = 1; i &lt; argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "--width") {
+            width = std::stoi(argv[i + 1]);      // BUG: nobody checked that argv[i + 1] exists
+            i += 1;
+        }
+    }
+    std::println("width = {}", width);
+    return 0;
+}
+</code></pre>
+<pre class="shell"><code>$ clang++ -std=c++23 -Wall -Wextra parse_width_unguarded.cpp -o parse_width_unguarded
+$ ./parse_width_unguarded --width 80
+width = 80
+$ ./parse_width_unguarded --width
+zsh: segmentation fault  ./parse_width_unguarded --width
+$ echo $?
+139
+</code></pre>
+<p>With a value it works. Without one, <code>std::stoi</code> starts reading bytes at the "nothing here" marker, the operating system stops the program, and the shell reports <code>zsh: segmentation fault</code> with exit code 139. There is no hint of which line was at fault. (Compile with <code>-fsanitize=address,undefined</code>, as chapter 2 suggested, and you get a report that at least names <code>strlen</code>, the library's "walk to the terminator" routine, and says the address was zero. Better, but still not a line number in your code.)</p>
+<p>The fix has three parts, and the program below does them in order. First, before you read <code>argv[i + 1]</code>, check that <code>i + 1 &lt; argc</code>. Second, convert the text to a number with <strong><code>std::stoi</code></strong>, "string to int", which lives in <code>&lt;string&gt;</code>. Third, because the value was consumed, add one to <code>i</code> so the loop does not look at <code>"80"</code> on the next round as if it were a flag.</p>
+
+<pre class="code" data-lang="cpp" data-file="parse_width.cpp" data-check="compile"><code>#include &lt;print&gt;
+#include &lt;string&gt;
+
+int main(int argc, char* argv[]) {
+    int width = 60;                              // the default, used when --width is absent
+
+    for (int i = 1; i &lt; argc; ++i) {             // start at 1: argv[0] is the program name
+        std::string arg = argv[i];
+        if (arg == "--width" &amp;&amp; i + 1 &lt; argc) {  // is there a value after the flag?
+            width = std::stoi(argv[i + 1]);      // text -> int
+            i += 1;                              // skip the value on the next round
+        }
+    }
+
+    std::println("width = {}", width);
+    return 0;
+}
+</code></pre>
+<pre class="shell"><code>$ clang++ -std=c++23 -Wall -Wextra parse_width.cpp -o parse_width
+$ ./parse_width
+width = 60
+$ ./parse_width --width 80
+width = 80
+$ ./parse_width --width
+width = 60
+</code></pre>
+<p>The <strong>default</strong> is simply the value the variable starts with. If the loop never finds <code>--width</code>, nothing changes it, and 60 is what you get. The third run shows the guard working: <code>--width</code> with nothing after it is silently ignored and the default stands. Silently is not ideal, and the full parser below complains instead, but it does not crash, which is the important part.</p>
+<p>The <code>&amp;&amp;</code> from chapter 3 checks its left side first and only evaluates the right side if the left was true, so <code>argv[i + 1]</code> is only ever read after <code>i + 1 &lt; argc</code> has been confirmed.</p>
+
+<h3>What std::stoi accepts</h3>
+<p><code>std::stoi</code> reads digits from the front of the text and stops at the first character that is not part of a number. Its sibling <strong><code>std::stod</code></strong>, "string to double", does the same for numbers with a decimal point. Here are the edges you should know about:</p>
+
+<pre class="code" data-lang="cpp" data-file="stoi_edges.cpp" data-check="run"><code>#include &lt;print&gt;
+#include &lt;string&gt;
+
+int main() {
+    std::println("{}", std::stoi("42"));
+    std::println("{}", std::stoi("-7"));
+    std::println("{}", std::stoi("  12"));     // leading spaces are skipped
+    std::println("{}", std::stoi("80x24"));    // stops at the first non-digit
+    std::println("{}", std::stod("0.35"));
+    std::println("{}", std::stod("1e3"));
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="stoi_edges.cpp"><code>42
+-7
+12
+80
+0.35
+1000
+</code></pre>
+<p>Negative numbers work and leading spaces are skipped. <code>"80x24"</code> gives 80 and the <code>x24</code> is thrown away without complaint, which can hide a typo. <code>std::stod</code> understands <code>1e3</code>: that is <strong>scientific notation</strong>, "1 times 10 to the power 3", so 1000. You will rarely type it, but <code>std::println</code> may print very large or very small <code>double</code>s this way, so recognise it.</p>
+
+<h3>What happens with bad text</h3>
+<p>What if there are no digits at all, say the user typed <code>--width eighty</code>? <code>std::stoi</code> cannot return a number, because there is none, and it cannot return "no number" either, since every <code>int</code> value is a possible answer. What it does instead is stop the program with an error message. Watch:</p>
+
+<pre class="code" data-lang="cpp" data-file="stoi_bad.cpp" data-check="compile"><code>#include &lt;print&gt;
+#include &lt;string&gt;
+
+int main() {
+    std::println("about to convert \"abc\"...");
+    int n = std::stoi("abc");
+    std::println("n = {}", n);
+    return 0;
+}
+</code></pre>
+<pre class="shell"><code>$ clang++ -std=c++23 -Wall -Wextra stoi_bad.cpp -o stoi_bad
+$ ./stoi_bad
+about to convert "abc"...
+libc++abi: terminating due to uncaught exception of type std::invalid_argument: stoi: no conversion
+zsh: abort      ./stoi_bad
+$ echo $?
+134
+</code></pre>
+<p>The first line printed. The line <code>n = ...</code> never did: the program ended inside <code>std::stoi</code>. The message says what went wrong, <code>stoi: no conversion</code>, and the shell reports <code>abort</code> with exit code 134 instead of the 0 you are used to. (<code>libc++abi</code> at the front of the message is the name of the piece of Apple's C++ library that printed it; it is not part of your program's text.) Note the difference from the segmentation fault above: there you got no message at all, here you get a readable one, because <code>std::stoi</code> noticed the problem itself before any bad memory was touched. The mechanism behind this, an <strong>exception</strong>, is how a library function says "I cannot do this" when it has no sensible value to return. Exceptions are deliberately left out of this curriculum's early weeks; what you need now is the behaviour: <em>bad text to <code>std::stoi</code> stops the program with a readable message.</em> For a Life program run by hand, that is acceptable. The usage message you write next makes the common mistakes (an unknown flag, a missing value) friendlier; a non-number is left to this message.</p>
+
+<div class="callout trap"><span class="label">Trap</span><p>Three ways an argument parser goes wrong, in the order you will meet them: starting the loop at <code>i = 0</code> and treating the program name as a flag; reading <code>argv[i + 1]</code> without checking <code>i + 1 &lt; argc</code>; and forgetting <code>i += 1</code> after using the value, so that <code>"80"</code> is examined as a flag on the next round and, once you report unknown flags, becomes an "unknown flag 80".</p></div>
+
+<h2>A complete argument parser with a usage message</h2>
+<p>Now the full shape, for four of the six settings the Life program needs: <code>--width</code>, <code>--height</code>, <code>--seed</code>, <code>--fill</code> (<code>--fps</code> and <code>--steps</code> are yours to add in milestone 5). The defaults are Life's own, from <code>README.md</code>: width 60, height 20, seed 1, fill 0.3. Two new behaviours make it a proper tool. A <strong>usage message</strong> tells the user what the program accepts, and is printed whenever the arguments make no sense. And <code>return 1</code> from <code>main</code> tells the shell the program failed. <a href="01-what-a-program-is.html">Chapter 1</a> told you <code>return 0</code> means success; any other number means a problem, and 1 is the usual choice when there is nothing more specific to say. Scripts and build tools check this number, so it is not decoration.</p>
+<p>One new type appears, because <code>life.hpp</code> uses it: <strong><code>unsigned int</code></strong> is an <code>int</code> that cannot be negative. It uses the same four bytes but spends them all on magnitude, so it runs from 0 to 4,294,967,295 (2<sup>32</sup> − 1, about 4.29 billion). It behaves like the <code>std::size_t</code> of <a href="02-values-and-types.html">chapter 2</a>, only four bytes wide instead of eight: going below zero wraps round to the top, and that wrap is defined behaviour, not UB. See it:</p>
+
+<pre class="code" data-lang="cpp" data-file="unsigned_int.cpp" data-check="run"><code>#include &lt;print&gt;
+#include &lt;string&gt;
+
+int main() {
+    std::println("sizeof(unsigned int) = {} bytes", sizeof(unsigned int));
+    unsigned int zero = 0;
+    unsigned int wrapped = zero - 1;                 // no sign bit: wraps to the top
+    std::println("0 - 1 as unsigned int = {}", wrapped);
+    unsigned int seed = static_cast&lt;unsigned int&gt;(std::stoi("-1"));
+    std::println("--seed -1 would become {}", seed);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="unsigned_int.cpp"><code>sizeof(unsigned int) = 4 bytes
+0 - 1 as unsigned int = 4294967295
+--seed -1 would become 4294967295
+</code></pre>
+<p>Seeds are conventionally unsigned because a "negative seed" means nothing: a seed is a starting pattern of bits, not a quantity. <code>std::stoi</code> gives you an <code>int</code>, so you convert with <code>static_cast&lt;unsigned int&gt;</code>, the explicit conversion from chapter 2. The last line shows what that does to a negative input: <code>--seed -1</code> quietly becomes seed 4294967295. That is a legal seed and the program still works, so this is not a bug to fix, only a thing to know.</p>
+
+<pre class="code" data-lang="cpp" data-file="args_demo.cpp" data-check="compile"><code>#include &lt;print&gt;
+#include &lt;string&gt;
+
+void print_usage(const std::string&amp; program) {
+    std::println("usage: {} [--width N] [--height N] [--seed N] [--fill F]", program);
+    std::println("  --width N   columns (default 60)");
+    std::println("  --height N  rows (default 20)");
+    std::println("  --seed N    starting number for the random cells (default 1)");
+    std::println("  --fill F    chance that a cell starts alive, 0.0 to 1.0 (default 0.3)");
+}
+
+int main(int argc, char* argv[]) {
+    int width = 60;
+    int height = 20;
+    unsigned int seed = 1;
+    double fill = 0.3;
+
+    for (int i = 1; i &lt; argc; ++i) {
+        std::string arg = argv[i];
+
+        // Every flag this program knows needs a value after it. Refuse if there is none.
+        bool has_value = (i + 1 &lt; argc);
+        if (!has_value) {
+            std::println("error: {} needs a value", arg);
+            print_usage(argv[0]);
+            return 1;
+        }
+        std::string value = argv[i + 1];
+
+        if (arg == "--width") {
+            width = std::stoi(value);
+        } else if (arg == "--height") {
+            height = std::stoi(value);
+        } else if (arg == "--seed") {
+            seed = static_cast&lt;unsigned int&gt;(std::stoi(value));
+        } else if (arg == "--fill") {
+            fill = std::stod(value);
+        } else {
+            std::println("error: unknown flag {}", arg);
+            print_usage(argv[0]);
+            return 1;
+        }
+        i += 1;     // argv[i + 1] was used as the value; do not read it again as a flag
+    }
+
+    std::println("width  = {}", width);
+    std::println("height = {}", height);
+    std::println("seed   = {}", seed);
+    std::println("fill   = {}", fill);
+    std::println("cells  = {}", width * height);
+    return 0;
+}
+</code></pre>
+<pre class="shell"><code>$ clang++ -std=c++23 -Wall -Wextra args_demo.cpp -o args_demo
+$ ./args_demo
+width  = 60
+height = 20
+seed   = 1
+fill   = 0.3
+cells  = 1200
+$ ./args_demo --width 80 --height 24 --seed 7 --fill 0.35
+width  = 80
+height = 24
+seed   = 7
+fill   = 0.35
+cells  = 1920
+$ ./args_demo --speed 3
+error: unknown flag --speed
+usage: ./args_demo [--width N] [--height N] [--seed N] [--fill F]
+  --width N   columns (default 60)
+  --height N  rows (default 20)
+  --seed N    starting number for the random cells (default 1)
+  --fill F    chance that a cell starts alive, 0.0 to 1.0 (default 0.3)
+$ echo $?
+1
+$ ./args_demo --width
+error: --width needs a value
+usage: ./args_demo [--width N] [--height N] [--seed N] [--fill F]
+  --width N   columns (default 60)
+  --height N  rows (default 20)
+  --seed N    starting number for the random cells (default 1)
+  --fill F    chance that a cell starts alive, 0.0 to 1.0 (default 0.3)
+</code></pre>
+<p>Read the loop body as a checklist that every argument goes through. Is there a value after this flag? If not, complain and stop. Which flag is it? Convert the value into the right variable. None of the known ones? Complain and stop. Finally skip past the value. The <code>if / else if / else</code> chain from chapter 3 is the natural shape: exactly one branch runs for each flag.</p>
+<p><code>print_usage</code> takes the program name by <code>const std::string&amp;</code>, which chapter 5 taught: look, do not copy. It is given <code>argv[0]</code>, and the C-style text becomes a <code>std::string</code> on the way in, the same conversion as <code>std::string arg = argv[i]</code>. Printing usage from a function means the same text appears for every kind of mistake and you only maintain it in one place.</p>
+<p>Two design choices are worth noticing. Every flag here takes a value; a flag that stands alone, like <code>--help</code>, would need checking <em>before</em> the "needs a value" test. And flags may come in any order and be repeated; the last one wins, because each assignment overwrites the previous. Most command-line tools, <code>llama.cpp</code> included, follow the same conventions.</p>
+
+<div class="callout try"><span class="label">Try it</span><p>Add <code>--help</code>: when it appears anywhere, print the usage and <code>return 0</code> (asking for help is not an error). Then add a check that <code>width</code> and <code>height</code> are at least 1, printing an error and returning 1 otherwise. Run with <code>--width 0</code> and with <code>--width -5</code>.</p>
+<details class="hint"><summary>Stuck? First nudge</summary><p>Test <code>arg == "--help"</code> at the very top of the loop body, before <code>has_value</code>, and return from inside the <code>if</code>. The size check goes <em>after</em> the loop, once all flags have been read; otherwise <code>--width 0 --width 10</code> would be rejected before the second value is seen.</p></details></div>
+
+<h2>Randomness: a computer cannot roll dice</h2>
+<p><code>random_cells</code> must make each cell alive "with probability <code>fill</code>". That needs something unpredictable, and a processor is the least unpredictable machine ever built: given the same instructions and the same starting bytes it does exactly the same thing every time. There is no dice inside. What there is instead is a <strong>pseudo-random number generator</strong>: a formula that takes a number, produces the next number, and keeps going. The sequence <em>looks</em> random, with no visible pattern, but it is entirely determined by the first number, the <strong>seed</strong>.</p>
+<p>You can write one in three lines, and you should see one before using the library's, so that nothing about it is mysterious:</p>
+
+<pre class="code" data-lang="cpp" data-file="homemade_rng.cpp" data-check="run"><code>#include &lt;print&gt;
+
+// A deliberately simple "random" formula: each number is made from the last one.
+unsigned int next_number(unsigned int previous) {
+    return previous * 1103515245u + 12345u;     // wraps around at 2^32, on purpose
+}
+
+int main() {
+    unsigned int x = 7;                          // the seed
+    for (int i = 0; i &lt; 8; ++i) {
+        x = next_number(x);
+        std::print("{} ", x % 10);               // keep just the last digit
+    }
+    std::println("");
+
+    x = 7;                                       // same seed again...
+    for (int i = 0; i &lt; 8; ++i) {
+        x = next_number(x);
+        std::print("{} ", x % 10);
+    }
+    std::println("  &lt;- the same digits");
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="homemade_rng.cpp"><code>4 3 8 1 0 9 2 7
+4 3 8 1 0 9 2 7   &lt;- the same digits
+</code></pre>
+<p>Read the formula. Multiply the previous number by a large odd constant, add another constant, and let the result wrap around when it exceeds what four bytes can hold. The <code>u</code> after each constant marks it as <code>unsigned</code> too, so the whole calculation happens in <code>unsigned int</code>, where wrapping is defined behaviour (you saw <code>0 - 1</code> wrap a few pages ago). That wrap is what keeps the numbers inside four bytes forever, and it is also what scrambles them: the high digits of the product are thrown away each round.</p>
+<div class="callout analogy"><span class="label">Analogy</span><p>An <code>unsigned int</code> wrapping is like a car's distance counter rolling from 999999 back to 000000 and carrying on.</p>
+<p>Where it breaks: the car counter is a nuisance when it rolls over; here the roll-over is the point, and the language guarantees it. The guarantee holds for <code>unsigned</code> types only. Write the same formula with plain <code>int</code> and the very first multiplication, 7 × 1103515245, overflows a signed type, which <a href="02-values-and-types.html">chapter 2</a> showed is undefined behaviour. Compiled with <code>-fsanitize=undefined</code> it prints <code>runtime error: signed integer overflow: 7 * 1103515245 cannot be represented in type 'int'</code> at that line; without the sanitizer it silently produces garbage, and the first "digit" printed is <code>-2</code>, because <code>%</code> of a negative number is negative (chapter 2's trap).</p></div>
+<p>The digits that come out, <code>4 3 8 1 0 9 2 7</code>, have no obvious order. Yet starting again from 7 produces exactly the same digits, because the formula and the input are the same. This formula is a real one that C libraries used for decades, and a poor one by today's standards: statistical tests find patterns in it. The library generator you are about to use is the same idea with a far better formula.</p>
+
+<div class="callout principle"><span class="label">First principle</span><p>A pseudo-random generator is a variable holding a fixed number of bytes (4 in the homemade one above; 2,504 in the library's, as you will see shortly), a function that scrambles those bytes to produce the next value, and nothing else. "Random" describes how the output looks, not how it is made. Same seed, same formula, same sequence, every time, on every machine that uses the same formula.</p></div>
+
+<p>That determinism is not a weakness to apologise for. It is the feature you will lean on hardest this week and for the rest of this curriculum. <strong>Reproducible bugs:</strong> when your Life grid does something strange at generation 212 with seed 7, you run it again with seed 7 and it does the same strange thing at generation 212, every time, until you have fixed it. <strong>Reproducible tests:</strong> <code>life_test.cpp</code> checks <code>random_cells(8, 4, 42, 0.5)</code> twice and demands the two grids are equal. <strong>Reproducible benchmarks:</strong> <code>bench_life.cpp</code> starts from seed 12345 so that every run times the same grid and a faster number means your code got faster, not your luck.</p>
+
+<h3>std::mt19937: the library's generator</h3>
+<p>The standard library's generators live in <code>&lt;random&gt;</code>. The one most code uses is <strong><code>std::mt19937</code></strong>, named after the Mersenne Twister formula and the number 19937: its sequence only starts repeating after 2<sup>19937</sup> − 1 numbers, which is more than you could draw in the lifetime of the universe (the homemade formula above repeats after at most 2<sup>32</sup>). You create one with a seed and then call it like a function, with empty brackets, to get the next raw number:</p>
+
+<pre class="code" data-lang="cpp" data-file="mt_raw.cpp" data-check="run"><code>#include &lt;print&gt;
+#include &lt;random&gt;
+
+int main() {
+    std::mt19937 rng(42);                 // a generator, started from seed 42
+    for (int i = 0; i &lt; 3; ++i) {
+        std::println("{}", rng());        // call it like a function: one raw number
+    }
+    std::println("the generator itself takes {} bytes", sizeof(rng));
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="mt_raw.cpp"><code>1608637542
+3421126067
+4083286876
+the generator itself takes 2504 bytes
+</code></pre>
+<p>Three large whole numbers, each between 0 and 4,294,967,295 (the full range of 32 bits, the same range as <code>unsigned int</code>). <code>std::mt19937 rng(42)</code> is a declaration like <code>std::vector&lt;int&gt; v(10, 0)</code>: a variable called <code>rng</code> of type <code>std::mt19937</code>, initialised from 42. The last line shows it is a big variable: 2,504 bytes, which is 624 four-byte numbers (2,496 bytes) plus a counter saying which of them is next. The homemade generator kept one <code>unsigned int</code> of state; this one keeps 624, and each call to <code>rng()</code> stirs that state and returns one slice of it. Make a second <code>std::mt19937</code> with seed 42 on any machine and its first number is 1608637542 too: the standard pins the formula down exactly.</p>
+
+<h3>A distribution shapes the raw numbers</h3>
+<p>Raw numbers up to four billion are rarely what you want. For Life you want a value between 0.0 and 1.0 to compare with <code>fill</code>. A <strong>distribution</strong> is a second variable, sitting next to the generator, whose job is to reshape raw generator output into the range and kind of number you asked for. <strong><code>std::uniform_real_distribution&lt;double&gt;</code></strong> gives a <code>double</code> where every value in a range is equally likely ("uniform"). You make one with the range, then hand it the generator each time you want a number:</p>
+
+<pre class="code" data-lang="cpp" data-file="seeds.cpp" data-check="run"><code>#include &lt;print&gt;
+#include &lt;random&gt;
+
+void print_five(unsigned int seed) {
+    std::mt19937 rng(seed);
+    std::uniform_real_distribution&lt;double&gt; dist(0.0, 1.0);
+    std::print("seed {}:", seed);
+    for (int i = 0; i &lt; 5; ++i) {
+        double r = dist(rng);
+        std::print(" {:.4f}", r);      // {:.4f} = show 4 digits after the point
+    }
+    std::println("");
+}
+
+int main() {
+    print_five(42);
+    print_five(42);
+    print_five(43);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="seeds.cpp"><code>seed 42: 0.7965 0.1834 0.7797 0.5969 0.4458
+seed 42: 0.7965 0.1834 0.7797 0.5969 0.4458
+seed 43: 0.4969 0.1029 0.1488 0.1721 0.8110
+</code></pre>
+<p>The pattern to memorise is three lines: make the generator from the seed, make the distribution with the range, and call <code>dist(rng)</code> for every number. The distribution takes the generator by reference (chapter 5 again: it must advance <em>your</em> generator, not a copy), pulls raw numbers from it and scales them into <code>[0.0, 1.0)</code>, meaning 0.0 is possible and 1.0 is just excluded. Seed 42 twice gives the identical five numbers. Seed 43, one away, gives numbers that share nothing with them. A good generator makes neighbouring seeds unrelated.</p>
+<p>One honest footnote. The standard pins down <code>std::mt19937</code> bit for bit, so its raw numbers are the same everywhere. It does <em>not</em> pin down how a distribution turns raw numbers into a <code>double</code>; that recipe is left to each standard library. Apple's library (libc++) and the GNU library on Linux (libstdc++) use different recipes, so the five numbers above are guaranteed only on the same compiler and library. That is all this week needs: the tests and the benchmark compare runs of the same program on the same machine.</p>
+<p>The <code>{:.4f}</code> inside the braces is a formatting instruction: show four digits after the decimal point. Plain <code>{}</code> prints as many digits as it takes to pin the <code>double</code> down exactly, no more and no fewer: for these numbers that is fifteen to seventeen digits (the first one above comes out as <code>0.796542984287846</code>), which is correct but hard to read. <a href="02-values-and-types.html">Chapter 2</a> has the table of formatting codes.</p>
+
+<div class="callout trap"><span class="label">Trap</span><p>Create the generator once. The generator should be made once and then used for every number. A beginner's mistake is to put <code>std::mt19937 rng(seed);</code> <em>inside</em> the loop: then every round starts from the same seed and every "random" number is the same one. In a function like <code>random_cells</code> the generator is a local variable created at the top, used by the loops, and gone when the function returns. One seed in, one grid out.</p></div>
+
+<h3>"Alive with probability fill" means r &lt; fill</h3>
+<p>Here is the one idea that turns a number in <code>[0.0, 1.0)</code> into a yes-or-no decision with a chosen likelihood. If <code>r</code> is uniform between 0 and 1, then the chance that <code>r</code> lands below some value <code>p</code> is exactly <code>p</code>: below 0.5 half the time, below 0.3 three times in ten, below 1.0 always, below 0.0 never. So "do this with probability <code>p</code>" is written <code>if (r &lt; p)</code>. On a non-Life problem, flipping a coin twenty times:</p>
+
+<pre class="code" data-lang="cpp" data-file="coin_flips.cpp" data-check="run"><code>#include &lt;print&gt;
+#include &lt;random&gt;
+#include &lt;string&gt;
+
+int main() {
+    const int flips = 20;
+    const double chance_of_heads = 0.5;
+
+    std::mt19937 rng(2024);
+    std::uniform_real_distribution&lt;double&gt; dist(0.0, 1.0);
+
+    std::string picture;
+    int heads = 0;
+    for (int i = 0; i &lt; flips; ++i) {
+        double r = dist(rng);
+        if (r &lt; chance_of_heads) {
+            picture += 'H';
+            heads += 1;
+        } else {
+            picture += 'T';
+        }
+    }
+    std::println("{}", picture);
+    std::println("{} heads out of {}", heads, flips);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="coin_flips.cpp"><code>TTTTTHTTTHHTHTHHHTHH
+9 heads out of 20
+</code></pre>
+<p>One loop, one draw per flip: when the number is below the chance the flip is heads, so an <code>H</code> goes on the end of the string and the count goes up by one; otherwise a <code>T</code>. The picture is built as the decisions are made, with no vector in between. Nine heads of twenty: close to half, not exactly half, which is what randomness looks like.</p>
+<p>Is it really the right probability? Measure it. The next program flips ten thousand times at five different chances:</p>
+
+<pre class="code" data-lang="cpp" data-file="biased_coin.cpp" data-check="run"><code>#include &lt;print&gt;
+#include &lt;random&gt;
+
+int heads_out_of(int flips, double chance, unsigned int seed) {
+    std::mt19937 rng(seed);
+    std::uniform_real_distribution&lt;double&gt; dist(0.0, 1.0);
+    int heads = 0;
+    for (int i = 0; i &lt; flips; ++i) {
+        if (dist(rng) &lt; chance) {
+            heads += 1;
+        }
+    }
+    return heads;
+}
+
+int main() {
+    std::println("chance 0.0 -> {} heads of 10000", heads_out_of(10000, 0.0, 1));
+    std::println("chance 0.1 -> {} heads of 10000", heads_out_of(10000, 0.1, 1));
+    std::println("chance 0.5 -> {} heads of 10000", heads_out_of(10000, 0.5, 1));
+    std::println("chance 0.9 -> {} heads of 10000", heads_out_of(10000, 0.9, 1));
+    std::println("chance 1.0 -> {} heads of 10000", heads_out_of(10000, 1.0, 1));
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="biased_coin.cpp"><code>chance 0.0 -> 0 heads of 10000
+chance 0.1 -> 1020 heads of 10000
+chance 0.5 -> 4951 heads of 10000
+chance 0.9 -> 8961 heads of 10000
+chance 1.0 -> 10000 heads of 10000
+</code></pre>
+<p>Chance 0.0 gives exactly zero heads, because no number in <code>[0.0, 1.0)</code> is below 0.0. Chance 1.0 gives exactly all of them, because every number in that range is below 1.0; this is why the range excludes 1.0 itself. In between, the counts sit close to the chance times ten thousand but not on it: 1,020 where 1,000 was expected, 4,951 for 5,000, 8,961 for 9,000. Each is within 50 of the target, half a percent of the ten thousand flips. Now reread the <code>random_cells</code> test in <code>life_test.cpp</code>: fill 0.0 must give zero live cells, fill 1.0 all of them, and fill 0.5 on a 100×100 grid between 4,000 and 6,000. Those are this table's rows, with "heads" renamed "alive".</p>
+
+<div class="callout try"><span class="label">Try it</span><p>Three experiments on <code>biased_coin.cpp</code>. First, change the seed from 1 to 2 in every call and run again: the three middle counts change, the 0 and the 10000 do not. Say why before you run it. Second, add a line with chance 0.3 and predict the count to within 100 before you look. Third, change 10000 to 1000000 (one million) in one line and see whether the result lands closer to or further from the chance times a million, as a fraction of the total.</p>
+<details class="hint"><summary>Stuck? First nudge</summary><p>Chance 0.0 and 1.0 cannot change with the seed, because <em>no</em> value in <code>[0.0, 1.0)</code> is below 0.0 and <em>every</em> value is below 1.0; the seed only decides which values appear. For chance 0.3, expect roughly 3,000. With a million flips the count drifts further from the target in absolute terms but closer as a fraction: this is why the <code>random_cells</code> test accepts anything between 4,000 and 6,000 on 10,000 cells rather than demanding exactly 5,000.</p></details></div>
+
+<div class="callout note"><span class="label">Deep dive in week 5</span><p>This is all of <code>&lt;random&gt;</code> you need this week: one generator, one distribution, <code>r &lt; p</code>. Week 5 opens the header properly: integer distributions for picking a slot, <code>std::discrete_distribution</code> for weighted choices (a loot table), and how to seed from the clock when you want a different game each run. Life's <code>--seed</code> flag means you never want that here.</p></div>
+
+<div class="callout twin"><span class="label">Inference twin</span><p>Run <code>llama-cli</code> from <code>llama.cpp</code> and you type <code>--seed 7 --n-predict 128 --temp 0.8</code>: the same flag-and-value pattern, parsed by the same kind of loop over <code>argv</code> into the same kinds of variables (an unsigned seed, an int count, a floating-point number). <code>--seed</code> is there for the reason it is here: same seed, same generated text, so a strange output can be reproduced and a speed-up measured on identical work. The sampling step that picks the next token is "draw <code>r</code>, compare against probabilities", your <code>r &lt; fill</code> grown up; <code>--temp</code> reshapes those probabilities first, and you implement it in week 5 as weighted loot sampling. The prompt itself arrives as a <code>std::string</code>, and the engine's first job is a <strong>tokenizer</strong> that turns it into a vector of integers. You saw this chapter that characters already <em>are</em> small integers; a tokenizer is a smarter grouping of them, and writing one is a week 29 option.</p></div>
+
+<h2>Check yourself</h2>
+<div class="quiz">
+<div class="q"><p>After <code>std::string s = "ab"; s += 'c'; s += "de";</code>, what is <code>s.size()</code>, and what is <code>s[2]</code>?</p><details class="answer"><summary>Answer</summary><p><code>s.size()</code> is 5 and <code>s</code> is <code>"abcde"</code>. <code>s[2]</code> is the <code>char</code> <code>'c'</code>, because positions count from 0.</p></details></div>
+<div class="q"><p>What is the difference between <code>'#'</code> and <code>"#"</code>? Which one can you append to a string with <code>+=</code>?</p><details class="answer"><summary>Answer</summary><p><code>'#'</code> is a single <code>char</code>, one byte with the value 35. <code>"#"</code> is a string literal: text one character long (two bytes in memory, counting the terminator). Both can be appended with <code>+=</code>; but only <code>'#'</code> can be compared with <code>ch == '#'</code> when <code>ch</code> is a <code>char</code>, and only <code>"#"</code> can initialise a <code>std::string</code>.</p></details></div>
+<div class="q"><p>A program is started as <code>./life --seed 7</code>. What are <code>argc</code>, <code>argv[0]</code> and <code>argv[2]</code>? Is <code>argv[2]</code> the number seven?</p><details class="answer"><summary>Answer</summary><p><code>argc</code> is 3. <code>argv[0]</code> is <code>"./life"</code>, the program name. <code>argv[2]</code> is the text <code>"7"</code>, a single character with the code 55, not the number seven. You get the number with <code>std::stoi(argv[2])</code>.</p></details></div>
+<div class="q"><p>Why must you check <code>i + 1 &lt; argc</code> before reading <code>argv[i + 1]</code>? What happens if you do not and the user types <code>./life --width</code>?</p><details class="answer"><summary>Answer</summary><p>With <code>./life --width</code>, <code>argc</code> is 2 and <code>--width</code> is at <code>argv[1]</code>, so <code>argv[2]</code> is the slot one past the last word. It holds no text, only the "nothing here" marker, and making a <code>std::string</code> from it (or passing it to <code>std::stoi</code>) crashes the program with <code>zsh: segmentation fault</code> and no useful message. The check makes the program refuse cleanly instead.</p></details></div>
+<div class="q"><p>What does <code>std::stoi("12abc")</code> return, and what does <code>std::stoi("abc")</code> do?</p><details class="answer"><summary>Answer</summary><p><code>std::stoi("12abc")</code> returns 12: it reads digits from the front and stops at the first non-digit. <code>std::stoi("abc")</code> finds no digits at all and stops the program with the message <code>stoi: no conversion</code>; the shell reports an abort.</p></details></div>
+<div class="q"><p>You print three raw numbers from <code>std::mt19937 rng(42)</code>, then run the same program again tomorrow, and then on a friend's Mac. Do you get the same three numbers each time? Why is that useful for this week's tests and benchmark?</p><details class="answer"><summary>Answer</summary><p>Yes, all three times. The formula and the seed fully determine the sequence, and the standard fixes the formula for <code>std::mt19937</code>, so every machine agrees on the raw numbers. (Only the <em>distribution</em> step is left to the library, so numbers that went through <code>uniform_real_distribution</code> are guaranteed identical on the same compiler and library, which is what you have.) <code>life_test.cpp</code> relies on this to check that <code>random_cells</code> gives the same grid twice for the same seed, and <code>bench_life.cpp</code> relies on it so that every timed run works on the identical grid.</p></details></div>
+<div class="q"><p><code>r</code> is a <code>double</code> drawn uniformly from <code>[0.0, 1.0)</code>. How do you make a decision that comes out true 30% of the time? What happens for a chance of exactly 1.0, and why does the range exclude 1.0?</p><details class="answer"><summary>Answer</summary><p><code>if (r &lt; 0.3)</code>: the chance that a uniform number lands below 0.3 is 0.3. With a chance of 1.0, <code>r &lt; 1.0</code> is true for every value the distribution can produce, so the decision is always true. If 1.0 were a possible value of <code>r</code>, it would occasionally fail, and "fill 1.0 = all alive" could not be guaranteed.</p></details></div>
+<div class="q"><p>Why does a function that <em>returns</em> a string of the grid beat one that <em>prints</em> the grid directly? Give one reason for testing and one for the terminal.</p><details class="answer"><summary>Answer</summary><p>Testing: a returned string can be compared with <code>==</code> against the expected text, as <code>CHECK(render(g, 3, 2) == "#..\n..#\n")</code> does; printed output cannot be checked that way. Terminal: one string printed once reaches the terminal as a single block, so no partially drawn frame is ever visible; many small prints can flicker when redrawn quickly (chapter 9).</p></details></div>
+</div>
+
+<h2>What you can do now</h2>
+<ul>
+<li>Create a <code>std::string</code>, append characters and text with <code>+=</code>, join with <code>+</code>, measure with <code>.size()</code>, compare with <code>==</code>, and read it one <code>char</code> at a time by index or with a range-for.</li>
+<li>Tell <code>'a'</code> from <code>"a"</code>, turn a number into text with <code>std::to_string</code>, and recognise the compiler's message when you mix them up.</li>
+<li>Build a multi-row picture into one string with nested loops and <code>'\n'</code>, return it from a function, and print it once with <code>std::print</code>: the shape of <code>render</code>.</li>
+<li>Declare <code>int main(int argc, char* argv[])</code>, convert each <code>argv[i]</code> to a <code>std::string</code> immediately, and walk the arguments from 1.</li>
+<li>Parse <code>--flag value</code> pairs with the <code>i + 1 &lt; argc</code> guard, convert with <code>std::stoi</code> and <code>std::stod</code>, give every setting a default, print a usage message and <code>return 1</code> for mistakes.</li>
+<li>Explain what a seed is, why the same seed gives the same sequence, and why that is the property tests and benchmarks depend on.</li>
+<li>Write the three-line pattern <code>std::mt19937 rng(seed); std::uniform_real_distribution&lt;double&gt; dist(0.0, 1.0); double r = dist(rng);</code> and turn <code>r &lt; p</code> into a decision with probability <code>p</code>: everything <code>random_cells</code> needs.</li>
+</ul>
+</main>
+</body>
+</html>

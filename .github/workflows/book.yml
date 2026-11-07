@@ -1,0 +1,35 @@
+# book.yml — compiles and runs every C++ example in the book, and checks every link.
+#
+# Only runs when the book or its checker changes, because it compiles a few hundred programs.
+# Locally: python3 tools/book-check.py
+name: book
+
+on:
+  push:
+    paths:
+      - "docs/book/**"
+      - "tools/book-check.py"
+      - ".github/workflows/book.yml"
+  pull_request:
+    paths:
+      - "docs/book/**"
+      - "tools/book-check.py"
+      - ".github/workflows/book.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: book-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Book examples compile, run and match their output
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - run: c++ --version
+      - run: python3 tools/book-check.py

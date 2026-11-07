@@ -1,0 +1,560 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>05 · References and const — C++ from zero to Life</title>
+<link rel="stylesheet" href="assets/book.css?v=9">
+<link rel="stylesheet" href="assets/tutor.css?v=9">
+<script src="assets/theme.js?v=9"></script>
+<script defer src="assets/book.js?v=9"></script>
+<script defer src="assets/tutor.js?v=9"></script>
+</head>
+<body>
+<nav class="sidebar" aria-label="Chapters"></nav>
+<main>
+<p class="chapter-kicker">Chapter 05</p>
+<h1>References and const</h1>
+<p class="lede">At the end of this chapter you will be able to hand a function a variable instead of a copy of it, let the function change that variable when you want it to, and forbid the change when you do not. You will also be able to read the two most important function signatures in <code>life.hpp</code> and know exactly what they promise.</p>
+
+<div class="callout note"><span class="label">In this chapter</span>
+<ul>
+<li>Why passing a big value to a function is expensive: the copy.</li>
+<li>A reference: a second name for a box that already exists.</li>
+<li>Pass by reference, so a function can change the caller's variable.</li>
+<li>Pass by const reference, so a function can read a big thing without copying or changing it.</li>
+<li>Rules of thumb: which parameters go by value, by <code>&amp;</code>, by <code>const&amp;</code>.</li>
+<li>How <code>const</code> ripples through a program, and what the signatures in <code>life.hpp</code> promise.</li>
+<li><code>const</code> on local variables, and <code>constexpr</code> in one line.</li>
+<li>Two traps: returning a reference to a local, and <code>auto</code> quietly dropping the <code>&amp;</code>.</li>
+</ul>
+</div>
+
+<h2>The problem: a parameter is a copy</h2>
+<p>In <a href="04-functions.html">chapter 4</a> you learned that a function's parameter is a brand new box. When you called <code>try_to_double(count)</code>, the machine made a fresh <code>int</code> box called <code>n</code>, copied the 4 bytes of <code>count</code> into it, and ran the function on <code>n</code>. The function never touched <code>count</code>. That is why <code>n = n * 2</code> inside <code>try_to_double</code> changed nothing the caller could see: <code>count</code> was still 21 afterwards.</p>
+<p>For an <code>int</code> the copy is harmless: 4 bytes, a single machine instruction. Now think about something bigger. You have not met <code>std::string</code> properly yet (that is <a href="08-strings-and-args.html">chapter 8</a>); for now take it as <strong>a piece of text</strong>: a variable that holds any number of characters. It lives in the <code>&lt;string&gt;</code> header, so a program that uses it needs <code>#include &lt;string&gt;</code> at the top, the same way <code>std::println</code> needs <code>#include &lt;print&gt;</code>. The line</p>
+<pre class="code" data-lang="cpp" data-file="big_string_fragment.cpp" data-check="fragment"><code>std::string big(1000000, 'x');   // one million copies of the letter x
+</code></pre>
+<p>makes a text of exactly one million <code>x</code> characters, one byte each. The shape of this line is new. Until now you gave a variable its starting value with <code>=</code>, as in <code>int count = 21;</code>. Parentheses straight after the name are a second way to do the same job, and they can take more than one value. For a <code>std::string</code>, two values in the parentheses mean "this many copies of this character". Take the shape on trust for now; <a href="06-vector.html">chapter 6</a> uses exactly the same shape to build a <code>std::vector</code> of a given size.</p>
+<p>Those million bytes live in memory. If you hand <code>big</code> to a function the way <a href="04-functions.html">chapter 4</a> taught, the parameter is a copy of the <em>whole</em> thing: the machine has to find a million fresh bytes and copy every one of them over before the first line of the function even runs.</p>
+<p>Here is a program that proves the copy really happens. The function changes its parameter completely, and the caller's text is untouched afterwards. (You also need one small thing on trust: <code>big.size()</code> means "how many characters are in <code>big</code>". <a href="06-vector.html">Chapter 6</a> explains <code>.size()</code> properly.)</p>
+
+<pre class="code" data-lang="cpp" data-file="copy_cost.cpp" data-check="run"><code>#include &lt;print&gt;
+#include &lt;string&gt;
+
+// `text` is a COPY of whatever the caller passed in.
+void shout(std::string text) {
+    text = "changed inside shout";
+    std::println("inside shout:  {}", text);
+}
+
+int main() {
+    std::string big(1000000, 'x');   // one million copies of the letter x
+    std::println("before:        {} characters", big.size());
+    shout(big);
+    std::println("after:         {} characters", big.size());
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="copy_cost.cpp"><code>before:        1000000 characters
+inside shout:  changed inside shout
+after:         1000000 characters
+</code></pre>
+<p>Inside <code>shout</code>, <code>text</code> became a short sentence. Outside, <code>big</code> still has its million characters. Two separate boxes; the second one was filled by copying the first.</p>
+<p>That copy has two costs. <strong>Time:</strong> the processor moves a million bytes from one place in memory to another, and if you call the function a thousand times, it does that a thousand times. <strong>Memory:</strong> while the function runs, two million bytes are in use instead of one million.</p>
+<p>Now scale that to the Life grid. The benchmark at the end of this week is a 1000×1000 grid: one million cells, one byte each. If the grid were passed by value, every call that asks "how many neighbours does this one cell have?" would first copy all one million cells. You ask that question once per cell, so one generation would copy a million cells a million times. That is 10<sup>12</sup> bytes, a trillion, moved to compute a single frame. The program would be unusably slow, and every byte of it would be waste, because the function only wanted to <em>look</em>.</p>
+
+<div class="callout principle"><span class="label">First principle</span><p>Passing by value means: make a new box, copy the bytes in. The cost is proportional to the number of bytes. A 4-byte <code>int</code> is free. A million-byte text is not. Nothing about the function changes this; it is the <em>act of calling</em> that pays.</p></div>
+
+<p>What you want is a way to say to the function: "do not take a copy; work on <em>my</em> box." C++ has exactly that. It is called a reference.</p>
+
+<h2>A reference is another name for an existing box</h2>
+<p>A <strong>reference</strong> is a second name for a variable that already exists. You declare one by putting <code>&amp;</code> after the type:</p>
+<pre class="code" data-lang="cpp" data-file="ref_decl_fragment.cpp" data-check="fragment"><code>int x = 5;
+int&amp; r = x;      // read it as: "r is a reference to int, and it refers to x"
+</code></pre>
+<p>After this line there is still only <em>one</em> box, the one made by <code>int x = 5</code>. The name <code>r</code> is glued to that same box. Reading <code>r</code> reads the box. Writing <code>r</code> writes the box. Watch:</p>
+
+<pre class="code" data-lang="cpp" data-file="nickname.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int main() {
+    int x = 5;
+    int&amp; r = x;        // r is another name for x
+
+    std::println("x = {}, r = {}", x, r);
+
+    r = 10;            // write through the nickname...
+    std::println("x = {}, r = {}", x, r);
+
+    x = 42;            // ...or through the original name
+    std::println("x = {}, r = {}", x, r);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="nickname.cpp"><code>x = 5, r = 5
+x = 10, r = 10
+x = 42, r = 42
+</code></pre>
+<p>Every line shows the same number twice, because there is only one number. <code>r = 10</code> did not "copy 10 into r and then into x". It wrote 10 into the one box that both names point at.</p>
+
+<div class="callout analogy"><span class="label">Analogy</span><p>A reference is a nickname. If your friend is called Alexander and everyone calls him Alex, there is still one person. Give Alex a haircut and Alexander has a haircut. Tell Alexander a secret and Alex knows it. The nickname is not a second person; it is a second way to point at the first one.</p>
+<p>Where it breaks: you can give a nickname to somebody later in life, you can stop using it, and you can move it to a different person. A C++ reference can do none of that. It must be attached to a variable the moment it is declared, and from then until it goes out of scope it refers to that one variable and nothing else. It is a nickname written in permanent ink at birth.</p></div>
+
+<h3>A reference must be bound at birth</h3>
+<p>Because a reference is only a name, a reference without a variable makes no sense: a name for nothing. The compiler refuses:</p>
+
+<pre class="code" data-lang="cpp" data-file="unbound.cpp" data-check="error"><code>#include &lt;print&gt;
+
+int main() {
+    int&amp; r;            // a nickname for... nobody?
+    r = 5;
+    std::println("{}", r);
+    return 0;
+}
+</code></pre>
+<pre class="output"><code>unbound.cpp:4:10: error: declaration of reference variable 'r' requires an initializer
+    4 |     int&amp; r;            // a nickname for... nobody?
+      |          ^
+1 error generated.
+</code></pre>
+<p>"Requires an initializer" is the compiler's way of saying: tell me what this is a name for. Compare this with a plain <code>int r;</code>, which the compiler allows (it makes a box with garbage in it). A reference has no box of its own to leave empty.</p>
+
+<h3>A reference cannot be re-pointed</h3>
+<p>Here is the mistake every beginner makes once. You have a reference to <code>x</code>. You write <code>r = y;</code> and expect <code>r</code> to now be a name for <code>y</code>. It is not. Assignment through a reference is assignment to the box it refers to. So <code>r = y</code> copies <code>y</code>'s value into <code>x</code>:</p>
+
+<pre class="code" data-lang="cpp" data-file="rebind.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int main() {
+    int x = 1;
+    int y = 2;
+    int&amp; r = x;        // r is bound to x, for ever
+
+    r = y;             // this does NOT make r a name for y
+
+    std::println("x = {}, y = {}, r = {}", x, y, r);
+
+    r = 99;            // still writes into x
+    std::println("x = {}, y = {}, r = {}", x, y, r);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="rebind.cpp"><code>x = 2, y = 2, r = 2
+x = 99, y = 2, r = 99
+</code></pre>
+<p>After <code>r = y</code>, <code>x</code> is 2 (it received <code>y</code>'s value) and <code>y</code> is still 2. After <code>r = 99</code>, <code>x</code> is 99 and <code>y</code> is untouched: <code>r</code> never stopped being a name for <code>x</code>. There is no syntax at all for re-pointing a reference. Once you accept that, references become very simple: every use of <code>r</code> is just a use of <code>x</code>.</p>
+
+<div class="callout principle"><span class="label">First principle</span><p>A variable is a named box in memory. A reference adds a name without adding a box. The only line where the <code>&amp;</code> does something special is the declaration <code>int&amp; r = x;</code>, which binds the name. On every other line, <code>r</code> behaves exactly like <code>x</code>.</p></div>
+
+<p>References on their own, inside one function, are rarely useful: you already have the name <code>x</code>, why would you want a second one? Their real job is in function parameters. That is where they fix the copy problem.</p>
+
+<h2>Pass by reference: let a function change your variable</h2>
+<p>If a parameter is declared as a reference, the parameter becomes another name for the caller's variable instead of a copy of it. No new box, no copy, and whatever the function writes lands in the caller's variable. Here is <a href="04-functions.html">chapter 4</a>'s pass-by-value next to the reference version, both trying to add one to the caller's variable:</p>
+
+<pre class="code" data-lang="cpp" data-file="add_one.cpp" data-check="run"><code>#include &lt;print&gt;
+
+// Chapter 4 version: v is a copy. Changing it changes nothing outside.
+void add_one_to_copy(int v) {
+    v = v + 1;
+    std::println("  inside add_one_to_copy: v = {}", v);
+}
+
+// Reference version: v is another name for the caller's variable.
+void add_one(int&amp; v) {
+    v = v + 1;
+    std::println("  inside add_one:         v = {}", v);
+}
+
+int main() {
+    int counter = 10;
+
+    add_one_to_copy(counter);
+    std::println("after add_one_to_copy: counter = {}", counter);
+
+    add_one(counter);
+    std::println("after add_one:         counter = {}", counter);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="add_one.cpp"><code>  inside add_one_to_copy: v = 11
+after add_one_to_copy: counter = 10
+  inside add_one:         v = 11
+after add_one:         counter = 11
+</code></pre>
+<p>The two function bodies do the same work: add one to <code>v</code>, then print it. The only difference that matters is one <code>&amp;</code> in the parameter list, and that one character decides whether the caller's <code>counter</code> changes. Inside <code>add_one</code>, the name <code>v</code> and the caller's name <code>counter</code> are two names for one box. The call <code>add_one(counter)</code> is the "birth" moment: it binds <code>v</code> to <code>counter</code>, the same way <code>int&amp; r = x;</code> bound <code>r</code> to <code>x</code>.</p>
+<p>Notice how the call looks the same in both cases: <code>add_one_to_copy(counter)</code> and <code>add_one(counter)</code>. You cannot tell from the call site whether the function takes a copy or a reference. You have to read the signature. This is why the declarations in a header file like <code>life.hpp</code> matter so much: the <code>&amp;</code> in the declaration is a promise about what the function may do to your variables.</p>
+
+<h3>Swapping two variables</h3>
+<p>The classic reason to pass by reference is a function that must change two things at once. A function can only <code>return</code> one value, but it can write through as many references as it likes:</p>
+
+<pre class="code" data-lang="cpp" data-file="swap_values.cpp" data-check="run"><code>#include &lt;print&gt;
+
+void swap_values(int&amp; a, int&amp; b) {
+    int temp = a;      // remember a's value
+    a = b;             // overwrite a with b's value
+    b = temp;          // put the remembered value into b
+}
+
+int main() {
+    int left = 1;
+    int right = 2;
+    std::println("before: left = {}, right = {}", left, right);
+
+    swap_values(left, right);
+    std::println("after:  left = {}, right = {}", left, right);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="swap_values.cpp"><code>before: left = 1, right = 2
+after:  left = 2, right = 1
+</code></pre>
+<p>Walk through it with the box picture. When <code>swap_values(left, right)</code> runs, <code>a</code> is a name for <code>left</code>'s box and <code>b</code> is a name for <code>right</code>'s box. <code>temp</code> is a real, new box (it is a plain <code>int</code>, not a reference) holding a copy of 1. <code>a = b</code> writes 2 into <code>left</code>'s box. <code>b = temp</code> writes 1 into <code>right</code>'s box. Done.</p>
+
+<div class="callout try"><span class="label">Try it</span><p>Make two changes to <code>swap_values.cpp</code>, one at a time, and predict the "after" line <em>before</em> you run each. First: remove both <code>&amp;</code> signs. Second: put them back, then remove only the <code>&amp;</code> on <code>b</code>, so the signature reads <code>void swap_values(int&amp; a, int b)</code>. Walk the box picture for each before running.</p></div>
+<details class="answer"><summary>Show the answer</summary><p>With no <code>&amp;</code> at all, the function swaps two private copies and <code>main</code> sees nothing: <code>after:  left = 1, right = 2</code>, identical to "before". With only <code>a</code> by reference, <code>a = b</code> still writes into <code>left</code>'s box (so <code>left</code> becomes 2), but <code>b = temp</code> writes into a private copy, so <code>right</code> stays 2: <code>after:  left = 2, right = 2</code>. The value 1 is lost. One missing <code>&amp;</code> is enough to break the function, and the compiler says nothing, because both versions are legal C++.</p></details>
+<p>Keep <code>swap_values</code> in mind. In <a href="07-flat-grid.html">chapter 7</a> you will meet <code>std::swap</code>, which does exactly this for any type, including two whole grids, and it is the heart of the Life game loop.</p>
+
+<h3>Returning more than one result</h3>
+<p>The same trick lets a function hand back two answers. Integer division has a quotient and a remainder; here is a function that produces both:</p>
+
+<pre class="code" data-lang="cpp" data-file="divide.cpp" data-check="run"><code>#include &lt;print&gt;
+
+// Two results from one function: both are written through references.
+void divide(int a, int b, int&amp; quotient, int&amp; remainder) {
+    quotient = a / b;
+    remainder = a % b;
+}
+
+int main() {
+    int q = 0;
+    int r = 0;
+    divide(17, 5, q, r);
+    std::println("17 / 5 = {} remainder {}", q, r);
+
+    divide(100, 7, q, r);
+    std::println("100 / 7 = {} remainder {}", q, r);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="divide.cpp"><code>17 / 5 = 3 remainder 2
+100 / 7 = 14 remainder 2
+</code></pre>
+<p>Look at the mix of parameters. <code>a</code> and <code>b</code> are inputs: small, and the function has no reason to change them, so they go by value. <code>quotient</code> and <code>remainder</code> are outputs: the function's whole purpose is to write into them, so they go by reference. Reading the signature tells you the story before you read a single line of the body. (You met <code>%</code>, "remainder after division", in <a href="02-values-and-types.html">chapter 2</a>. <a href="07-flat-grid.html">Chapter 7</a> puts it to work wrapping around the edges of the grid.)</p>
+<p>One detail in <code>main</code>: <code>q</code> and <code>r</code> are initialised to 0 even though <code>divide</code> overwrites them on every call. Why bother? Because <a href="02-values-and-types.html">chapter 2</a>'s rule still stands: a variable that is declared without a value holds whatever bytes were left in that memory. Giving <code>q</code> and <code>r</code> a value costs nothing and means that if you ever forget to call <code>divide</code>, you print a harmless 0 instead of nonsense. Notice also that the two calls reuse the same two boxes: the second <code>divide</code> simply writes new values over the old ones.</p>
+
+<div class="callout try"><span class="label">Try it</span><p>Write <code>void min_max(int a, int b, int c, int&amp; smallest, int&amp; largest)</code> that finds the smallest and the largest of three numbers and writes them through the two references. Call it with <code>7, 2, 9</code> and print the results. Then make a deliberate mistake: remove the <code>&amp;</code> from <code>smallest</code> only, and predict the output before you run it.</p></div>
+<details class="hint"><summary>Stuck? First nudge</summary><p>Start by writing <code>smallest = a; largest = a;</code>, then use <code>if</code> to replace them with <code>b</code> or <code>c</code> when those are smaller or larger. With the <code>&amp;</code> removed from <code>smallest</code>, the function writes into a private copy and the caller's variable keeps whatever you initialised it to.</p></details>
+
+<h2>Pass by const reference: read a big thing without copying it</h2>
+<p>Back to the million-character text. You want a function, call it <code>print_text</code>, that looks at the text without paying for a copy. Pass by reference solves the copy. But a plain <code>std::string&amp;</code> parameter also hands the function permission to <em>change</em> the caller's text, and a function that only prints has no business doing that. You want a reference that is read-only.</p>
+<p>That is what <code>const</code> in front of the type does. A <strong>const reference</strong> is another name for an existing box through which you may read but not write. In this book it is written <code>const T&amp;</code>, where <code>T</code> is a placeholder for whatever type you have in mind: <code>const int&amp;</code>, <code>const std::string&amp;</code>, and later <code>const Cells&amp;</code>. It is the single most common parameter type in real C++ code, so read the next program slowly:</p>
+
+<pre class="code" data-lang="cpp" data-file="print_text.cpp" data-check="run"><code>#include &lt;print&gt;
+#include &lt;string&gt;
+
+// Reads `s` without copying it, and promises not to change it.
+void print_text(const std::string&amp; s) {
+    std::println("{} characters", s.size());
+}
+
+int main() {
+    std::string small = "hello";
+    std::string big(1000000, 'x');
+
+    print_text(small);
+    print_text(big);
+    print_text("a literal works too");
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="print_text.cpp"><code>5 characters
+1000000 characters
+19 characters
+</code></pre>
+<p>Read the parameter from right to left: <code>s</code> is a reference (<code>&amp;</code>) to a <code>std::string</code> that is <code>const</code>, meaning "treated as unchangeable in here". The call <code>print_text(big)</code> binds <code>s</code> to <code>big</code>. Not one of the million bytes is copied. The function reads the size through the reference and returns.</p>
+<p>The third call needs a closer look, because there is no variable in it at all: <code>print_text("a literal works too")</code>. The parameter wants a <code>std::string</code>, and a string literal is not one. So the machine builds a nameless <code>std::string</code> from the literal, binds <code>s</code> to it, runs the function, and throws the nameless string away at the end of the statement. A value like that, which has no name and lives only for the length of one statement, is called a <strong>temporary</strong>. The output <code>19 characters</code> is the length of the literal: "a literal works too" is 19 characters including the spaces. Count them. The temporary is gone by the time the next line of <code>main</code> runs.</p>
+<p>What happens if the function breaks its promise? Here is the smallest possible example, using <code>int</code> so the message is short. The function says <code>const</code> and then tries to write:</p>
+
+<pre class="code" data-lang="cpp" data-file="const_ref_write.cpp" data-check="error"><code>#include &lt;print&gt;
+
+void add_one(const int&amp; v) {
+    v = v + 1;         // trying to write through a read-only name
+}
+
+int main() {
+    int counter = 10;
+    add_one(counter);
+    std::println("{}", counter);
+    return 0;
+}
+</code></pre>
+<pre class="output"><code>const_ref_write.cpp:4:7: error: cannot assign to variable 'v' with const-qualified type 'const int &amp;'
+    4 |     v = v + 1;         // trying to write through a read-only name
+      |     ~ ^
+const_ref_write.cpp:3:25: note: variable 'v' declared const here
+    3 | void add_one(const int&amp; v) {
+      |              ~~~~~~~~~~~^
+1 error generated.
+</code></pre>
+<p>Two things to notice. First, the error points at the <em>write</em>, not at the declaration: "cannot assign to variable 'v'". Second, the <code>note</code> underneath tells you where the promise was made. Clang almost always pairs an error with a note like this; read both.</p>
+<p>This error is a feature. You wrote <code>const</code> because the function should not modify its input. Months later, somebody (perhaps you) adds a line that modifies it. Instead of a silent bug where the caller's text quietly changes, the build fails at the exact line. <code>const</code> turns a category of runtime mistake into a compile-time message.</p>
+
+<div class="callout try"><span class="label">Try it</span><p>Write <code>void describe(const int&amp; n)</code> that prints <code>zero</code> when <code>n == 0</code> and otherwise prints the value. Call it three times: with <code>0</code> (a literal), with <code>42</code>, and with an <code>int</code> variable holding your age. Predict the three lines before running. Then add <code>n = 1;</code> as the first line of the function and read the error: find the line the error points at, and the line the <code>note</code> points at.</p></div>
+<details class="hint"><summary>Stuck? First nudge</summary><p>You need an <code>if</code>/<code>else</code> from <a href="03-control-flow.html">chapter 3</a> and two <code>std::println</code> calls. The first two calls bind <code>n</code> to a temporary holding the literal; the third binds it to your variable. The error will say "cannot assign to variable 'n' with const-qualified type 'const int &amp;'", and the note will point at the parameter list.</p></details>
+
+<h3>Why const&amp; and not plain &amp; for read-only parameters</h3>
+<p>You might think: if the function does not write to the parameter anyway, why bother with <code>const</code>? A plain <code>std::string&amp;</code> also avoids the copy. There are two answers. The first you have just seen: the promise is checked. The second is more practical. A plain reference can only be bound to a real, named variable. A const reference can also be bound to a temporary, like the nameless string the machine built from <code>"a literal works too"</code> in the program above. Watch what happens when you drop the <code>const</code> and pass a literal:</p>
+
+<pre class="code" data-lang="cpp" data-file="literal_nonconst.cpp" data-check="error"><code>#include &lt;print&gt;
+#include &lt;string&gt;
+
+void print_text(std::string&amp; s) {
+    std::println("{} characters", s.size());
+}
+
+int main() {
+    print_text("a literal");
+    return 0;
+}
+</code></pre>
+<pre class="output"><code>literal_nonconst.cpp:9:5: error: no matching function for call to 'print_text'
+    9 |     print_text("a literal");
+      |     ^~~~~~~~~~
+literal_nonconst.cpp:4:6: note: candidate function not viable: no known conversion from 'const char[10]' to 'std::string &amp;' (aka 'basic_string&lt;char&gt; &amp;') for 1st argument
+    4 | void print_text(std::string&amp; s) {
+      |      ^          ~~~~~~~~~~~~~~
+1 error generated.
+</code></pre>
+<p>The message is long, so take it in pieces. The error line says the call does not match any <code>print_text</code> the compiler knows about. The <code>note</code> explains why the one candidate was rejected: it could not convert the argument to <code>std::string &amp;</code>. Two bits of the note look alarming and are not. <code>const char[10]</code> is the compiler's name for the literal <code>"a literal"</code> itself: nine characters plus a hidden end marker, ten in all, none of them changeable. And <code>basic_string&lt;char&gt;</code> is the full internal name of <code>std::string</code>; the <code>aka</code> ("also known as") just tells you the two are the same thing. Take both on trust; you will meet them properly in <a href="08-strings-and-args.html">chapter 8</a>.</p>
+<p>The logic behind the refusal is sound. A plain reference means "I might write into this". Writing into a temporary that vanishes at the end of the statement is nonsense, so the compiler refuses to bind one. A <code>const&amp;</code> means "I will only read", and reading a temporary is fine. So <code>const T&amp;</code> parameters accept everything you could want to pass: named variables, literals, and the result of a calculation such as <code>a + b</code>. That flexibility is the second reason it is the default for read-only inputs.</p>
+
+<div class="callout note"><span class="label">Reading a signature aloud</span><p>Get into the habit of translating parameter types into plain sentences:</p>
+<ul>
+<li><code>int v</code>: "give me a copy of an int; I will do what I like with my copy."</li>
+<li><code>int&amp; v</code>: "give me your int itself; I will probably change it."</li>
+<li><code>const int&amp; v</code>: "give me your int itself; I promise only to look."</li>
+</ul>
+<p>Every function in <code>life.hpp</code> can be read this way, and should be.</p></div>
+
+<h2>Rules of thumb: value, reference, or const reference?</h2>
+<p>You now have three ways to declare a parameter. Here is how to choose. The table is not a law of the language; it is what experienced C++ programmers do by default, and it is what the Week 1 code does.</p>
+
+<table>
+<thead><tr><th>The parameter is...</th><th>Declare it as</th><th>Why</th></tr></thead>
+<tbody>
+<tr><td>Small and read-only: <code>int</code>, <code>double</code>, <code>bool</code>, <code>char</code>, <code>std::size_t</code>, <code>std::uint8_t</code></td><td><code>T</code> (by value)</td><td>Copying 1 to 8 bytes is as cheap as anything the machine does. A reference would be no faster and is one more thing to read.</td></tr>
+<tr><td>Big and read-only: a <code>std::string</code>, a <code>std::vector</code> (<a href="06-vector.html">chapter 6</a>), any grid</td><td><code>const T&amp;</code></td><td>No copy, and the compiler guarantees the function does not change it.</td></tr>
+<tr><td>Something the function must change for the caller</td><td><code>T&amp;</code></td><td>The whole point: writes go to the caller's variable.</td></tr>
+<tr><td>A result the function produces</td><td><code>return</code> it by value</td><td>Returning even a big object by value is fine; the compiler is allowed to build the result directly in the caller's box, so there is usually no copy at all. Prefer <code>return</code> to an output reference when there is only one result.</td></tr>
+</tbody>
+</table>
+
+<p>Two of the rows deserve a word more.</p>
+<p><strong>Small things by value.</strong> It is tempting, once you learn <code>const&amp;</code>, to write it everywhere. Do not. A reference has to be set up by the machine too. Under the hood it is an address, the number of the byte where the box starts, which you met in <a href="02-values-and-types.html">chapter 2</a>; week 7 of the curriculum says much more about this. On this Mac an address is 8 bytes, so handing over a reference to a 4-byte <code>int</code> moves <em>more</em> bytes than copying the <code>int</code> would. More importantly, <code>int v</code> is simply easier to read than <code>const int&amp; v</code>. Reserve <code>const&amp;</code> for things whose copy would actually hurt.</p>
+<p><strong>Returning by value is fine.</strong> A beginner who has just learned that copies are expensive may try to avoid <code>return big_thing;</code> and instead pass an output reference. In modern C++ that is backwards. When a function returns an object by value, the compiler builds that object straight into the place the caller will keep it. The function <code>random_cells</code> in <code>life.hpp</code> returns a whole grid by value, and that is the right design: one result, so <code>return</code> it. You will see how in <a href="08-strings-and-args.html">chapter 8</a>.</p>
+
+<div class="callout trap"><span class="label">Trap</span><p>Reading <code>void f(int&amp; v)</code> from the call site is impossible: <code>f(x)</code> looks the same whether <code>f</code> takes a copy or a reference. If a variable mysteriously changes after a function call, open the declaration and look for the <code>&amp;</code>. The reverse trap is just as common: you pass <code>x</code> to a function expecting it to be changed, nothing happens, and the cause is a missing <code>&amp;</code> in the signature.</p></div>
+
+<h2>const correctness ripples</h2>
+<p>A function that takes <code>const int&amp; v</code> has promised not to change <code>v</code>. The compiler holds it to that promise everywhere inside the function, including when it calls <em>other</em> functions. If it passes <code>v</code> to a function that takes a plain <code>int&amp;</code>, that function might write to <code>v</code>. The first function would not have written anything itself, but it would have handed a writable name to someone who could, and that breaks the promise just the same. The compiler refuses:</p>
+
+<pre class="code" data-lang="cpp" data-file="ripple.cpp" data-check="error"><code>#include &lt;print&gt;
+
+void bump(int&amp; v) {
+    v = v + 1;
+}
+
+// Promises not to change v...
+void inspect(const int&amp; v) {
+    bump(v);           // ...then hands v to a function that might
+    std::println("{}", v);
+}
+
+int main() {
+    int n = 1;
+    inspect(n);
+    return 0;
+}
+</code></pre>
+<pre class="output"><code>ripple.cpp:9:5: error: no matching function for call to 'bump'
+    9 |     bump(v);           // ...then hands v to a function that might
+      |     ^~~~
+ripple.cpp:3:6: note: candidate function not viable: 1st argument ('const int') would lose const qualifier
+    3 | void bump(int&amp; v) {
+      |      ^    ~~~~~~
+1 error generated.
+</code></pre>
+<p>"Would lose const qualifier" is the key phrase. The compiler is not saying <code>bump</code> is wrong. It is saying: you cannot hand a read-only name to a function that wants a writable one. This is what people mean by <strong>const correctness</strong>: once you mark something <code>const</code>, everything it is passed to must also accept <code>const</code>. The property ripples outwards through the call chain.</p>
+<p>The fix is almost always the right fix anyway: if the helper only reads, make <em>its</em> parameter <code>const&amp;</code> too (or by value, if it is small):</p>
+
+<pre class="code" data-lang="cpp" data-file="ripple_ok.cpp" data-check="run"><code>#include &lt;print&gt;
+
+// Reads only: safe to call with a const reference.
+int doubled(const int&amp; v) {
+    return v * 2;
+}
+
+// Promises not to change v, and only calls functions that promise the same.
+void inspect(const int&amp; v) {
+    std::println("v = {}, doubled = {}", v, doubled(v));
+}
+
+int main() {
+    int n = 21;
+    inspect(n);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="ripple_ok.cpp"><code>v = 21, doubled = 42
+</code></pre>
+<p>(By the rules of thumb, <code>doubled</code> should really take <code>int v</code> by value, since an <code>int</code> is small. It takes <code>const int&amp;</code> here only to show that const-to-const binding is allowed. Passing a <code>const int&amp;</code> on to an <code>int</code> by-value parameter is also fine: making a copy of something is not changing it.)</p>
+<p>The practical consequence for your week: when you write <code>count_neighbours</code>, which receives the grid as <code>const Cells&amp;</code>, every helper you call on that grid must also take it as <code>const Cells&amp;</code>. Start with <code>const</code> and you will never have to go back and add it; start without and you will spend an afternoon adding it everywhere.</p>
+
+<div class="callout try"><span class="label">Try it</span><p>Go back to <code>ripple.cpp</code>, the one that failed, and fix it the <em>other</em> way: leave <code>bump</code> alone and change <code>inspect</code>'s parameter to a plain <code>int&amp;</code>. Add <code>std::println("n = {}", n);</code> after the call in <code>main</code>. Predict both lines of output before you run. Then ask yourself which of the two fixes you would want if <code>inspect</code> were called <code>count_neighbours</code>.</p></div>
+<details class="answer"><summary>Show the answer</summary><p>It compiles and prints <code>2</code> then <code>n = 2</code>. <code>inspect</code> no longer promises anything, so <code>bump</code> is free to write, and the write reaches <code>main</code>'s <code>n</code>. That is the honest signature if the function really must change its argument. For <code>count_neighbours</code> it would be the wrong fix: a counting function that is allowed to alter the grid is a bug waiting to happen, so the right move is to keep <code>const</code> and fix the helper.</p></details>
+
+<h2>Reading the life.hpp signatures</h2>
+<p>You now know enough to read the two most important lines in <code>phase1-terminal/01-life/src/life.hpp</code>. Do not implement anything yet; the point is to understand the contract. Here are the declarations, copied exactly (a <code>Cells</code> is the grid: a flat list of cells, one byte each, 1 for alive and 0 for dead; <a href="06-vector.html">chapter 6</a> and <a href="07-flat-grid.html">chapter 7</a> build it up):</p>
+
+<pre class="code" data-lang="cpp" data-file="life_signatures_fragment.cpp" data-check="fragment"><code>// How many of the 8 neighbours of (x, y) are alive.
+int count_neighbours(const Cells&amp; cells, int width, int height, int x, int y);
+
+// One generation of Life. Reads `current`, writes the result into `next`.
+void step(const Cells&amp; current, Cells&amp; next, int width, int height);
+</code></pre>
+
+<p>Read <code>count_neighbours</code> aloud using the habit from earlier. "Give me the grid itself, I promise only to look (<code>const Cells&amp;</code>). Give me copies of the width, the height, and the coordinates (four <code>int</code>s by value)." It returns one small answer, an <code>int</code> between 0 and 8, so that comes back by <code>return</code>. Every rule of thumb in the table is visible in one line. The grid is the big thing, so it is a const reference. The four numbers are small, so they are copies. The result is single, so it is returned.</p>
+<p>Now <code>step</code>. "Give me the grid <code>current</code>, I promise only to look. Give me the grid <code>next</code>, and I <em>will</em> write into it. Width and height by copy." Two grids, one read-only, one writable. That split is not a style choice; it is the entire algorithm.</p>
+<p>Why two grids? Every new cell depends on the <em>old</em> values of its neighbours, so writing into the grid you are reading would mix two generations. <a href="07-flat-grid.html">Chapter 7</a> shows this going wrong on a one-dimensional automaton and names the fix, double buffering.</p>
+<p>The <code>const</code> on <code>current</code> is what lets the compiler check that your <code>step</code> never breaks the rule. If you accidentally write into <code>current</code>, you will get a "cannot assign" error from the same family as the one earlier, instead of a flickering, wrong simulation. (For a grid the exact wording is <code>cannot assign to return value because function 'operator[]' returns a const value</code>; the <code>operator[]</code> part is <a href="06-vector.html">chapter 6</a>'s business. The meaning is the same: you tried to write through a read-only name.) The test named <code>"step: does not modify current"</code> in <code>tests/life_test.cpp</code> checks the same thing at run time; the <code>const</code> checks it at compile time, which is earlier and cheaper.</p>
+
+<div class="callout twin"><span class="label">Inference twin</span><p>A weight matrix in a language model is a few hundred megabytes to several gigabytes of numbers. Nobody ever copies one to look at it. Every function that computes with weights receives a <em>view</em>: in C++ that is <code>std::span</code> or <code>std::mdspan</code> (week 15), and in llama.cpp it is a tensor struct that records where the data lives and how it is shaped. A view is a reference with extra information attached: "the bytes are over there, and here is how to read them as a 768×768 grid". Your <code>const Cells&amp; cells</code> is the simplest possible view: a reference to the data plus <code>width</code> and <code>height</code> carried alongside. The forward pass of SmolLM2-135M is a chain of functions that all take <code>const</code> views of the weights and write into a separate output buffer, exactly the shape of <code>step(const Cells&amp;, Cells&amp;)</code>. In the KV cache (week 18), the ping-pong between a read buffer and a write buffer is the same double-buffering idea at a larger scale.</p></div>
+
+<h2>const for local variables, and constexpr in one line</h2>
+<p><code>const</code> is not only for parameters. <a href="02-values-and-types.html">Chapter 2</a> introduced it for ordinary variables, and it means the same thing: this box is filled once and never written again. The compiler enforces it exactly as it did for the parameter:</p>
+
+<pre class="code" data-lang="cpp" data-file="const_local.cpp" data-check="error"><code>#include &lt;print&gt;
+
+int main() {
+    const int width = 10;
+    width = 20;        // width promised never to change
+    std::println("{}", width);
+    return 0;
+}
+</code></pre>
+<pre class="output"><code>const_local.cpp:5:11: error: cannot assign to variable 'width' with const-qualified type 'const int'
+    5 |     width = 20;        // width promised never to change
+      |     ~~~~~ ^
+const_local.cpp:4:15: note: variable 'width' declared const here
+    4 |     const int width = 10;
+      |     ~~~~~~~~~~^~~~~~~~~~
+1 error generated.
+</code></pre>
+<p>Same message shape as before: the error at the write, the note at the promise. Make locals <code>const</code> whenever you can. In <code>bench_life.cpp</code> you can see this habit already: <code>const int width = size;</code>, <code>const int warmup_steps = 3;</code>, <code>const auto start = clock::now();</code>. A reader who sees <code>const</code> knows they can stop tracking that variable: its value on line 10 is its value on line 90. In a loop-heavy program like Life, every variable you can mark <code>const</code> is one less thing that can go wrong.</p>
+<p>You will also see <code>constexpr</code> in other people's code. In one line: read it as "a <code>const</code> the compiler can compute while compiling", and move on until week 9, where lookup tables give it a real job. For Week 1, <code>const</code> is all you need, and this book does not use <code>constexpr</code> again.</p>
+
+<h2>Two traps</h2>
+
+<h3>Trap one: returning a reference to a local variable</h3>
+<p>A reference is a name for a box. Local variables live in boxes that are thrown away when the function returns (<a href="04-functions.html">chapter 4</a> called this scope). So a function that returns a reference to one of its own locals is handing you a name for a box that no longer exists. The program below does exactly that. One new thing in it: the return type is <code>int&amp;</code>, not <code>int</code>. A function can have a reference as its return type, which means "I hand back a name for a box, not a copy of a value". You will not write such a function this week; it is here only to show the trap.</p>
+
+<pre class="code" data-lang="cpp" data-file="dangling.cpp" data-check="fragment"><code>#include &lt;print&gt;
+
+int&amp; make_number() {
+    int local = 7;     // lives only while make_number runs
+    int&amp; name = local;
+    return name;       // a nickname for a box that is about to vanish
+}
+
+int main() {
+    int&amp; r = make_number();
+    std::println("{}", r);
+    return 0;
+}
+</code></pre>
+<p>Clang spots this one and warns. With the book's flags (<code>-Wall -Wextra</code>, which <code>tools/run.sh</code> uses) you see:</p>
+<pre class="output"><code>dangling.cpp:6:12: warning: reference to stack memory associated with local variable 'local' returned [-Wreturn-stack-address]
+    6 |     return name;       // a nickname for a box that is about to vanish
+      |            ^~~~
+dangling.cpp:5:10: note: binding reference variable 'name' here
+    5 |     int&amp; name = local;
+      |          ^      ~~~~~
+1 warning generated.
+</code></pre>
+<p>A warning does not stop the build: the program is still produced and still runs. On this machine it printed <code>1</code> when compiled with plain <code>clang++ -std=c++23 -Wall -Wextra</code>. Run through <code>tools/run.sh</code> it printed a large meaningless number instead (<code>44783712</code> on one run), and that number changed from build to build. Neither is <code>7</code>, and neither is promised. The box that held 7 was recycled the moment <code>make_number</code> returned, and whatever happened to be written there next is what you read. This is <strong>undefined behaviour</strong>, the term from <a href="02-values-and-types.html">chapter 2</a>: the language gives no rules for what happens, so anything can, including appearing to work until the day it does not.</p>
+<p>Two more things to notice. The sanitizers in <code>tools/run.sh</code>, which catch many memory bugs, did not catch this one. And the compiler will not always manage the warning either, especially when the reference travels through two or three functions before it is used. So the warning is your only safety net here, and it has holes. Treat <code>-Wreturn-stack-address</code> as an error whenever you see it.</p>
+
+<div class="callout trap"><span class="label">Trap</span><p>Never return a reference to a local variable. For Week 1 the rule is even simpler: do not return references at all. Return by value. The functions in <code>life.hpp</code> that produce something, <code>random_cells</code> and <code>render</code>, both return by value, and that is the right call. Week 7 of the curriculum covers lifetimes properly, and then you will learn the few cases where returning a reference is correct.</p></div>
+
+<h3>Trap two: auto drops the reference</h3>
+<p><a href="02-values-and-types.html">Chapter 2</a> introduced <code>auto</code> as "work out the type from the right-hand side". It has one rule you must know now: <code>auto</code> on its own never deduces a reference. If the right-hand side is a reference, <code>auto</code> gives you a <em>copy</em> of the thing it refers to.</p>
+
+<pre class="code" data-lang="cpp" data-file="auto_drops_ref.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int main() {
+    int x = 1;
+    int&amp; r = x;
+
+    auto y = r;        // auto deduces int, NOT int&amp;: y is a copy
+    y = 99;
+    std::println("after y = 99:  x = {}, y = {}", x, y);
+
+    auto&amp; z = r;       // auto&amp; keeps the reference: z is another name for x
+    z = 99;
+    std::println("after z = 99:  x = {}, z = {}", x, z);
+
+    const int limit = 7;
+    auto c = limit;    // auto deduces int, NOT const int: c is a writable copy
+    c = 8;
+    std::println("limit = {}, c = {}", limit, c);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="auto_drops_ref.cpp"><code>after y = 99:  x = 1, y = 99
+after z = 99:  x = 99, z = 99
+limit = 7, c = 8
+</code></pre>
+<p><code>auto y = r;</code> made a brand new <code>int</code> box and copied 1 into it. Writing 99 into <code>y</code> left <code>x</code> alone. <code>auto&amp; z = r;</code> made a reference, and writing through <code>z</code> changed <code>x</code>. The last three lines show that <code>auto</code> drops <code>const</code> in the same way: <code>limit</code> is <code>const</code>, but <code>auto c = limit;</code> deduces plain <code>int</code>, so <code>c</code> is a writable copy and <code>c = 8</code> compiles without complaint. The rule in one sentence: <code>auto</code> gives you a fresh, writable copy of the value, and forgets both the <code>&amp;</code> and the <code>const</code> of whatever was on the right. If you want to keep them, you write them yourself: <code>auto&amp;</code> or <code>const auto&amp;</code>.</p>
+<p>This bites hardest with big things. <code>auto grid = current;</code> where <code>current</code> is a <code>const Cells&amp;</code> silently copies a million cells. Write <code>const auto&amp; grid = current;</code> if you want another read-only name, or just use <code>current</code> directly. When in doubt, write the type out in full. <code>auto</code> saves typing; it should never cost you a copy you did not see.</p>
+
+<div class="callout note"><span class="label">Deferred to later chapters</span>
+<ul>
+<li>What a reference actually is in the machine (an address), and pointers: week 7 of the curriculum.</li>
+<li>Passing <code>std::vector</code> by <code>const&amp;</code> and indexing it: <a href="06-vector.html">chapter 6</a>.</li>
+<li><code>std::swap</code> on two grids, the double-buffer handover: <a href="07-flat-grid.html">chapter 7</a>.</li>
+<li>Returning a <code>std::string</code> or a grid by value from <code>render</code> and <code>random_cells</code>: <a href="08-strings-and-args.html">chapter 8</a>.</li>
+<li>Member functions that promise <code>const</code> on an object: week 4, with classes.</li>
+</ul>
+</div>
+
+<h2>Check yourself</h2>
+<div class="quiz">
+<div class="q"><p>After <code>int a = 3; int&amp; b = a; b = 8;</code>, what is <code>a</code>? How many <code>int</code> boxes exist?</p><details class="answer"><summary>Answer</summary><p><code>a</code> is 8. Exactly one box exists; <code>b</code> is a second name for it, not a second box.</p></details></div>
+
+<div class="q"><p>You have <code>int x = 1; int y = 2; int&amp; r = x;</code> and then <code>r = y;</code>. What are <code>x</code>, <code>y</code> and <code>r</code> afterwards?</p><details class="answer"><summary>Answer</summary><p><code>x</code> is 2, <code>y</code> is 2, <code>r</code> is 2. Assignment through a reference writes into the box it refers to; it does not re-point the reference. <code>r</code> is still a name for <code>x</code>.</p></details></div>
+
+<div class="q"><p>Why does <code>int&amp; r;</code> fail to compile while <code>int n;</code> compiles?</p><details class="answer"><summary>Answer</summary><p><code>int n;</code> creates a box (with an unspecified value in it). <code>int&amp; r;</code> would create a name with no box to name, which is meaningless, so the compiler demands an initialiser: <code>int&amp; r = something;</code>.</p></details></div>
+
+<div class="q"><p>A function is declared <code>void grow(std::string&amp; s);</code> and another <code>void show(const std::string&amp; s);</code>. Which one may change the caller's text? Which one can you call with a literal like <code>show("hi")</code>?</p><details class="answer"><summary>Answer</summary><p><code>grow</code> may change the caller's text; <code>show</code> promises not to. Only <code>show</code> accepts a literal, because a <code>const&amp;</code> can bind to a temporary value and a plain <code>&amp;</code> cannot.</p></details></div>
+
+<div class="q"><p>Which parameter type would you choose for each: a <code>double</code> probability that is only read; a <code>std::string</code> that is only read; an <code>int</code> that the function must increase for the caller?</p><details class="answer"><summary>Answer</summary><p><code>double fill</code> by value (small, read-only). <code>const std::string&amp; text</code> (big, read-only). <code>int&amp; count</code> (must be changed for the caller).</p></details></div>
+
+<div class="q"><p><code>void f(const int&amp; v) { g(v); }</code> fails to compile with "would lose const qualifier". What does <code>g</code>'s signature look like, and what are the two ways to fix the problem?</p><details class="answer"><summary>Answer</summary><p><code>g</code> takes a plain <code>int&amp;</code>. Either change <code>g</code> to take <code>const int&amp;</code> (or <code>int</code> by value) if it only reads, or, if <code>g</code> genuinely must write, then <code>f</code> cannot honestly promise <code>const</code> and its own parameter should become <code>int&amp;</code>. The first fix is almost always the right one.</p></details></div>
+
+<div class="q"><p>In <code>void step(const Cells&amp; current, Cells&amp; next, int width, int height);</code>, why is one grid <code>const</code> and the other not? What would go wrong if there were only one grid?</p><details class="answer"><summary>Answer</summary><p><code>current</code> is read-only: it is the generation being counted. <code>next</code> is written: it receives the new generation. With one grid, cells updated early in the pass would be seen in their new state by cells counted later in the pass, mixing present and future and giving wrong, order-dependent results. Two grids (double buffering) keep reads and writes separate.</p></details></div>
+
+<div class="q"><p><code>int&amp; r = x; auto y = r; y = 5;</code> Does <code>x</code> change? What would you write instead to get another name for <code>x</code>?</p><details class="answer"><summary>Answer</summary><p>No. <code>auto</code> drops the reference, so <code>y</code> is an independent copy. Write <code>auto&amp; y = r;</code> (or <code>int&amp; y = r;</code>) to get a reference.</p></details></div>
+</div>
+
+<h2>What you can do now</h2>
+<ul>
+<li>Explain, in terms of boxes in memory, why passing a big value by value is slow and what a reference changes.</li>
+<li>Declare a reference, bind it at birth, and predict what every read and write through it does to the original.</li>
+<li>Write functions that change the caller's variables through <code>T&amp;</code> parameters, including a swap and a function with two results.</li>
+<li>Write functions that read big things through <code>const T&amp;</code> without copying, and recognise the compiler message when a promise is broken.</li>
+<li>Choose by value, <code>&amp;</code> or <code>const&amp;</code> for a parameter using the rules of thumb, and read a signature aloud as a sentence of promises.</li>
+<li>Read <code>count_neighbours</code> and <code>step</code> in <code>life.hpp</code> and say why one grid is <code>const</code> and the other is not.</li>
+<li>Avoid the two traps: never return a reference to a local, and remember that <code>auto</code> drops <code>&amp;</code> and <code>const</code>.</li>
+</ul>
+</main>
+</body>
+</html>

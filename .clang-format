@@ -1,0 +1,27 @@
+# .clang-format — repo-wide style. LLVM base, 4-space indent, 100 columns, braces on the same line.
+# Enforced on staged .cpp/.hpp files by the pre-commit hook (tools/install-hooks.sh).
+---
+Language: Cpp
+BasedOnStyle: LLVM
+Standard: Latest
+
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+ColumnLimit: 100
+
+BreakBeforeBraces: Attach
+AllowShortFunctionsOnASingleLine: Empty
+AllowShortIfStatementsOnASingleLine: WithoutElse
+AllowShortLoopsOnASingleLine: true
+AllowShortBlocksOnASingleLine: Never
+
+PointerAlignment: Left
+ReferenceAlignment: Pointer
+
+SortIncludes: CaseSensitive
+IncludeBlocks: Preserve
+
+AlignTrailingComments: true
+SpacesBeforeTrailingComments: 2
+AccessModifierOffset: -4

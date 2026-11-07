@@ -1,0 +1,778 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>07 · The flat grid: 2D in 1D memory — C++ from zero to Life</title>
+<link rel="stylesheet" href="assets/book.css?v=9">
+<link rel="stylesheet" href="assets/tutor.css?v=9">
+<script src="assets/theme.js?v=9"></script>
+<script defer src="assets/book.js?v=9"></script>
+<script defer src="assets/tutor.js?v=9"></script>
+</head>
+<body>
+<nav class="sidebar" aria-label="Chapters"></nav>
+<main>
+<p class="chapter-kicker">Chapter 07</p>
+<h1>The flat grid: 2D in 1D memory</h1>
+<p class="lede">At the end of this chapter you will be able to store a picture with rows and columns inside one straight <code>std::vector</code>. You will find any cell from its column and row with one multiplication and one addition, and go the other way with <code>/</code> and <code>%</code>. You will wrap around the edges without the negative-number bug that catches almost everyone, and update a whole row of cells at once without corrupting it half-way through. This is the chapter the Week 1 challenge is built on. It is also the first chapter about tensors, a word that gets its precise meaning in the section on strides.</p>
+
+<div class="callout note"><span class="label">In this chapter</span>
+<ul>
+<li>Memory is one line. A grid is two dimensions. How to fit one inside the other.</li>
+<li>Row-major order: the formula <code>y * width + x</code>, derived by counting, and its inverse with <code>/</code> and <code>%</code>.</li>
+<li>Two worked examples: a multiplication table of <code>int</code>s and a checkerboard of bytes.</li>
+<li>Why the order of two nested loops matters for speed, and the one bug a non-square grid always catches.</li>
+<li>Strides, and why a flat grid is exactly what a tensor is.</li>
+<li>Edges: three policies, and the torus that Life uses. Wrapping in one dimension on a clock face, including what <code>%</code> does with negative numbers.</li>
+<li>Double buffering: a one-dimensional cellular automaton that goes wrong when updated in place, and right with two vectors and <code>std::swap</code>.</li>
+</ul>
+</div>
+
+<h2>The problem: a picture has rows, memory has one row</h2>
+<p>Think about the Life grid you are going to build: say 80 cells wide and 24 cells high. You picture it as a rectangle, 24 rows of 80 cells, and the screen will show it that way. The rules of Life talk about it that way too: a cell has a neighbour above it and a neighbour to its left.</p>
+<p>The memory of your computer does not have rows. In <a href="02-values-and-types.html">chapter 2</a> you learned that memory is one very long sequence of bytes, each with a number, its <strong>address</strong>. There is no "up" in memory, only "the next byte" and "the previous byte". A <code>std::vector</code> (<a href="06-vector.html">chapter 6</a>) asks the machine for one block of consecutive bytes and lets you talk about them as cell 0, cell 1, cell 2, and so on. That is still one straight line.</p>
+<p>So you have a two-dimensional idea and a one-dimensional place to keep it. There are two ways out.</p>
+<p><strong>Option 1: a vector of vectors.</strong> One <code>std::vector</code> per row, all of them inside an outer vector, so a cell is <code>rows[y][x]</code>: the first <code>[]</code> picks the row, the second picks the cell in it. (You will not use this, so the double bracket is shown only so that you recognise it when you see it.) It reads nicely. But the outer vector does not hold the cells. It holds 24 small records, one per row, and each record says where that row's own block of 80 cells lives; each of those 24 blocks was asked for separately. The rows can be anywhere in memory, with gaps between them, and nothing forces them to have the same length: row 7 could quietly have 79 cells.</p>
+<p><strong>Option 2: one flat vector plus arithmetic.</strong> A single <code>std::vector</code> with <code>width * height</code> cells, with the rows laid down one after another: all of row 0, then all of row 1, then all of row 2. Finding a cell is a tiny calculation that you will derive in the next section. This is what <code>life.hpp</code> does, what every image library does, and what every tensor in every machine learning framework does.</p>
+<p>You will use option 2, for four reasons:</p>
+<ul>
+<li><strong>One allocation.</strong> An <strong>allocation</strong> is one request to the machine for one block of memory. The flat grid makes one request, for <code>width * height</code> bytes. The vector of vectors makes 25: one for the outer vector and one per row.</li>
+<li><strong>Contiguous.</strong> Every cell sits right next to the one before it, with no gaps and no handles to follow. Walking all the cells is walking memory front to back, the fastest thing a processor knows how to do.</li>
+<li><strong>The shape is guaranteed.</strong> Row 7 cannot have a different length, because the rows do not exist as separate things. They exist only in your arithmetic, governed by one number, <code>width</code>, that you carry alongside the vector.</li>
+<li><strong>It is exactly what a tensor is.</strong> A tensor is a flat block of numbers plus a description of its shape. You are about to build one by hand.</li>
+</ul>
+
+<div class="callout principle"><span class="label">First principle</span><p>The machine only ever has one dimension: the address. Every "row", "column", "layer" or "axis" you will ever use is an agreement between you and your own code about how to turn several small numbers into one address. The agreement is not stored anywhere. If two parts of your program disagree about it, the data is still there, but it means something else to each of them.</p></div>
+
+<div class="callout analogy"><span class="label">Analogy</span><p>A book is two-dimensional to your eye: lines going down, letters going across. But the text is one-dimensional: it is one long string of characters, and the line breaks are only there because the page has a fixed width. Reflow the same text onto a narrower page and every line changes, but the story does not. The width is the agreement. <em>Where the analogy breaks:</em> a book has real line-break characters stored in the text. A flat grid has no row markers at all. The only thing that says "a new row starts here" is the number <code>width</code> that you pass around next to the vector.</p></div>
+
+<h2>Row-major order: where does cell (x, y) live?</h2>
+<p>Some vocabulary, so that every sentence in the rest of this chapter means one thing. The grid is <code>width</code> cells wide and <code>height</code> cells high. A cell is named by its <strong>column</strong> <code>x</code>, counted from 0 at the left, and its <strong>row</strong> <code>y</code>, counted from 0 at the top. So <code>x</code> goes from 0 to <code>width - 1</code>, and <code>y</code> goes from 0 to <code>height - 1</code>. A position is written <code>(x, y)</code>, column first, like coordinates on a map or a graph. One difference from the graphs you drew at school: here <code>y</code> grows <em>downwards</em>. Row 0 is the top row, like the first line on a page, not the bottom one. The <strong>flat index</strong> <code>i</code> is the position of a cell in the one-dimensional vector, from 0 to <code>width * height - 1</code>.</p>
+<p><strong>Row-major</strong> order means: lay the rows down one after another, the whole of row 0 first, then the whole of row 1, and so on. Here is a grid that is 4 wide and 3 high, with the flat index written inside every cell:</p>
+
+<pre class="grid-figure">        x=0   x=1   x=2   x=3
+      +-----+-----+-----+-----+
+ y=0  |  0  |  1  |  2  |  3  |
+      +-----+-----+-----+-----+
+ y=1  |  4  |  5  |  6  |  7  |
+      +-----+-----+-----+-----+
+ y=2  |  8  |  9  | 10  | 11  |
+      +-----+-----+-----+-----+
+
+ in memory:  0 1 2 3 4 5 6 7 8 9 10 11
+             [--row 0-] [--row 1-] [--row 2---]
+</pre>
+
+<p>Now derive the formula instead of memorising it. Count where each row begins. Row 0 begins at index 0. Row 1 begins at index 4, because the whole of row 0 (4 cells) is in front of it. Row 2 begins at index 8, because two whole rows (2 × 4 = 8 cells) are in front of it. In general, row <code>y</code> begins at index <code>y * width</code>, because there are <code>y</code> complete rows before it and each of them is <code>width</code> cells long.</p>
+<p>Within the row, the cell at column <code>x</code> is <code>x</code> steps after the start of the row. So:</p>
+
+<pre class="grid-figure">   index of (x, y)  =  (start of row y)  +  x
+                    =  y * width         +  x
+</pre>
+
+<p>Check it against the figure. Cell <code>(2, 1)</code>: <code>1 * 4 + 2 = 6</code>, and row <code>y=1</code>, column <code>x=2</code> in the figure says 6. Cell <code>(3, 2)</code>: <code>2 * 4 + 3 = 11</code>, the last cell. Cell <code>(0, 0)</code>: 0. It works for all twelve.</p>
+<p>Notice which number is multiplied: <code>y</code>, the row, by <code>width</code>, the length of a row. That is the whole formula, and the usual mistake is swapping one of those two things. More about that soon.</p>
+
+<h3>The inverse: from index back to (x, y)</h3>
+<p>Sometimes you have a flat index and want the column and row back. Two operators on whole numbers get you there, and you met both in <a href="02-values-and-types.html">chapter 2</a>: <code>/</code> on two <code>int</code>s is integer division, which throws away the remainder (<code>11 / 4</code> is 2), and <code>%</code> hands that remainder back (<code>11 % 4</code> is 3, because 4 goes into 11 twice and 3 remains). Here they get their real job. <code>/</code> tells you how many whole groups; <code>%</code> tells you how far you are into the next one.</p>
+<p>Apply that to the grid. Index 11 in a grid 4 wide: <code>11 / 4 = 2</code> complete rows fit before it, so it is in row 2. <code>11 % 4 = 3</code> cells into that row, so it is in column 3. So:</p>
+
+<pre class="grid-figure">   x  =  i % width      (how far into the row)
+   y  =  i / width      (how many whole rows before it)
+</pre>
+
+<p>Here is a complete program that prints both directions for the 4 × 3 grid. <code>{:3}</code> is the width code from <a href="02-values-and-types.html">chapter 2</a>'s formatting table (numbers right-align by default), so <code>{:2}</code> and <code>{:4}</code>, which you will meet later in this chapter, mean 2 and 4 characters wide. It does nothing except line the columns up.</p>
+
+<pre class="code" data-lang="cpp" data-file="index_map.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int main() {
+    const int width = 4;
+    const int height = 3;
+
+    // Walk the grid row by row and print the flat index of every cell.
+    for (int y = 0; y &lt; height; ++y) {
+        for (int x = 0; x &lt; width; ++x) {
+            const int i = y * width + x;
+            std::print("{:3}", i);
+        }
+        std::println("");
+    }
+
+    std::println("");
+
+    // Now go the other way: from a flat index back to (x, y).
+    for (int i = 0; i &lt; width * height; ++i) {
+        const int x = i % width;
+        const int y = i / width;
+        std::println("i = {:2}  -&gt;  x = {}, y = {}", i, x, y);
+    }
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="index_map.cpp"><code>  0  1  2  3
+  4  5  6  7
+  8  9 10 11
+
+i =  0  -&gt;  x = 0, y = 0
+i =  1  -&gt;  x = 1, y = 0
+i =  2  -&gt;  x = 2, y = 0
+i =  3  -&gt;  x = 3, y = 0
+i =  4  -&gt;  x = 0, y = 1
+i =  5  -&gt;  x = 1, y = 1
+i =  6  -&gt;  x = 2, y = 1
+i =  7  -&gt;  x = 3, y = 1
+i =  8  -&gt;  x = 0, y = 2
+i =  9  -&gt;  x = 1, y = 2
+i = 10  -&gt;  x = 2, y = 2
+i = 11  -&gt;  x = 3, y = 2
+</code></pre>
+
+<p>The first block is the figure from above, produced by the formula. The second block shows the inverse recovering every <code>(x, y)</code>. Notice the pattern in the second block: <code>x</code> cycles 0, 1, 2, 3, 0, 1, 2, 3, which is what a remainder does, and <code>y</code> stays the same for four lines and then goes up by one, which is what integer division does.</p>
+
+<div class="callout trap"><span class="label">Trap</span><p>Positions are written <code>(x, y)</code>, column first, but the formula puts <code>y</code> first: <code>y * width + x</code>. And the outer loop is almost always <code>y</code>. This is not inconsistent; it is two different conventions meeting, one from geometry and one from memory. Read <code>(x, y)</code> as "across, then down", and read the formula as "skip the rows above, then walk across". If you find yourself writing <code>x * width + y</code>, stop: that would multiply the column by the length of a row, which means nothing.</p></div>
+
+<div class="callout try"><span class="label">Try it</span><p>Before running anything, take a grid 5 wide and work out on paper the <code>(x, y)</code> of flat index 13 and of flat index 17, and the flat index of the cell <code>(4, 2)</code>. Then change <code>width</code> to 5 and <code>height</code> to 4 in <code>index_map.cpp</code>, run it, and check your three answers against the output.</p></div>
+<details class="answer"><summary>Show the answer</summary><p>Index 13: <code>13 % 5 = 3</code>, <code>13 / 5 = 2</code>, so <code>(3, 2)</code>. Index 17: <code>17 % 5 = 2</code>, <code>17 / 5 = 3</code>, so <code>(2, 3)</code>. Cell <code>(4, 2)</code>: <code>2 * 5 + 4 = 14</code>. Notice that <code>height</code> did not appear in any of the three calculations; it only decides how many rows the loops print.</p></details>
+
+<h2>Worked example: a multiplication table stored flat</h2>
+<p>The multiplication table from school is a grid. Let the columns be the numbers 1 to 5 and the rows be the numbers 1 to 4. The cell at column <code>x</code>, row <code>y</code> should hold <code>(x + 1) * (y + 1)</code>, because columns and rows are counted from 0 but the table starts at 1. Store the whole thing in one <code>std::vector&lt;int&gt;</code> of 20 cells, fill it with two nested loops (<a href="03-control-flow.html">chapter 3</a>), and print it twice: once as the flat line it really is, and once as the grid you think of it as.</p>
+
+<pre class="code" data-lang="cpp" data-file="mult_table.cpp" data-check="run"><code>#include &lt;print&gt;
+#include &lt;vector&gt;
+
+int main() {
+    const int width = 5;    // columns: 1 .. 5
+    const int height = 4;   // rows:    1 .. 4
+
+    // ONE flat vector with room for every cell, all zero to begin with.
+    std::vector&lt;int&gt; table(width * height, 0);
+
+    // Fill it: the cell at column x, row y holds (x + 1) * (y + 1).
+    for (int y = 0; y &lt; height; ++y) {
+        for (int x = 0; x &lt; width; ++x) {
+            table[y * width + x] = (x + 1) * (y + 1);
+        }
+    }
+
+    // The vector is one straight line of numbers. Look at it that way first.
+    std::print("flat:");
+    for (int v : table) {
+        std::print(" {}", v);
+    }
+    std::println("");
+    std::println("");
+
+    // Now print the same numbers as the grid they represent.
+    for (int y = 0; y &lt; height; ++y) {
+        for (int x = 0; x &lt; width; ++x) {
+            std::print("{:4}", table[y * width + x]);
+        }
+        std::println("");
+    }
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="mult_table.cpp"><code>flat: 1 2 3 4 5 2 4 6 8 10 3 6 9 12 15 4 8 12 16 20
+
+   1   2   3   4   5
+   2   4   6   8  10
+   3   6   9  12  15
+   4   8  12  16  20
+</code></pre>
+
+<p>Look at the "flat" line and then at the grid. They are the same twenty numbers in the same order. The grid is not stored anywhere; it is what the second pair of loops <em>does</em> with the numbers, printing a newline after every <code>width</code> of them. If you changed <code>width</code> to 4 in the printing loops only, the same 20 numbers would come out as a 4-wide, 5-high block of nonsense. The data would not have changed. The agreement would have.</p>
+<p>A small thing about the line <code>table[y * width + x] = ...</code>. The <code>[]</code> of a vector wants a <code>std::size_t</code>, and you are handing it an <code>int</code>. Because the value is never negative here, the conversion is silent and correct. Hold on to the word "never negative"; it comes back when you get to wrapping.</p>
+
+<h2>A picture in bytes: the checkerboard</h2>
+<p>Life cells are either alive or dead. One <code>int</code> per cell would spend 4 bytes to store one bit of information. Chapter 2 introduced <code>std::uint8_t</code>, a whole number from 0 to 255 that takes exactly 1 byte, and that is what <code>life.hpp</code> uses: 1 for alive, 0 for dead. A 1000 × 1000 grid is one million cells, so one million bytes: about one megabyte for the whole benchmark grid, where <code>int</code> cells would have needed four.</p>
+<p>Here is a flat picture of bytes: a checkerboard 8 wide and 5 high, drawn with <code>X</code> for a dark square and <code>-</code> for a light one. A cell is dark when <code>x + y</code> is even. A number is even when dividing it by 2 leaves nothing over, so "even" in code is <code>(x + y) % 2 == 0</code>, as in <a href="03-control-flow.html">chapter 3</a>'s <code>checker.cpp</code>. The printing is pulled into its own function (<a href="04-functions.html">chapter 4</a>), which takes the vector by <code>const&amp;</code> (<a href="05-references-and-const.html">chapter 5</a>) because it only needs to look.</p>
+
+<pre class="code" data-lang="cpp" data-file="checkerboard.cpp" data-check="run"><code>#include &lt;cstdint&gt;
+#include &lt;print&gt;
+#include &lt;vector&gt;
+
+// Print a picture stored flat: 1 is drawn as 'X', 0 as '-'.
+void print_picture(const std::vector&lt;std::uint8_t&gt;&amp; pixels, int width, int height) {
+    for (int y = 0; y &lt; height; ++y) {
+        for (int x = 0; x &lt; width; ++x) {
+            if (pixels[y * width + x] == 1) {
+                std::print("X");
+            } else {
+                std::print("-");
+            }
+        }
+        std::println("");
+    }
+}
+
+int main() {
+    const int width = 8;
+    const int height = 5;
+    std::vector&lt;std::uint8_t&gt; pixels(width * height, 0);
+
+    // A checkerboard: a cell is dark when x + y is even.
+    for (int y = 0; y &lt; height; ++y) {
+        for (int x = 0; x &lt; width; ++x) {
+            if ((x + y) % 2 == 0) {
+                pixels[y * width + x] = 1;
+            }
+        }
+    }
+
+    print_picture(pixels, width, height);
+    std::println("{} cells in the vector; each cell is {} byte", pixels.size(), sizeof(std::uint8_t));
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="checkerboard.cpp"><code>X-X-X-X-
+-X-X-X-X
+X-X-X-X-
+-X-X-X-X
+X-X-X-X-
+40 cells in the vector; each cell is 1 byte
+</code></pre>
+
+<p>Read <code>print_picture</code> slowly, because its shape is the shape of every grid function you will write this week: an outer loop over <code>y</code>, an inner loop over <code>x</code>, and one access <code>pixels[y * width + x]</code> in the middle. The function receives <code>width</code> and <code>height</code> as separate parameters. The vector alone does not know its own shape; it only knows it has 40 cells. 40 cells could be 8 × 5, 5 × 8, 40 × 1, 4 × 10 or 2 × 20. The shape travels with the vector as two extra numbers, which is exactly why every function in <code>life.hpp</code> takes <code>width</code> and <code>height</code> next to the <code>Cells</code>.</p>
+
+<div class="callout try"><span class="label">Try it</span><p>Change <code>width</code> to 7 and keep <code>height</code> at 5. The checkerboard should still look like a checkerboard, only narrower. Then change the condition to draw a border: a cell is 1 when <code>x == 0</code>, or <code>x == width - 1</code>, or <code>y == 0</code>, or <code>y == height - 1</code>. Finally, draw a single diagonal with one loop instead of two: for each <code>y</code> from 0 to <code>height - 1</code>, set the cell at column <code>y</code>. You will need <code>height &lt;= width</code> for that to stay inside the grid; ask yourself why.</p></div>
+<details class="hint"><summary>Why does the diagonal need height &lt;= width?</summary><p>The diagonal puts an <code>X</code> at column <code>y</code> in row <code>y</code>. Columns only go up to <code>width - 1</code>. If <code>height</code> is 6 and <code>width</code> is 5, the loop reaches <code>y = 5</code> and tries to set column 5, which does not exist. The formula gives index <code>5 * 5 + 5 = 30</code>, but a vector of 30 cells ends at index 29. That is one past the end, and <code>tools/run.sh</code> would stop you with a sanitizer report like the one in <a href="06-vector.html">chapter 6</a>.</p></details>
+
+<h2>Loop order: walking memory in a straight line</h2>
+<p>Both programs so far put <code>y</code> in the outer loop and <code>x</code> in the inner loop. That is not a style choice. Watch which flat indexes get visited, in which order, with each loop order:</p>
+
+<pre class="code" data-lang="cpp" data-file="loop_order.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int main() {
+    const int width = 4;
+    const int height = 3;
+
+    std::print("rows outside, columns inside: ");
+    for (int y = 0; y &lt; height; ++y) {
+        for (int x = 0; x &lt; width; ++x) {
+            std::print("{} ", y * width + x);
+        }
+    }
+    std::println("");
+
+    std::print("columns outside, rows inside: ");
+    for (int x = 0; x &lt; width; ++x) {
+        for (int y = 0; y &lt; height; ++y) {
+            std::print("{} ", y * width + x);
+        }
+    }
+    std::println("");
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="loop_order.cpp"><code>rows outside, columns inside: 0 1 2 3 4 5 6 7 8 9 10 11 
+columns outside, rows inside: 0 4 8 1 5 9 2 6 10 3 7 11 
+</code></pre>
+
+<p>With rows outside, the index goes 0, 1, 2, 3, 4, ...: memory front to back, never skipping. With columns outside it goes 0, 4, 8, then jumps back to 1, 5, 9, then 2, 6, 10: every step jumps forward by <code>width</code> cells and then leaps back almost to the beginning. The processor is built to be fast at the first pattern: when it reads one cell it also pulls in the cells around it, betting that you want them next. The chunk it pulls in is called a <strong>cache line</strong> (you met the cache in <a href="02-values-and-types.html">chapter 2</a>); on Apple Silicon it is 128 bytes, so one fetch brings 128 one-byte cells. In the first pattern that bet wins 127 times out of 128; in the second, where consecutive reads are <code>width</code> bytes apart, it loses on every access as soon as <code>width</code> is more than 128. On a big grid the same work then runs about 2 to 10 times slower, depending on the grid and the machine. You will measure this yourself in chapter 13. For now, the rule: <strong>the inner loop walks along a row.</strong> <code>y</code> outside, <code>x</code> inside.</p>
+
+<div class="callout analogy"><span class="label">Analogy</span><p>Reading a page line by line is fast because your eye slides along. Reading the first letter of every line, then the second letter of every line, is the same number of letters but far slower: every letter requires finding a new line. <em>Where it breaks:</em> your eye slows down because of the jump itself. The processor slows down for a different reason: it fetches memory in chunks of neighbouring bytes, and the column-first order throws most of each chunk away unused. The result is the same, the mechanism is not.</p></div>
+
+<h2>The bug that only a non-square grid catches</h2>
+<p>There are four numbers in the formula: <code>x</code>, <code>y</code>, <code>width</code> and <code>height</code>. The correct formula uses three of them and leaves <code>height</code> out. The most common mistake in grid code is writing <code>y * height + x</code> instead of <code>y * width + x</code>. On a square grid, <code>width == height</code>, so the two formulas give the same number and the bug is invisible. Then one day someone runs the program on a grid that is 7 wide and 3 high, and the picture falls apart. Here is that happening:</p>
+
+<pre class="code" data-lang="cpp" data-file="wrong_formula.cpp" data-check="run"><code>#include &lt;cstdint&gt;
+#include &lt;print&gt;
+#include &lt;vector&gt;
+
+int main() {
+    const int width = 7;
+    const int height = 3;
+    std::vector&lt;std::uint8_t&gt; pixels(width * height, 0);
+
+    // Draw a diagonal: row 0 gets an 'X' at x = 0, row 1 at x = 1, row 2 at x = 2.
+    for (int y = 0; y &lt; height; ++y) {
+        pixels[y * width + y] = 1;
+    }
+
+    std::println("read back with y * width + x (correct):");
+    for (int y = 0; y &lt; height; ++y) {
+        for (int x = 0; x &lt; width; ++x) {
+            if (pixels[y * width + x] == 1) {
+                std::print("X");
+            } else {
+                std::print("-");
+            }
+        }
+        std::println("");
+    }
+
+    std::println("read back with y * height + x (wrong):");
+    for (int y = 0; y &lt; height; ++y) {
+        for (int x = 0; x &lt; width; ++x) {
+            if (pixels[y * height + x] == 1) {
+                std::print("X");
+            } else {
+                std::print("-");
+            }
+        }
+        std::println("");
+    }
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="wrong_formula.cpp"><code>read back with y * width + x (correct):
+X------
+-X-----
+--X----
+read back with y * height + x (wrong):
+X------
+-----X-
+--X----
+</code></pre>
+
+<p>The vector holds a clean diagonal: 1s at indexes 0, 8 and 16. Reading it back with <code>y * height + x</code>, which here is <code>y * 3 + x</code>, starts row 1 at index 3 instead of 7, so row 1 shows indexes 3 to 9. The 1 at index 8 is in that range and appears at column <code>8 - 3 = 5</code>: that is the stray <code>X</code> on the second line. Row 2 starts at index 6 instead of 14 and shows indexes 6 to 12. It too contains index 8, at column <code>8 - 6 = 2</code>, so the third line happens to look right, for the wrong reason. The real third <code>X</code>, at index 16, is never shown at all. The program did not crash. It did not warn. It drew the wrong picture, quietly. When <code>height</code> is larger than <code>width</code> the wrong formula also reads past the end of the vector: on a grid 3 wide and 7 high, <code>y * height + x</code> reaches <code>6 * 7 + 2 = 44</code> in a vector of 21 cells, and the sanitizers from <a href="02-values-and-types.html">chapter 2</a> stop it (<a href="06-vector.html">chapter 6</a> decodes the report, <a href="11-cmake.html">chapter 11</a> explains the flags). When <code>height</code> is smaller, as here, every wrong index is still inside the vector and nothing stops it: the picture is silently wrong.</p>
+
+<div class="callout trap"><span class="label">Trap</span><p>Never test grid code only on square grids. Make the grid 7 wide and 3 high, or 5 wide and 2 high, so that <code>width</code> and <code>height</code> are different and swapping them gives a different answer. The tests in <code>phase1-terminal/01-life/tests/life_test.cpp</code> do exactly this: look for <code>grid_with(5, 3, ...)</code> and <code>render(g, 3, 2)</code>. The same advice applies to the other swap: if your loops confuse <code>x</code> with <code>y</code>, a square grid will often hide it, because a transposed square is still a square of the same size.</p></div>
+
+<h2>Strides: the shape of a tensor</h2>
+<p>Ask a slightly different question about the formula. Not "where is <code>(x, y)</code>?" but "how far do I move in memory when I move one step in the grid?" One step to the right, from <code>(x, y)</code> to <code>(x + 1, y)</code>, changes the index by exactly 1. One step down, from <code>(x, y)</code> to <code>(x, y + 1)</code>, changes the index by exactly <code>width</code>. Here are those two differences computed, on the same 7 × 3 grid:</p>
+
+<pre class="code" data-lang="cpp" data-file="strides.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int main() {
+    const int width = 7;
+    const int height = 3;
+
+    const int here = 2 * width + 3;           // the cell at x = 3, y = 2
+    const int right = 2 * width + (3 + 1);    // one column to the right
+    const int below = (2 + 1) * width + 3;    // one row down
+
+    std::println("grid is {} wide and {} high", width, height);
+    std::println("one step in x moves the index by {}", right - here);
+    std::println("one step in y moves the index by {}", below - here);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="strides.cpp"><code>grid is 7 wide and 3 high
+one step in x moves the index by 1
+one step in y moves the index by 7
+</code></pre>
+
+<p>These two numbers are called <strong>strides</strong>: the distance in memory for one step along each axis. The column stride is 1. The row stride is <code>width</code>. Rewrite the formula with them and it becomes <code>y * row_stride + x * column_stride</code>, with <code>column_stride = 1</code> so you normally do not bother writing it. The <strong>shape</strong> is the pair of sizes, <code>(height, width)</code>. Notice the order: a shape is written rows first, the opposite of a position <code>(x, y)</code>. The convention is "outer dimension first", the dimension whose stride is biggest, so the shape reads in the same order as the formula <code>y * width + x</code>. Every tensor library writes shapes this way, and the Trap about <code>(x, y)</code> above applies here with twice the force. A flat block of numbers plus a shape plus strides: that, precisely, is a tensor. Nothing else is in the box.</p>
+<p>Once you see the grid as shape plus strides, something remarkable appears. To <strong>transpose</strong> a grid (turn rows into columns) you would normally copy every cell to a new place. Instead you can leave every byte where it is and swap the two strides: "the row stride is now 1 and the column stride is now <code>width</code>", plus the two numbers in the shape. Every lookup through the new strides lands on the transposed cell without a single byte having moved. You do not need this in Week 1, and it breaks the "inner loop walks along a row" rule, so it is a trick to use knowingly; you will build it for real in week 15. For now, see only this: the agreement about shape can change while the data stays put.</p>
+
+<div class="callout twin"><span class="label">Inference twin</span><p>This is not a metaphor: it is the same object. A tensor in PyTorch, in ggml, in llama.cpp, is a flat block of memory, a shape, and a stride per axis. A 2D weight matrix of 768 rows and 3072 columns is <code>768 * 3072</code> floats (a <code>float</code>, the 4-byte floating-point type from <a href="02-values-and-types.html">chapter 2</a>) laid down row-major, exactly like your checkerboard, and element <code>(r, c)</code> is at <code>r * 3072 + c</code>. The <code>ggml_tensor</code> struct you will read in week 27 (a struct is a bundle of named values; week 3) has an <code>ne</code> array (the shape) and an <code>nb</code> array (the strides, in bytes). <code>transpose</code> and <code>view</code> in those libraries are stride swaps that move no data, which is why they are free and why a "non-contiguous" tensor is a thing people worry about: its inner loop no longer walks memory front to back, and the loop-order section above showed why that costs 2 to 10 times. Everything you do to <code>Cells</code> this week, you will do to weights in week 15.</p></div>
+
+<h2>A short name for a long type: <code>using</code></h2>
+<p>Open <code>phase1-terminal/01-life/src/life.hpp</code> and you find this line near the top:</p>
+
+<pre class="code" data-lang="cpp" data-file="alias_fragment.cpp" data-check="fragment"><code>using Cells = std::vector&lt;std::uint8_t&gt;;
+</code></pre>
+
+<p>Read it as: "from now on, <code>Cells</code> means <code>std::vector&lt;std::uint8_t&gt;</code>." It is a <strong>type alias</strong>, a second name for a type that already exists. It does not create a new kind of thing, it does not add any behaviour, and it does not cost anything at run time. It exists so that the signatures in <code>life.hpp</code> are readable and so that if the cell type ever changed, it would change in one place. A <code>Cells</code> and a <code>std::vector&lt;std::uint8_t&gt;</code> are interchangeable in every way, as this program shows:</p>
+
+<pre class="code" data-lang="cpp" data-file="using_alias.cpp" data-check="run"><code>#include &lt;cstdint&gt;
+#include &lt;print&gt;
+#include &lt;vector&gt;
+
+// From here on, "Cells" means exactly std::vector&lt;std::uint8_t&gt;. Nothing more.
+using Cells = std::vector&lt;std::uint8_t&gt;;
+
+int count_alive(const Cells&amp; cells) {
+    int alive = 0;
+    for (std::uint8_t c : cells) {
+        alive += c;
+    }
+    return alive;
+}
+
+int main() {
+    Cells a(12, 0);                       // a std::vector&lt;std::uint8_t&gt; with 12 zeros
+    std::vector&lt;std::uint8_t&gt; b(12, 0);   // the very same type, written the long way
+    a[5] = 1;
+    a[7] = 1;
+    b = a;                                // allowed: they are the same type
+    std::println("alive in a: {}", count_alive(a));
+    std::println("alive in b: {}", count_alive(b));
+    std::println("a and b are equal: {}", a == b);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="using_alias.cpp"><code>alive in a: 2
+alive in b: 2
+a and b are equal: true
+</code></pre>
+
+<p>As <a href="06-vector.html">chapter 6</a> showed, <code>a == b</code> on two vectors is <code>true</code> when the sizes and every element match; the tests in <code>life_test.cpp</code> compare whole grids this way (<code>CHECK(next == cur)</code>).</p>
+
+<h2>Edges: what is beyond the last column?</h2>
+<p>Every grid function that looks at a cell's neighbours has to answer a question: what is to the left of column 0? What is below the last row? There are three honest answers, and different programs choose differently.</p>
+<ul>
+<li><strong>Clamp to the edge.</strong> A position past the edge is treated as the edge itself: "left of column 0" is column 0. Image blurring often does this so that the border of a photo does not go dark.</li>
+<li><strong>Treat outside as empty.</strong> Anything beyond the edge is a dead cell, a zero. Convolutions in neural networks usually do this and call it zero padding.</li>
+<li><strong>Wrap around.</strong> Left of column 0 is the last column; below the last row is row 0. The grid has no edges at all: it is a loop in both directions.</li>
+</ul>
+<p>Life in this challenge <strong>wraps</strong>. The comment in <code>life.hpp</code> says it: "the grid is a torus: the left edge touches the right edge, the top touches the bottom". A <strong>torus</strong> is the mathematical name for the surface of a doughnut. Roll a sheet of paper into a tube so that the left edge meets the right edge; then bend the tube round so that its top meets its bottom. Every cell now has exactly eight neighbours, including the corner cells, and a glider (the five-cell pattern from <a href="00-start-here.html">chapter 0</a> that walks across the grid) that leaves the right side of the screen comes back in on the left.</p>
+
+<div class="callout analogy"><span class="label">Analogy</span><p>In Pac-Man, leaving the maze through the tunnel on the right brings you back in on the left. That is one axis of a torus. Imagine the same for the top and bottom edges and you have the Life grid. <em>Where it breaks:</em> the screen does not actually bend. The torus lives only in the arithmetic that computes neighbour positions; the vector is as flat as ever, and the rendered rectangle has sharp corners. "Wrap" is something your index calculation does, not something the memory does.</p></div>
+
+<h2>Wrapping in one dimension: the clock</h2>
+<p>Before wrapping a grid, wrap a line. The cleanest example is a clock face with 12 hours numbered 0 to 11 (call noon 0 to keep the arithmetic clean). 13 o'clock is 1 o'clock: one past a full turn. 24 o'clock is 0: two full turns. -1 o'clock, one hour before 0, is 11: one hour back from the top of the dial. The rule in words: keep adding or subtracting 12 until the number is in the range 0 to 11.</p>
+<p>For positive numbers, the <code>%</code> operator does this in one step: <code>13 % 12</code> is 1, <code>24 % 12</code> is 0, <code>7 % 12</code> is 7. For negative numbers it does not. <a href="02-values-and-types.html">Chapter 2</a> showed <code>-1 % 10 == -1</code>, and the clock is no different: <code>-1 % 12</code> is <code>-1</code>, not 11, and <code>-13 % 12</code> is also <code>-1</code>. Recall why. C++ integer division truncates towards zero, so <code>-1 / 12</code> is 0, and <code>%</code> is defined so that <code>(a / b) * b + (a % b)</code> always gets back <code>a</code>; with <code>a = -1</code> that forces <code>a % b</code> to be <code>-1</code>. The remainder takes the sign of the left-hand number. Mathematicians define "mod" so that the result is never negative; C++ does not, and you have to add the last step yourself. Here are the two fixes.</p>
+<p>There are two standard fixes, both correct. Fix 1: take the remainder, add the modulus, take the remainder again. The first <code>%</code> brings the number into -11 to 11; adding 12 moves that to 1 to 23, all positive; the second <code>%</code> folds it into 0 to 11. Fix 2: take the remainder, and if it is negative, add the modulus once. The remainder is already between -11 and 11, so one addition is always enough.</p>
+
+<pre class="code" data-lang="cpp" data-file="clock_wrap.cpp" data-check="run"><code>#include &lt;print&gt;
+
+// Fix 1: remainder, then add 12 so the result cannot be negative, then remainder again.
+int hour_on_clock_a(int h) {
+    return ((h % 12) + 12) % 12;
+}
+
+// Fix 2: take the remainder, and if it came out negative, add 12 once.
+int hour_on_clock_b(int h) {
+    int r = h % 12;
+    if (r &lt; 0) {
+        r += 12;
+    }
+    return r;
+}
+
+int main() {
+    std::println("   h   plain %   fix 1   fix 2");
+    for (int h = -14; h &lt;= 14; h += 2) {
+        std::println("{:4}   {:7}   {:5}   {:5}", h, h % 12, hour_on_clock_a(h), hour_on_clock_b(h));
+    }
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="clock_wrap.cpp"><code>   h   plain %   fix 1   fix 2
+ -14        -2      10      10
+ -12         0       0       0
+ -10       -10       2       2
+  -8        -8       4       4
+  -6        -6       6       6
+  -4        -4       8       8
+  -2        -2      10      10
+   0         0       0       0
+   2         2       2       2
+   4         4       4       4
+   6         6       6       6
+   8         8       8       8
+  10        10      10      10
+  12         0       0       0
+  14         2       2       2
+</code></pre>
+
+<p>The "plain %" column shows the problem: negative input, negative output. Both fix columns show the clock behaving: -2 becomes 10, -14 (a full turn and two more hours back) also becomes 10, and positive numbers are unchanged. Fix 1 is one expression with no branch; fix 2 says what it does in plain words. Pick either. The challenge asks for this behaviour for any <code>n</code>, not just 12, and that generalisation is yours to write.</p>
+<p>Why does this deserve its own section? Because of what happens when a negative number reaches a vector. A vector's <code>[]</code> wants a <code>std::size_t</code>, an unsigned type: it has no negative values at all. Hand it <code>-1</code> and the conversion does not fail and does not warn; it produces the largest value a <code>std::size_t</code> can hold. Here is exactly what <code>-1</code> becomes, using the <code>static_cast</code> from chapter 2 to make the conversion visible (<code>std::size_t</code> comes from <code>&lt;cstddef&gt;</code>):</p>
+
+<pre class="code" data-lang="cpp" data-file="minus_one_unsigned.cpp" data-check="run"><code>#include &lt;cstddef&gt;
+#include &lt;print&gt;
+
+int main() {
+    const int i = -1;
+    const std::size_t as_index = static_cast&lt;std::size_t&gt;(i);
+    std::println("the int          : {}", i);
+    std::println("as a std::size_t : {}", as_index);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="minus_one_unsigned.cpp"><code>the int          : -1
+as a std::size_t : 18446744073709551615
+</code></pre>
+
+<p>That is 2<sup>64</sup> − 1, about 18 quintillion. Counting that far forward from the start of a block on a 64-bit machine comes round to one byte <em>before</em> the start, because addresses themselves are 64-bit numbers that overflow back to zero. So <code>ring[-1]</code> reads the byte just before the vector's own memory, a byte that belongs to something else. Here is that program. Run it with <code>tools/run.sh</code> from <a href="00-start-here.html">chapter 0</a>, which builds with the sanitizers switched on, and it stops with the report below instead of finishing:</p>
+
+<pre class="code" data-lang="cpp" data-file="negative_index.cpp" data-check="compile"><code>#include &lt;cstdint&gt;
+#include &lt;print&gt;
+#include &lt;vector&gt;
+
+int main() {
+    const int n = 8;
+    std::vector&lt;std::uint8_t&gt; ring(n, 0);
+    const int i = 0;
+    const int left = (i - 1) % n;   // the trap: this is -1, not 7
+    std::println("left of cell 0 computed as {}", left);
+    std::println("ring[left] is {}", ring[left]);
+    return 0;
+}
+</code></pre>
+<pre class="shell"><code>$ tools/run.sh scratch/negative_index.cpp
+</code></pre>
+<pre class="output"><code>left of cell 0 computed as -1
+.../vector.h:407:12: runtime error: addition of unsigned offset to 0x6020000000d0 overflowed to 0x6020000000cf
+SUMMARY: UndefinedBehaviorSanitizer: undefined-behavior .../vector.h:407:12
+=================================================================
+==54812==ERROR: AddressSanitizer: heap-buffer-overflow on address 0x6020000000cf
+READ of size 1 at 0x6020000000cf thread T0
+    ...
+0x6020000000cf is located 1 bytes before 8-byte region [0x6020000000d0,0x6020000000d8)
+</code></pre>
+
+<p>Read the last line: "1 bytes before" the vector's region. The addresses and the number after <code>==</code> will differ on your run; the words will not. Without the sanitizers (compile with plain <code>clang++ -std=c++23 -Wall -Wextra</code>), the program prints <code>ring[left] is 0</code>, exits normally and never tells you that the 0 came from memory that is not yours. In a Life grid that silent wrong byte would be a wrong neighbour count in column 0 of every row. Negative modulo is the most common bug in grid code that wraps, and it always shows up in the same place: the left and top edges.</p>
+
+<div class="callout trap"><span class="label">Trap</span><p>An <code>int</code> that might be negative must be wrapped <em>before</em> it becomes an index, never after. <code>cells[(i - 1) % n]</code> is wrong for <code>i = 0</code>. If you ever see a sanitizer message with "before" a region, or an index that prints as a 20-digit number, go looking for a <code>%</code> that was fed a negative number.</p></div>
+
+<div class="callout try"><span class="label">Try it</span><p>Change the clock to a week. Days are numbered 0 to 6 with Monday as 0. Write <code>day_of_week(int d)</code> so that <code>day_of_week(7)</code> is 0, <code>day_of_week(-1)</code> is 6 (Sunday), and <code>day_of_week(-8)</code> is also 6. Print a table like the one above. Then write it with the other fix and check that the tables are identical.</p></div>
+
+<h2>Neighbours on a ring</h2>
+<p>Now put the clock to work. Imagine <code>n</code> cells arranged in a ring, numbered 0 to <code>n - 1</code>, where cell <code>n - 1</code> sits next to cell 0. Each cell has exactly two neighbours: the one to its left, <code>i - 1</code>, and the one to its right, <code>i + 1</code>, both wrapped. The right neighbour is easy: <code>(i + 1) % n</code> is never negative, so plain <code>%</code> is enough. For the left neighbour you can avoid negative numbers entirely with a small trick: since <code>i</code> is always at least 0, <code>i + n - 1</code> is always at least <code>n - 1</code>, which is positive, and taking <code>% n</code> of it gives exactly <code>i - 1</code> wrapped. Here is a ring of 8:</p>
+
+<pre class="code" data-lang="cpp" data-file="ring_neighbours.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int main() {
+    const int n = 8;   // a ring of 8 cells, numbered 0 .. 7
+    std::println("cell  left  right");
+    for (int i = 0; i &lt; n; ++i) {
+        const int left = (i + n - 1) % n;   // i - 1, but never negative
+        const int right = (i + 1) % n;      // i + 1, folded back to 0 at the end
+        std::println("{:4}  {:4}  {:5}", i, left, right);
+    }
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="ring_neighbours.cpp"><code>cell  left  right
+   0     7      1
+   1     0      2
+   2     1      3
+   3     2      4
+   4     3      5
+   5     4      6
+   6     5      7
+   7     6      0
+</code></pre>
+
+<p>Only two lines in the table do anything interesting: cell 0's left neighbour is 7, and cell 7's right neighbour is 0. Everywhere else the wrap changes nothing. That is typical: wrap-around only matters at the edges, which is exactly why bugs in it hide until a glider reaches the border.</p>
+<p>The <code>(i + n - 1) % n</code> trick works when the input is in range and you only step by one. The general clock-face fix is what you need when the input could be any number. In the challenge, write the general one and use it everywhere; it is one function, and the tests check it with inputs as far out as <code>-11</code>.</p>
+
+<h2>Double buffering: Rule 90 on a ring</h2>
+<p>You now have every piece needed to simulate something. A <strong>cellular automaton</strong> is a line (or grid) of cells, each 0 or 1, plus a rule that says what each cell becomes in the next generation based on its current neighbours. Every cell is updated at the same moment, using only the <em>old</em> values of its neighbours. Life is a two-dimensional cellular automaton. Here you will build a one-dimensional one on the ring from the last section, because it has every shape Life has (neighbours, wrap, generations, two buffers) with one dimension fewer to think about.</p>
+<p>The rule is called <strong>Rule 90</strong>, and it ignores the cell itself: the new value is 1 when <em>exactly one</em> of the two neighbours is 1, that is, when left and right are different. Here it is as a table:</p>
+
+<table>
+<thead><tr><th>left neighbour</th><th>right neighbour</th><th>new value of the cell</th></tr></thead>
+<tbody>
+<tr><td>0</td><td>0</td><td>0</td></tr>
+<tr><td>0</td><td>1</td><td>1</td></tr>
+<tr><td>1</td><td>0</td><td>1</td></tr>
+<tr><td>1</td><td>1</td><td>0</td></tr>
+</tbody>
+</table>
+
+<p>In code, "left and right are different" is simply <code>left != right</code>. (It also equals <code>(left + right) % 2</code>, which is a nice second appearance for the remainder operator.) The programs below use a ring of 31 cells, seed it with a single 1 in the middle, and print 15 generations, one per line, with <code>#</code> for 1 and <code>.</code> for 0.</p>
+
+<h3>The wrong way: updating in place</h3>
+<p>The obvious thing to do is loop over the cells and overwrite each one with its new value. It is wrong in an instructive way, so here it is in full.</p>
+
+<pre class="code" data-lang="cpp" data-file="rule90_wrong.cpp" data-check="run"><code>#include &lt;cstdint&gt;
+#include &lt;print&gt;
+#include &lt;vector&gt;
+
+void print_row(const std::vector&lt;std::uint8_t&gt;&amp; cells) {
+    for (std::uint8_t c : cells) {
+        if (c == 1) {
+            std::print("#");
+        } else {
+            std::print(".");
+        }
+    }
+    std::println("");
+}
+
+int main() {
+    const int n = 31;
+    std::vector&lt;std::uint8_t&gt; cells(n, 0);
+    cells[n / 2] = 1;   // one live cell in the middle
+
+    for (int gen = 0; gen &lt; 15; ++gen) {
+        print_row(cells);
+        // WRONG: overwrite the cells while still reading them.
+        for (int i = 0; i &lt; n; ++i) {
+            const std::uint8_t left = cells[(i + n - 1) % n];
+            const std::uint8_t right = cells[(i + 1) % n];
+            if (left != right) {
+                cells[i] = 1;
+            } else {
+                cells[i] = 0;
+            }
+        }
+    }
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="rule90_wrong.cpp"><code>...............#...............
+..............#################
+#############.#.#.#.#.#.#.#.#.#
+.#.#.#.#.#.##..##..##..##..##..
+##..##..##.###.###.###.###.###.
+###.###.##.#..#.##.#..#.##.#..#
+.##.#..#..###..#..###..#..###..
+#..###...#.###...#.###...#.###.
+..#.####..#.####..#.####..#.###
+#..#.#...##.#.###..#.#...##.#.#
+##..####.##..#.###..####.##..#.
+###.#.##.###..#.###.#.##.###..#
+.##..#..#.###..#.##..#..#.###..
+#...###..#.###..#...###..#.###.
+...#.###..#.###....#.###..#.###
+</code></pre>
+
+<p>Generation 0 is right: a single <code>#</code> in the middle, at index 15. Generation 1 should have exactly two live cells, at 14 and 16, the two neighbours of the seed. Instead the whole right half lights up. Walk through three cells of that first update to see why.</p>
+<ul>
+<li><strong>Cell 14.</strong> Left is cell 13, which is 0. Right is cell 15, which is 1. Different, so cell 14 becomes 1. Correct so far.</li>
+<li><strong>Cell 15.</strong> Left is cell 14. In the <em>old</em> generation cell 14 was 0, but the loop just overwrote it with 1. Right is cell 16, which is 0. The loop sees 1 and 0, different, and sets cell 15 to 1. The correct answer, from the old values 0 and 0, was 0. The first corruption.</li>
+<li><strong>Cell 16.</strong> Left is cell 15, which the loop just set to 1 (it was 1 in the old generation too, so by luck the value is right). Right is cell 17, 0. Different, so cell 16 becomes 1: the correct answer, for a partly wrong reason. Cell 17 then sees a fresh 1 on its left (old value 0) and becomes 1 when it should be 0, and from there every cell to the end of the row catches the same corruption.</li>
+</ul>
+<p>The problem is not the rule and not the wrap. The loop reads neighbours it has already overwritten: cell <code>i</code> needs the <em>old</em> value of cell <code>i - 1</code>, but by the time the loop reaches <code>i</code>, cell <code>i - 1</code> holds its <em>new</em> value and the old one is gone. In two dimensions the same thing happens with the three neighbours above and the one to the left: half of the eight neighbours would come from the next generation.</p>
+
+<div class="callout principle"><span class="label">First principle</span><p>A generation step is defined as "every cell changes at the same instant, based on the old state". A single loop cannot do anything at the same instant; it does one cell at a time. So the old state must stay intact for the whole loop. The only way to guarantee that is to write the new values somewhere else.</p></div>
+
+<h3>The right way: two vectors and a swap</h3>
+<p>Keep two vectors of the same size, <code>current</code> and <code>next</code>. During a generation, <em>read only from</em> <code>current</code> and <em>write only into</em> <code>next</code>. <code>current</code> is never touched, so every neighbour read gets an old value, whatever order the loop visits the cells in. When the loop finishes, <code>next</code> holds the new generation and <code>current</code> holds the old one you no longer need. Swap the two: <code>next</code> becomes the current generation, and the old <code>current</code> becomes scratch space for the following one. This is called <strong>double buffering</strong>: a <strong>buffer</strong> is a block of memory you fill up to use later, and here there are two of them taking turns.</p>
+<p>The swap is one call: <code>std::swap(current, next)</code>. It comes from the header <code>&lt;utility&gt;</code> and exchanges the contents of its two arguments, so that afterwards each variable holds what the other held. What it costs is the subject of the next section; first, the program:</p>
+
+<pre class="code" data-lang="cpp" data-file="rule90.cpp" data-check="run"><code>#include &lt;cstdint&gt;
+#include &lt;print&gt;
+#include &lt;utility&gt;
+#include &lt;vector&gt;
+
+void print_row(const std::vector&lt;std::uint8_t&gt;&amp; cells) {
+    for (std::uint8_t c : cells) {
+        if (c == 1) {
+            std::print("#");
+        } else {
+            std::print(".");
+        }
+    }
+    std::println("");
+}
+
+int main() {
+    const int n = 31;
+    std::vector&lt;std::uint8_t&gt; current(n, 0);
+    std::vector&lt;std::uint8_t&gt; next(n, 0);
+    current[n / 2] = 1;   // one live cell in the middle
+
+    for (int gen = 0; gen &lt; 15; ++gen) {
+        print_row(current);
+        // Read ONLY from current, write ONLY into next.
+        for (int i = 0; i &lt; n; ++i) {
+            const std::uint8_t left = current[(i + n - 1) % n];
+            const std::uint8_t right = current[(i + 1) % n];
+            if (left != right) {
+                next[i] = 1;
+            } else {
+                next[i] = 0;
+            }
+        }
+        // The new generation becomes the current one. No cells are copied.
+        std::swap(current, next);
+    }
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="rule90.cpp"><code>...............#...............
+..............#.#..............
+.............#...#.............
+............#.#.#.#............
+...........#.......#...........
+..........#.#.....#.#..........
+.........#...#...#...#.........
+........#.#.#.#.#.#.#.#........
+.......#...............#.......
+......#.#.............#.#......
+.....#...#...........#...#.....
+....#.#.#.#.........#.#.#.#....
+...#.......#.......#.......#...
+..#.#.....#.#.....#.#.....#.#..
+.#...#...#...#...#...#...#...#.
+</code></pre>
+
+<p>This is the Sierpinski triangle, one of the most famous patterns in mathematics, out of a four-line rule. Generation 1 now has exactly two live cells, 14 and 16, and everything that follows is symmetric around the middle, as it must be: the rule treats left and right identically and the seed was in the centre. The wrong version was not symmetric, which is a fast way to spot an in-place bug in any symmetric simulation.</p>
+<p><code>step</code> in <code>life.hpp</code> has exactly this shape: <code>void step(const Cells&amp; current, Cells&amp; next, int width, int height)</code>. <code>current</code> is <code>const&amp;</code>, a promise not to touch it (<a href="05-references-and-const.html">chapter 5</a>); <code>next</code> is a plain reference that the function writes into. The swap is not inside <code>step</code>; it belongs to the loop that calls <code>step</code>, exactly as here, and you can see it in <code>phase1-terminal/01-life/bench/bench_life.cpp</code>, which calls <code>step</code> and then <code>std::swap(current, next)</code> twenty times in a row.</p>
+<p>One detail from the tests that is easy to miss: <code>next</code> might contain anything when <code>step</code> begins. One test deliberately fills it with ones first ("deliberately dirty: step must overwrite every cell"). Your loop must assign every cell of <code>next</code>, not only the ones that become alive; the Rule 90 program does this with its <code>else</code> branch.</p>
+
+<div class="callout try"><span class="label">Try it</span><p>Two experiments on <code>rule90.cpp</code>, each a one-line change. First, delete the <code>else</code> branch (the two lines <code>} else {</code> and <code>next[i] = 0;</code> become nothing) and run it. Predict what will go wrong before you look. Second, put the <code>else</code> back, change <code>n</code> to 16 and the generation count to 12, and run it again. The ring is now so small that the triangle reaches the edges and wraps round to meet itself. What happens at generation 7, and after?</p></div>
+<details class="answer"><summary>Show what happens</summary><p>Without the <code>else</code>, a cell of <code>next</code> that should become 0 keeps whatever it held two generations ago, because the two buffers alternate. Live cells never die, and from generation 1 on each line is an unbroken run of alternating <code>#.#.#</code> that grows by one cell on each side: the triangle fills in instead of forming the hollow Sierpinski pattern. This is the "deliberately dirty" test from <code>life_test.cpp</code> happening to you.</p><p>With <code>n = 16</code>, the two edges of the triangle wrap round and meet, and at generation 7 the ring reads <code>.#.#.#.#.#.#.#.#</code>, every other cell alive. Now every cell's two neighbours are equal (both 1 or both 0), so <code>left != right</code> is false everywhere, and generation 8 and every one after it is a row of 16 dots. The pattern wrapped round, met itself, and died.</p></details>
+
+<h3>Why swap is cheap</h3>
+<p><code>std::swap(current, next)</code> comes from <code>&lt;utility&gt;</code> and does what it says: afterwards <code>current</code> holds what <code>next</code> held and the other way round. What does it cost? It runs once per generation, and in the benchmark each vector has a million cells. Does it copy a million bytes twice?</p>
+<p>It does not. A <code>std::vector</code> variable is a small <strong>handle</strong>: a fixed-size record that says where the real data is, rather than the data itself. On your machine the handle is 24 bytes, three 8-byte numbers: the address where the block of cells starts, and two numbers that record how long the block is. The cells live in that separate block, not inside the variable. Swapping two vectors swaps the two handles; both million-cell blocks stay exactly where they are. Here is a swap between a million-element vector and a three-element one; if cells were being copied, sizes this different would make it obvious. The program also prints <code>sizeof</code> of each vector variable (<a href="02-values-and-types.html">chapter 2</a>), so you can see that the handle is the same size whatever it holds.</p>
+
+<pre class="code" data-lang="cpp" data-file="swap_cheap.cpp" data-check="run"><code>#include &lt;print&gt;
+#include &lt;utility&gt;
+#include &lt;vector&gt;
+
+int main() {
+    std::vector&lt;int&gt; a(1000000, 1);   // a million ones
+    std::vector&lt;int&gt; b(3, 2);         // three twos
+
+    std::println("before: a has {} cells, a[0] = {};  b has {} cells, b[0] = {}",
+                 a.size(), a[0], b.size(), b[0]);
+
+    std::swap(a, b);
+
+    std::println("after:  a has {} cells, a[0] = {};  b has {} cells, b[0] = {}",
+                 a.size(), a[0], b.size(), b[0]);
+    std::println("the variable a itself is {} bytes; b is {} bytes", sizeof(a), sizeof(b));
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="swap_cheap.cpp"><code>before: a has 1000000 cells, a[0] = 1;  b has 3 cells, b[0] = 2
+after:  a has 3 cells, a[0] = 2;  b has 1000000 cells, b[0] = 1
+the variable a itself is 24 bytes; b is 24 bytes
+</code></pre>
+
+<p>Afterwards <code>a</code> is the three-element vector and <code>b</code> is the million-element one. No cell moved. Both variables are 24 bytes before and after, with a million cells or with three: the cells are not inside the variable. The swap costs the same whether the vectors hold 3 cells or 3 billion.</p>
+
+<div class="callout analogy"><span class="label">Analogy</span><p>Two warehouses, each with a sign on the door: "current stock" and "incoming stock". At the end of the day you do not move the pallets from one building to the other; you swap the two signs. <em>Where it breaks:</em> the signs really are the only thing that moves, but in C++ the "sign" also includes the warehouse's address and its size, and after the swap each name genuinely refers to the other block of memory. There is no copy, not even a lazy one.</p></div>
+
+<div class="callout twin"><span class="label">Inference twin</span><p>A language model's decode loop is this loop. Each step reads the current state (the tokens so far, plus two kinds of stored numbers you will meet in weeks 16 to 18, the KV cache and the hidden activations) and writes the next one; the output buffer of one step is the input buffer of the next, and real engines keep two of them and swap, so that no step has to allocate and no step overwrites what it is still reading. This is called <strong>ping-pong buffering</strong>, and it is the same pattern under a different name. The second twin is in the neighbour read itself: looking at a cell's eight neighbours is a <strong>3 × 3 stencil</strong>, and every convolution kernel in a vision model and every blur in an image editor has exactly that shape, "for each output cell, read a small fixed window of input cells". GPU programmers write Life as their first kernel for this reason, and so will you in week 22.</p></div>
+
+<h2>From the ring to Life: what changes and what stays</h2>
+<p>You are now one step away from the challenge. Life is Rule 90 with two more dimensions of neighbourhood and a different table. Here is the complete list of what changes, so that you can see how little it is. The code itself is yours to write.</p>
+<p><strong>What stays exactly the same:</strong></p>
+<ul>
+<li>Two vectors, <code>current</code> and <code>next</code>, the same size.</li>
+<li>Read only from <code>current</code>, write every cell of <code>next</code>, then <code>std::swap</code>.</li>
+<li>Neighbour positions are wrapped before they become indexes, never after.</li>
+<li>The new value depends only on old values.</li>
+</ul>
+<p><strong>What changes:</strong></p>
+<ul>
+<li>One loop over <code>i</code> becomes two nested loops, <code>y</code> outside and <code>x</code> inside, and each cell is reached through <code>y * width + x</code>.</li>
+<li>Two neighbours become eight: every combination of <code>dx</code> in -1, 0, +1 and <code>dy</code> in -1, 0, +1, except <code>dx == 0 &amp;&amp; dy == 0</code>, which is the cell itself. Each of <code>x + dx</code> and <code>y + dy</code> is wrapped separately, <code>x + dx</code> with <code>width</code> and <code>y + dy</code> with <code>height</code>.</li>
+<li>The rule table changes from "left differs from right" to Life's rules, which <code>life.hpp</code> states in words: a live cell with 2 or 3 live neighbours stays alive, a dead cell with exactly 3 live neighbours becomes alive, everything else is dead.</li>
+<li>The ring of 31 becomes a grid of <code>width * height</code> bytes, and a function that counts live neighbours sits between the loops and the rule, so that the rule itself is only a few lines long.</li>
+</ul>
+<p>That is all. Everything in the "what changes" list uses only what this chapter and the ones before it have taught. Chapter 14 gives you the milestones in order and a ladder of hints for each one, starting with <code>index_of</code>, which is the first formula of this chapter and nothing more.</p>
+
+<h2>The traps of this chapter, in one place</h2>
+<ul>
+<li><strong>Updating in place.</strong> Reading a neighbour you have already overwritten. Symptom: patterns smear in the direction the loop runs, and symmetric starts become asymmetric. Fix: two buffers and a swap.</li>
+<li><strong>Counting the cell itself.</strong> Looping <code>dx</code> and <code>dy</code> over -1, 0, +1 gives nine positions, not eight. Symptom: a lone live cell counts one neighbour and every live cell's count is one too high. Fix: skip <code>dx == 0 &amp;&amp; dy == 0</code>. The test called "does not count the cell itself" exists for this.</li>
+<li><strong>Negative modulo.</strong> <code>-1 % n</code> is <code>-1</code>, not <code>n - 1</code>. Symptom: a sanitizer report saying "before" a region, or an impossibly large index, always at <code>x = 0</code> or <code>y = 0</code>. Fix: add <code>n</code> before <code>%</code>, or add <code>n</code> after if the result is negative.</li>
+<li><strong><code>y * height</code> instead of <code>y * width</code>.</strong> Symptom: nothing, on a square grid; a scrambled picture on any other. Fix: the row index is multiplied by the length of a row, and test on a grid that is 7 wide and 3 high.</li>
+</ul>
+
+<h2>Check yourself</h2>
+<div class="quiz">
+<div class="q"><p>A grid is 10 wide. What is the flat index of the cell at column 3, row 2?</p><details class="answer"><summary>Answer</summary><p><code>2 * 10 + 3 = 23</code>. Two complete rows of 10 cells lie before row 2, and the cell is 3 steps into its row. This is the example in the comment above <code>index_of</code> in <code>life.hpp</code>, and one of the first tests.</p></details></div>
+<div class="q"><p>In a grid 10 wide, which cell is at flat index 23?</p><details class="answer"><summary>Answer</summary><p><code>x = 23 % 10 = 3</code>, <code>y = 23 / 10 = 2</code>. Column 3, row 2, the same cell as the previous question. The height does not appear in either formula.</p></details></div>
+<div class="q"><p>Why does a generation step need two vectors instead of one?</p><details class="answer"><summary>Answer</summary><p>Because every new cell depends on the old values of its neighbours, and a loop updates one cell at a time. If you write new values into the same vector you are reading from, a cell visited later sees neighbours that already hold next-generation values. Writing into a second vector keeps the whole old generation intact until the loop is done. Then you swap, which only exchanges the two handles and copies no cells.</p></details></div>
+<div class="q"><p>What does <code>-5 % 3</code> evaluate to in C++, and what would a clock with 3 hours say?</p><details class="answer"><summary>Answer</summary><p>C++ gives <code>-2</code>: <code>-5 / 3</code> truncates to <code>-1</code>, and <code>(-1) * 3 + r = -5</code> forces <code>r = -2</code>. A 3-hour clock would say 1, because -5 is two full turns back (that is -6) and then one forward. Either fix from the chapter turns <code>-2</code> into <code>1</code>: <code>((-5 % 3) + 3) % 3 = (-2 + 3) % 3 = 1</code>.</p></details></div>
+<div class="q"><p>A friend's grid code works perfectly on 20 × 20 and 50 × 50 grids and produces garbage on 80 × 24. Name the most likely bug and the fastest way to confirm it.</p><details class="answer"><summary>Answer</summary><p>They multiplied <code>y</code> by <code>height</code> instead of <code>width</code> somewhere (or swapped <code>x</code> and <code>y</code>, or <code>width</code> and <code>height</code>, in a call). On square grids the two are equal so the bug is invisible. Confirm by drawing something recognisable, such as a diagonal, on a small non-square grid like 7 × 3 and printing it, as the chapter did.</p></details></div>
+<div class="q"><p>Two nested loops visit every cell of a 1000 × 1000 grid. One version has <code>y</code> outside, the other has <code>x</code> outside. Both produce the same result. Which is faster and why?</p><details class="answer"><summary>Answer</summary><p><code>y</code> outside, <code>x</code> inside. The inner loop then moves through memory one cell at a time (stride 1), and the processor's habit of fetching neighbouring bytes together pays off on every access. With <code>x</code> outside, every inner step jumps <code>width</code> cells (stride 1000), so most of each fetched chunk is wasted. Expect a 2 to 10 times difference on a grid this size; measure it in chapter 13.</p></details></div>
+<div class="q"><p>After <code>std::swap(current, next)</code> on two vectors of a million cells each, how many cells have been copied?</p><details class="answer"><summary>Answer</summary><p>None. A vector variable is a small handle that records where its cells are and how many there are. <code>std::swap</code> exchanges the two handles. Both million-cell blocks stay where they were; each name now refers to the other block.</p></details></div>
+<div class="q"><p><code>(i + n - 1) % n</code> gives the left neighbour on a ring without ever going negative. Why is it not good enough as the general <code>wrap(v, n)</code> the tests ask for? Try it with <code>v = -11</code> and <code>n = 10</code>.</p><details class="answer"><summary>Answer</summary><p>It only works when the input is already in range and you step back by one. The trick adds <code>n</code> once, so it rescues a value as low as <code>-1</code>. For <code>v = -11</code>, adding 10 gives <code>-1</code>, and <code>-1 % 10</code> is still <code>-1</code>. The general fix must work for any input, and it is either of the two clock fixes from this chapter with 12 replaced by the modulus: fold with <code>%</code> first, then add the modulus once if the result is negative (or add it and fold again). Check it on <code>-11</code> with modulus 10: the first fold gives <code>-1</code>, adding 10 gives 9, which is the answer the test <code>wrap(-11, 10) == 9</code> expects.</p></details></div>
+</div>
+
+<h2>What you can do now</h2>
+<ul>
+<li>Store a grid of any width and height in one flat <code>std::vector</code>, and explain why that is better than a vector of vectors.</li>
+<li>Find the flat index of <code>(x, y)</code> with <code>y * width + x</code>, and recover <code>x</code> and <code>y</code> from an index with <code>%</code> and <code>/</code>.</li>
+<li>Write the two nested loops in the fast order and say what "stride" means.</li>
+<li>Describe a tensor as flat memory plus shape plus strides, and say in one sentence why a transpose can be free.</li>
+<li>Wrap a position around a ring correctly for negative inputs, in two different ways, and recognise the sanitizer message that negative modulo produces.</li>
+<li>Explain why a simulation step must not update in place, and implement double buffering with two vectors and <code>std::swap</code>.</li>
+<li>Read every function signature in <code>life.hpp</code> and say which chapter taught each part of it.</li>
+</ul>
+</main>
+</body>
+</html>

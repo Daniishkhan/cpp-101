@@ -1,0 +1,1038 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>04 · Functions — C++ from zero to Life</title>
+<link rel="stylesheet" href="assets/book.css?v=9">
+<link rel="stylesheet" href="assets/tutor.css?v=9">
+<script src="assets/theme.js?v=9"></script>
+<script defer src="assets/book.js?v=9"></script>
+<script defer src="assets/tutor.js?v=9"></script>
+</head>
+<body>
+<nav class="sidebar" aria-label="Chapters"></nav>
+<main>
+<p class="chapter-kicker">Chapter 04</p>
+<h1>Functions</h1>
+<p class="lede">By the end of this chapter you will be able to give a block of code a name, hand it inputs, get one result back, and read a function declaration the way you read a sentence. That last skill is the one you need to read <code>life.hpp</code>, the contract for this week's challenge.</p>
+
+<div class="callout note"><span class="label">In this chapter</span>
+<ul>
+<li>Why copy-pasted code is a trap, and the tool that removes it: the function.</li>
+<li>The anatomy of a function: return type, name, parameters, body, <code>return</code>.</li>
+<li>Arguments are copied into parameters. A function cannot change your variables (yet).</li>
+<li>The compiler reads top to bottom: declaration before use, and the prototype that fixes it.</li>
+<li>Scope: where a name is visible, and why two functions can both have an <code>x</code>.</li>
+<li>The call stack: fresh boxes for every call, thrown away on return.</li>
+<li><code>main</code> is a function too: who calls it, and what its <code>return 0</code> means.</li>
+<li>Six small, well-named functions, built one at a time, and how to test one by hand.</li>
+<li>Two warnings (unused parameter, missing <code>return</code>) and why the second one is dangerous.</li>
+<li>How to read every signature in <code>phase1-terminal/01-life/src/life.hpp</code>.</li>
+</ul>
+</div>
+
+<h2>The problem: the same code three times</h2>
+<p>In <a href="03-control-flow.html">chapter 3</a> you printed a rectangle of dots with two nested loops. Suppose a program needs three rectangles of <code>#</code> characters, all of different sizes. The obvious thing is to copy the loops three times and change the numbers. Here is exactly that, and it contains a bug. Try to find it before reading the output.</p>
+
+<pre class="code" data-lang="cpp" data-file="three_rects.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int main() {
+    // A 5 by 2 rectangle of '#'
+    for (int y = 0; y &lt; 2; ++y) {
+        for (int x = 0; x &lt; 5; ++x) {
+            std::print("#");
+        }
+        std::println("");
+    }
+    std::println("");
+
+    // A 3 by 3 rectangle of '#'
+    for (int y = 0; y &lt; 3; ++y) {
+        for (int x = 0; x &lt; 3; ++x) {
+            std::print("#");
+        }
+        std::println("");
+    }
+    std::println("");
+
+    // A 7 by 1 rectangle of '#'
+    for (int y = 0; y &lt; 1; ++y) {
+        for (int x = 0; x &lt;= 7; ++x) {   // bug: one '#' too many
+            std::print("#");
+        }
+        std::println("");
+    }
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="three_rects.cpp"><code>#####
+#####
+
+###
+###
+###
+
+########
+</code></pre>
+
+<p>The third rectangle is eight wide, not seven. Somebody typed <code>&lt;=</code> instead of <code>&lt;</code> in one copy. The first two copies are correct, which makes the bug harder to see: your eye reads "the same loop, three times" and stops checking. This is what copy-paste does to code. Every copy is a place where a typo can hide, and every fix must be made in every copy. Miss one and you have fixed the bug in two places and kept it in the third.</p>
+
+<p>The deeper problem is that the three blocks are not really different. They are the same <em>idea</em>, "print a rectangle", with different numbers plugged in. C++ lets you write the idea once, give it a name, and leave holes for the numbers. That is a <strong>function</strong>: a named block of code that takes zero or more inputs and hands back at most one result. Here is the same program with the idea written once.</p>
+
+<pre class="code" data-lang="cpp" data-file="rect_function.cpp" data-check="run"><code>#include &lt;print&gt;
+
+// Print a rectangle of '#' that is `width` wide and `height` tall.
+void print_rect(int width, int height) {
+    for (int y = 0; y &lt; height; ++y) {
+        for (int x = 0; x &lt; width; ++x) {
+            std::print("#");
+        }
+        std::println("");
+    }
+}
+
+int main() {
+    print_rect(5, 2);
+    std::println("");
+    print_rect(3, 3);
+    std::println("");
+    print_rect(7, 1);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="rect_function.cpp"><code>#####
+#####
+
+###
+###
+###
+
+#######
+</code></pre>
+
+<p>The loops exist exactly once, in <code>print_rect</code>. The bug cannot hide in a third copy because there is no third copy. And <code>main</code> now reads like a description of what the program does, "print a 5 by 2, print a 3 by 3, print a 7 by 1", instead of a wall of loop machinery. You have been using functions since chapter 1: <code>std::println</code> is one, and so is <code>main</code>. Now you get to write your own.</p>
+
+<p>One word in that program is new: the <code>void</code> at the front of <code>print_rect</code>. Take it on trust for a few paragraphs; it means "this function hands nothing back". The section <a href="#void-a-function-with-no-result">void: a function with no result</a> below explains it properly.</p>
+
+<div class="callout principle"><span class="label">First principle</span><p>A function separates <em>what</em> from <em>how</em>. The name and the inputs say what it does; the body says how. Whoever calls the function only needs the "what". This is the single most important tool for keeping a program understandable as it grows, and the rest of this book, and llama.cpp, is built from it.</p></div>
+
+<h2>Anatomy of a function</h2>
+<p>Here is the smallest useful function with a result, plus a <code>main</code> that uses it four ways.</p>
+
+<pre class="code" data-lang="cpp" data-file="square.cpp" data-check="run"><code>#include &lt;print&gt;
+
+// Return x multiplied by itself.
+int square(int x) {
+    return x * x;
+}
+
+int main() {
+    int a = square(4);
+    std::println("square(4) = {}", a);
+    std::println("square(12) = {}", square(12));
+    std::println("square(-3) = {}", square(-3));
+    std::println("square(square(2)) = {}", square(square(2)));
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="square.cpp"><code>square(4) = 16
+square(12) = 144
+square(-3) = 9
+square(square(2)) = 16
+</code></pre>
+
+<h3>The five parts</h3>
+<p>Read the first line, <code>int square(int x) {</code>, left to right. Every function has these parts, in this order.</p>
+<ol>
+<li><strong>Return type</strong>: <code>int</code>. The type of the one value the function hands back. This is a promise: whatever happens inside, the caller will receive an <code>int</code>.</li>
+<li><strong>Name</strong>: <code>square</code>. Same rules as variable names: letters, digits, underscores, cannot start with a digit. This book uses lower case words joined by underscores, which is also what <code>life.hpp</code> uses.</li>
+<li><strong>Parameter list</strong>: <code>(int x)</code>. In parentheses, a comma-separated list of the inputs. Each one is a type followed by a name, exactly like declaring a variable. A <strong>parameter</strong> is a variable that is born when the function starts, filled in by the caller. A function can have zero parameters, written <code>()</code>, or several, like <code>print_rect(int width, int height)</code>.</li>
+<li><strong>Body</strong>: everything between <code>{</code> and <code>}</code>. Ordinary statements, the same ones you wrote in <code>main</code>.</li>
+<li><strong><code>return</code></strong>: the statement that ends the function and sends a value back. <code>return x * x;</code> computes the product and hands it to whoever called. The expression after <code>return</code> must have the return type, or something the compiler can convert to it.</li>
+</ol>
+
+<p>The first line without the body, <code>int square(int x)</code>, is called the function's <strong>signature</strong>. You will hear "signature" constantly; it means "the return type, the name, and the parameter types". It is the part a caller needs to know. (Strictly, the C++ standard leaves the return type out of the word "signature"; everyday usage, and this book, put it in.)</p>
+
+<h3>Calling a function</h3>
+<p>To <strong>call</strong> a function you write its name followed by parentheses containing the <strong>arguments</strong>: the actual values to use this time. <code>square(4)</code> is a call with the argument <code>4</code>. Two words that sound alike and are worth keeping apart: a <em>parameter</em> is the name inside the function (<code>x</code>); an <em>argument</em> is the value you pass in from outside (<code>4</code>). When the call happens, the argument is copied into the parameter, so inside this call <code>x</code> holds <code>4</code>.</p>
+
+<p>A call to a function with a return type <em>is an expression</em>, exactly like <code>3 + 4</code>. It has a value and a type, and you can put it anywhere a value of that type is allowed. The program above shows three places: stored in a variable (<code>int a = square(4);</code>), used directly as an argument to <code>std::println</code>, and used as the argument to another call (<code>square(square(2))</code>, which is <code>square(4)</code>, which is <code>16</code>). The inner call finishes first, then its result becomes the argument of the outer call.</p>
+
+<p>What does the machine do at a call? The CPU is executing the instructions of <code>main</code>, one after another. When it reaches <code>square(4)</code>, it notes where it is, copies the value 4 into the place that <code>square</code>'s <code>x</code> will live, and jumps to the first instruction of <code>square</code>. It runs the body. At <code>return</code>, it puts the result where <code>main</code> expects it and jumps back to the noted place. Nothing mysterious: a jump out, some work, a jump back carrying one value.</p>
+
+<h3>void: a function with no result</h3>
+<p><code>print_rect</code> from the first example started with <code>void</code> instead of <code>int</code>. <code>void</code> is a type that means "nothing". A <strong>void function</strong> does something (prints, mostly, at this point in the book) but hands back no value. Its body needs no <code>return</code>; the function ends when it reaches the closing brace. You may still write a bare <code>return;</code>, with no value after it, to leave early. Here is a void function that uses it to refuse an input that makes no sense.</p>
+
+<pre class="code" data-lang="cpp" data-file="bare_return.cpp" data-check="run"><code>#include &lt;print&gt;
+
+// Print `count` stars on one line. A negative count makes no sense: say so and stop.
+void print_stars(int count) {
+    if (count &lt; 0) {
+        std::println("(cannot print {} stars)", count);
+        return;                       // leave the function here; nothing below runs
+    }
+    for (int i = 0; i &lt; count; ++i) {
+        std::print("*");
+    }
+    std::println("");
+}
+
+int main() {
+    print_stars(3);
+    print_stars(-2);
+    print_stars(0);
+    print_stars(5);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="bare_return.cpp"><code>***
+(cannot print -2 stars)
+
+*****
+</code></pre>
+
+<p>For <code>-2</code> the <code>if</code> fires, the message is printed, and <code>return;</code> ends the call before the loop is reached: no stars, and no empty line either, because the <code>std::println("")</code> at the bottom was never run. For <code>0</code> the <code>if</code> does not fire, the loop runs zero times, and the final <code>std::println("")</code> gives the empty line you see. The other two calls behave as you would expect.</p>
+
+<p>Because a void function has no value, you cannot use a call to it where a value is needed. The compiler says so clearly.</p>
+
+<pre class="code" data-lang="cpp" data-file="void_return_value.cpp" data-check="error"><code>#include &lt;print&gt;
+
+void greet() {
+    std::println("hello");
+}
+
+int main() {
+    int x = greet();
+    std::println("{}", x);
+    return 0;
+}
+</code></pre>
+<pre class="output"><code>void_return_value.cpp:8:9: error: cannot initialize a variable of type 'int' with an rvalue of type 'void'
+    8 |     int x = greet();
+      |         ^   ~~~~~~~
+1 error generated.
+</code></pre>
+
+<p>"rvalue" is the compiler's word for a temporary value, such as the result of a call or of <code>3 + 4</code>; the name comes from "the right-hand side of an assignment". It is saying: you tried to store a nothing in an <code>int</code>. A void function is called on a line by itself, as a statement: <code>greet();</code>.</p>
+
+<p>The compiler also checks that you pass the right number of arguments. Passing two to a function that takes one is an error, and the message tells you both what you did and what the function wanted.</p>
+
+<pre class="code" data-lang="cpp" data-file="wrong_arg_count.cpp" data-check="error"><code>#include &lt;print&gt;
+
+int square(int x) {
+    return x * x;
+}
+
+int main() {
+    std::println("{}", square(3, 4));
+    return 0;
+}
+</code></pre>
+<pre class="output"><code>wrong_arg_count.cpp:8:24: error: no matching function for call to 'square'
+    8 |     std::println("{}", square(3, 4));
+      |                        ^~~~~~
+wrong_arg_count.cpp:3:5: note: candidate function not viable: requires single argument 'x', but 2 arguments were provided
+    3 | int square(int x) {
+      |     ^      ~~~~~
+1 error generated.
+</code></pre>
+
+<p>Lines marked <code>note:</code> are the compiler explaining its reasoning: it found a <code>square</code>, considered it, and says why it does not fit. Misuse a <code>life.hpp</code> function this week and you will get this exact shape of message, with the note pointing at the declaration in the header.</p>
+
+<h2>Arguments are copied</h2>
+<p>This is the most important fact in the chapter, and the one beginners trip on most. When you call a function, each argument is <em>copied</em> into the corresponding parameter. The parameter is a brand-new variable, a separate box in memory, holding a copy of the value. Whatever the function does to its parameter happens to the copy. The caller's variable is untouched. This is called <strong>passing by value</strong>. Watch it happen.</p>
+
+<pre class="code" data-lang="cpp" data-file="by_value.cpp" data-check="run"><code>#include &lt;print&gt;
+
+void try_to_double(int n) {
+    n = n * 2;                             // changes THIS function's n
+    std::println("inside try_to_double: n = {}", n);
+}
+
+int main() {
+    int count = 21;
+    std::println("before the call: count = {}", count);
+    try_to_double(count);
+    std::println("after the call:  count = {}", count);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="by_value.cpp"><code>before the call: count = 21
+inside try_to_double: n = 42
+after the call:  count = 21
+</code></pre>
+
+<p>Inside the function, <code>n</code> really did become 42. But <code>n</code> is not <code>count</code>. It is a copy that was made at the moment of the call. When the function ended, its <code>n</code> was thrown away, and <code>count</code> had never been anything but 21.</p>
+
+<div class="callout analogy"><span class="label">Analogy</span><p>Calling a function is like handing a colleague a <em>photocopy</em> of a document. They can scribble on their copy all they like; your original on your desk does not change. If you want a result back, they have to hand you a new sheet, which is what <code>return</code> does.</p>
+<p>Where it breaks: in <a href="05-references-and-const.html">chapter 5</a> you will meet <strong>references</strong>, which are a way to hand over the original instead of a copy, so the function <em>can</em> change your variable. The contract in <code>life.hpp</code> uses them, which is why <code>step</code> can fill in the <code>next</code> grid you give it. For now, every parameter you write is a copy.</p></div>
+
+<p>So how <em>do</em> you get a changed value out of a function? For now, the answer is always the same: the function <code>return</code>s the new value, and the caller stores it wherever it likes, including back into the variable it came from.</p>
+
+<pre class="code" data-lang="cpp" data-file="doubled.cpp" data-check="run"><code>#include &lt;print&gt;
+
+// Give back twice n. The caller decides what to do with the result.
+int doubled(int n) {
+    return n * 2;
+}
+
+int main() {
+    int count = 21;
+    count = doubled(count);                // store the result back into count
+    std::println("count = {}", count);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="doubled.cpp"><code>count = 42
+</code></pre>
+
+<p>Read <code>count = doubled(count);</code> from the right: first the call runs, with a copy of 21 as its <code>n</code>, and produces 42. Then the assignment stores 42 into <code>count</code>. The function never touched <code>count</code>; <code>main</code> did, using the function's answer.</p>
+
+<div class="callout try"><span class="label">Try it</span><p>Without running it, write down the three lines this program prints. Then run it and compare.</p>
+<pre class="code" data-lang="cpp" data-file="predict_copy.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int add_ten(int n) {
+    n = n + 10;
+    std::println("inside: n = {}", n);
+    return n;
+}
+
+int main() {
+    int score = 5;
+    int bigger = add_ten(score);
+    std::println("score = {}", score);
+    std::println("bigger = {}", bigger);
+    return 0;
+}
+</code></pre>
+<details class="answer"><summary>Show the answer</summary><p><code>inside: n = 15</code>, then <code>score = 5</code>, then <code>bigger = 15</code>. The parameter <code>n</code> is a copy of <code>score</code>, so changing it leaves <code>score</code> at 5. The changed value reaches <code>main</code> only because <code>add_ten</code> returns it and <code>main</code> stores it in <code>bigger</code>.</p></details></div>
+
+<p>Passing by value is not a limitation to work around; it is a guarantee to rely on. When you read <code>int clamp(int v, int lo, int hi)</code> (a function you will write later in this chapter) you know, without reading the body, that calling it cannot disturb any of your variables; its only effect is its return value.</p>
+
+<h2>Declaration before use</h2>
+<p>The compiler reads your file from the first line to the last, once, and it must understand every name the moment it meets it. When it sees <code>cube(3)</code> it needs to know already that <code>cube</code> is a function, what it returns, and what it takes. If the function is written <em>below</em> the call, the compiler has not got there yet. Here is the error you get.</p>
+
+<pre class="code" data-lang="cpp" data-file="before_decl.cpp" data-check="error"><code>#include &lt;print&gt;
+
+int main() {
+    std::println("{}", cube(3));
+    return 0;
+}
+
+int cube(int x) {
+    return x * x * x;
+}
+</code></pre>
+<pre class="output"><code>before_decl.cpp:4:24: error: use of undeclared identifier 'cube'
+    4 |     std::println("{}", cube(3));
+      |                        ^~~~
+1 error generated.
+</code></pre>
+
+<p>"Undeclared identifier" means "I have met a name I know nothing about". Every program so far avoided this by putting functions above <code>main</code>. That works, but in a real program you cannot always order things so that every function appears before every call: two functions might call each other, and you will often want <code>main</code> at the top so that a reader sees the big picture first. The proper fix is to tell the compiler about the function <em>before</em> showing it the body.</p>
+
+<h3>The prototype</h3>
+<p>A <strong>declaration</strong> (also called a <strong>prototype</strong>) is the signature followed by a semicolon: <code>int cube(int x);</code>. It says "a function named <code>cube</code> exists, takes one <code>int</code>, and returns an <code>int</code>; the body is elsewhere". A <strong>definition</strong> is the signature followed by the body: the whole thing. The compiler needs the declaration before any call. It needs the definition somewhere, once, in the whole program.</p>
+
+<pre class="code" data-lang="cpp" data-file="prototype.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int cube(int x);              // declaration: "cube exists and looks like this"
+
+int main() {
+    std::println("{}", cube(3));
+    return 0;
+}
+
+int cube(int x) {             // definition: what cube actually does
+    return x * x * x;
+}
+</code></pre>
+<pre class="output" data-for="prototype.cpp"><code>27
+</code></pre>
+
+<p>A few details that matter:</p>
+<ul>
+<li>You may declare a function as many times as you like, but define it exactly once. Two definitions of the same function is an error.</li>
+<li>The declaration and definition must agree on the return type and the parameter types. The parameter <em>names</em> are allowed to differ, and may even be left out of the declaration: <code>int cube(int);</code> is legal. Keep the names; they are documentation.</li>
+<li>Calling a declared-but-never-defined function compiles, and then fails at the <em>link</em> step. Recall from chapter 1 that the linker is the program that glues your compiled code to the standard library; it is also the one that finds each function's body. If no body exists anywhere, it is the linker that complains, not the compiler. On your Mac the message begins <code>Undefined symbols for architecture arm64:</code> and names the missing function, here <code>"cube(int)", referenced from: _main</code>. You will meet that step properly in <a href="10-headers-and-files.html">chapter 10</a>.</li>
+</ul>
+
+<div class="callout note"><span class="label">Where this is going</span><p>Look at <code>phase1-terminal/01-life/src/life.hpp</code>. It is nothing but declarations with comments. A <strong>header file</strong> is a file of declarations that other files include so they can call the functions, while the definitions live in a separate file (<code>life.cpp</code>). That is why the header is called the <em>contract</em>: it is the list of promises, and <code>life.cpp</code> is where you keep them. Chapter 10 explains the mechanics; for now, know that a header is a stack of prototypes.</p></div>
+
+<h2>Scope: where a name is visible</h2>
+<p>A variable declared inside a function exists only inside that function. Its <strong>scope</strong>, the region of the program where its name means something, runs from the line of its declaration to the closing brace of the block it is in. Outside that region the name is simply unknown. The compiler enforces this with the same "undeclared identifier" error you just saw.</p>
+
+<pre class="code" data-lang="cpp" data-file="scope_error.cpp" data-check="error"><code>#include &lt;print&gt;
+
+void make_a_number() {
+    int secret = 42;
+    std::println("inside: secret = {}", secret);
+}
+
+int main() {
+    make_a_number();
+    std::println("outside: secret = {}", secret);
+    return 0;
+}
+</code></pre>
+<pre class="output"><code>scope_error.cpp:10:42: error: use of undeclared identifier 'secret'
+   10 |     std::println("outside: secret = {}", secret);
+      |                                          ^~~~~~
+1 error generated.
+</code></pre>
+
+<p><code>secret</code> belongs to <code>make_a_number</code>. From <code>main</code>'s point of view it does not exist, and never did, even after the call. If <code>main</code> wants the number, <code>make_a_number</code> has to <code>return</code> it. Variables that live inside a function are called <strong>local variables</strong>; parameters are local variables too, filled in at the call.</p>
+
+<h3>The same name in two functions</h3>
+<p>Because each function's locals are private to it, two functions can both have a variable named <code>x</code> with no conflict. They are two different boxes that happen to carry the same label.</p>
+
+<pre class="code" data-lang="cpp" data-file="same_name.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int first() {
+    int x = 10;
+    std::println("first:  x = {}", x);
+    return x;
+}
+
+int second() {
+    int x = 99;                       // a different box that happens to share the name
+    std::println("second: x = {}", x);
+    return x;
+}
+
+int main() {
+    int x = 1;
+    std::println("main:   x = {}", x);
+    first();
+    second();
+    std::println("main:   x = {} (still)", x);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="same_name.cpp"><code>main:   x = 1
+first:  x = 10
+second: x = 99
+main:   x = 1 (still)
+</code></pre>
+
+<p>Three functions, three <code>x</code>s, three separate places in memory. <code>main</code>'s <code>x</code> is still 1 at the end because nothing that happened in <code>first</code> or <code>second</code> had anything to do with it. This is why you can name a parameter <code>width</code> in six different functions this week and never worry about them colliding.</p>
+
+<h3>Blocks inside functions</h3>
+<p>Scope is about braces, not only about functions. Any <code>{ ... }</code> block, such as the body of a loop or an <code>if</code>, is a scope. A variable declared inside a loop body is created afresh on every pass and vanishes at the closing brace. You saw this in chapter 3 with the loop counter; it is the same rule.</p>
+
+<pre class="code" data-lang="cpp" data-file="block_scope.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int main() {
+    int total = 0;
+    for (int i = 1; i &lt;= 3; ++i) {
+        int doubled = i * 2;          // born here, on every pass
+        total = total + doubled;
+    }                                 // doubled dies here; total lives on
+    std::println("total = {}", total);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="block_scope.cpp"><code>total = 12
+</code></pre>
+
+<p>A good habit that follows from this: declare each variable in the smallest scope that works, as close to its first use as possible. The less of the program a name is visible in, the less of the program you need to read to understand it.</p>
+
+<h2>The call stack</h2>
+<p>Where do all those local variables live? Each call to a function gets a fresh patch of memory for its parameters and locals, called a <strong>stack frame</strong> (or just a frame). When the function returns, its frame is released and the memory is reused by the next call. Frames are stacked. <code>main</code>'s frame is at the bottom. When <code>main</code> calls <code>a</code>, <code>a</code>'s frame goes on top. When <code>a</code> calls <code>b</code>, <code>b</code>'s frame goes on top of that. Only the top frame is active. When <code>b</code> returns, its frame is removed and <code>a</code> carries on exactly where it stopped. This whole structure is the <strong>call stack</strong>.</p>
+
+<div class="callout analogy"><span class="label">Analogy</span><p>Think of sticky notes on a desk. You are working on a task (<code>main</code>) and write your working on a note. Someone asks you to do a sub-task: you put a new note <em>on top</em>, do the sub-task on that note, and when it is finished you throw the note away and continue with the note underneath, which still says exactly what it said before. Notes only ever go on and off the top.</p>
+<p>Where it breaks: a frame is not just scribbles. It also records <em>where to jump back to</em> when the function returns, and its size is fixed by the compiler from the function's variables. And the stack has a limit. A function is allowed to call itself (this is called <strong>recursion</strong>; you will not need it this week). One that calls itself forever stacks frames until the memory runs out, and the program crashes with a <strong>stack overflow</strong>. A plain build on your Mac just dies with "segmentation fault"; built with the <code>tools/run.sh</code> flags, the report says <code>ERROR: AddressSanitizer: stack-overflow</code> and names the function.</p></div>
+
+<p>Here is a chain <code>main</code> → <code>a</code> → <code>b</code>, with prints at every step so you can watch the stack grow and shrink.</p>
+
+<pre class="code" data-lang="cpp" data-file="call_chain.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int b(int n) {
+    std::println("  b starts with n = {}", n);
+    int result = n + 100;
+    std::println("  b is about to return {}", result);
+    return result;
+}
+
+int a(int n) {
+    std::println(" a starts with n = {}", n);
+    int from_b = b(n * 2);
+    std::println(" a got {} back from b", from_b);
+    return from_b + 1;
+}
+
+int main() {
+    std::println("main starts");
+    int answer = a(5);
+    std::println("main got {} back from a", answer);
+    std::println("main ends");
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="call_chain.cpp"><code>main starts
+ a starts with n = 5
+  b starts with n = 10
+  b is about to return 110
+ a got 110 back from b
+main got 111 back from a
+main ends
+</code></pre>
+
+<p>Follow the indentation: one space per frame. At the deepest point there are three frames on the stack: <code>main</code> (holding <code>answer</code>, not yet filled in), <code>a</code> (holding its <code>n</code> = 5 and <code>from_b</code>, not yet filled in), and <code>b</code> (holding its <code>n</code> = 10 and <code>result</code> = 110). Note that <code>a</code> and <code>b</code> both have an <code>n</code>, with different values, at the same time. That is only possible because they are in different frames. As <code>b</code> returns, its frame disappears, and <code>a</code> resumes on the line <code>int from_b = b(n * 2);</code> with 110 in hand.</p>
+
+<p>This picture matters beyond this chapter. When a program crashes, the debugger shows you the call stack, the list of frames at that moment, which tells you not just <em>where</em> it crashed but <em>how it got there</em>.</p>
+
+<h2>main is a function too</h2>
+<p>You have written <code>int main() { ... return 0; }</code> since chapter 1, told to take it on trust. Now you can read it: a function named <code>main</code>, no parameters, returning an <code>int</code>. The only special thing about <code>main</code> is who calls it: the operating system does, when you run the program. And the <code>int</code> that <code>main</code> returns goes back to the operating system as the program's exit code, the number <a href="01-what-a-program-is.html">chapter 1</a> read with <code>echo $?</code>. By convention 0 means "everything went fine" and any other number means "something went wrong". The shell keeps the exit code of the last program in the variable <code>$?</code>.</p>
+
+<pre class="code" data-lang="cpp" data-file="exit_code.cpp" data-check="compile"><code>#include &lt;print&gt;
+
+int main() {
+    std::println("something went wrong, exiting with code 3");
+    return 3;
+}
+</code></pre>
+<pre class="shell"><code>$ clang++ -std=c++23 -Wall -Wextra exit_code.cpp -o exit_code
+$ ./exit_code
+something went wrong, exiting with code 3
+$ echo $?
+3
+</code></pre>
+
+<p>This is how tools talk to each other: the doctest test program in chapter 12 returns 0 if every check passed and non-zero otherwise, and the test runner you meet in <a href="11-cmake.html">chapter 11</a> (<code>ctest</code>) reads that number to print "Passed" or "Failed". In <a href="08-strings-and-args.html">chapter 8</a>, <code>main</code> grows parameters too (<code>int main(int argc, char* argv[])</code>): the words you typed on the command line, delivered as arguments by the same mechanism you learned a few paragraphs ago. The <code>*</code> and <code>[]</code> in that line are chapter 8's business; take them on trust until then.</p>
+
+<h2>Designing small functions</h2>
+<p>Knowing the syntax is a third of it. The rest is judgement: what should be a function, and what should it be called? Three rules carry you a long way.</p>
+<ul>
+<li><strong>One job.</strong> A function does one thing. If you need the word "and" to describe it ("computes the area and prints it"), it is probably two functions.</li>
+<li><strong>A name that says the job.</strong> Verbs for actions (<code>print_row</code>), nouns for values (<code>area</code>), <code>is_</code> prefix for yes/no questions (<code>is_even</code>). If the name is right, the caller never needs to read the body.</li>
+<li><strong>Short.</strong> Roughly 5 to 15 lines. Not a law, but a smell test: a 60-line function is almost always three functions wearing a trench coat.</li>
+</ul>
+<p>Here are six functions that follow these rules, each in a complete program. Every one is a shape you will use this week.</p>
+
+<h3>is_even: a yes/no question</h3>
+<p>A function that returns <code>bool</code> is a question. Its body is usually a single comparison, and the <code>return</code> hands back the <code>true</code> or <code>false</code> that the comparison produced. You do not need an <code>if</code> to return a boolean; the comparison already <em>is</em> one.</p>
+
+<pre class="code" data-lang="cpp" data-file="is_even.cpp" data-check="run"><code>#include &lt;print&gt;
+
+// True when n divides by 2 with nothing left over.
+bool is_even(int n) {
+    return n % 2 == 0;
+}
+
+int main() {
+    for (int n = 0; n &lt; 6; ++n) {
+        if (is_even(n)) {
+            std::println("{} is even", n);
+        } else {
+            std::println("{} is odd", n);
+        }
+    }
+    std::println("is_even(-4) = {}", is_even(-4));
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="is_even.cpp"><code>0 is even
+1 is odd
+2 is even
+3 is odd
+4 is even
+5 is odd
+is_even(-4) = true
+</code></pre>
+
+<p>Notice <code>if (is_even(n))</code>: because the call produces a <code>bool</code>, it slots straight into the condition. Reading it aloud gives a sentence, "if n is even", which is the test of a good name.</p>
+
+<p>Notice also that the body tests <code>n % 2 == 0</code> and not <code>n % 2 == 1</code>. The two look interchangeable, but chapter 2 showed that the remainder of a negative number is negative: <code>-3 % 2</code> is <code>-1</code>. A function written as <code>return n % 2 == 1;</code> would answer "false" for <code>-3</code> and call it even. Comparing with 0 is correct for every <code>int</code>, which is why the last line of the output is right for <code>-4</code>.</p>
+
+<h3>clamp: several returns</h3>
+<p><code>clamp(v, lo, hi)</code> pushes a value back inside a range: if <code>v</code> is below <code>lo</code> you get <code>lo</code>, above <code>hi</code> you get <code>hi</code>, otherwise <code>v</code> unchanged. It has three parameters and three <code>return</code> statements. A function may contain any number of <code>return</code>s; the first one reached ends the function on the spot.</p>
+
+<p>The comment below writes the range as <code>[lo, hi]</code>. This is a notation you will see in <code>life.hpp</code> too, so learn it now. A square bracket means "this end is included"; a round bracket means "this end is excluded". <code>[0, 10]</code> is the eleven numbers 0 to 10. <code>[0, 10)</code> is the ten numbers 0 to 9, which is exactly the set of valid indexes for a row of 10 cells, and exactly the range that a <code>for (int x = 0; x &lt; 10; ++x)</code> loop visits.</p>
+
+<pre class="code" data-lang="cpp" data-file="clamp.cpp" data-check="run"><code>#include &lt;print&gt;
+
+// Push v back inside the range [lo, hi] if it fell outside.
+int clamp(int v, int lo, int hi) {
+    if (v &lt; lo) {
+        return lo;
+    }
+    if (v > hi) {
+        return hi;
+    }
+    return v;
+}
+
+int main() {
+    std::println("clamp(5, 0, 10)   = {}", clamp(5, 0, 10));
+    std::println("clamp(-7, 0, 10)  = {}", clamp(-7, 0, 10));
+    std::println("clamp(123, 0, 10) = {}", clamp(123, 0, 10));
+    std::println("clamp(0, 0, 10)   = {}", clamp(0, 0, 10));
+    std::println("clamp(10, 0, 10)  = {}", clamp(10, 0, 10));
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="clamp.cpp"><code>clamp(5, 0, 10)   = 5
+clamp(-7, 0, 10)  = 0
+clamp(123, 0, 10) = 10
+clamp(0, 0, 10)   = 0
+clamp(10, 0, 10)  = 10
+</code></pre>
+
+<p>The second <code>if</code> does not need an <code>else</code>, because if the first condition had been true the function would already have returned. Code after a <code>return</code> that fires is never reached. This "check the odd cases first and return early, then handle the normal case at the bottom" layout is extremely common and is worth copying.</p>
+
+<p>Arguments are matched to parameters <em>by position</em>: in <code>clamp(123, 0, 10)</code> the first argument goes to <code>v</code>, the second to <code>lo</code>, the third to <code>hi</code>. The names you gave the parameters play no part in the matching.</p>
+
+<div class="callout trap"><span class="label">Trap</span><p>The compiler checks the <em>number</em> and <em>types</em> of the arguments, not their meaning. Swap two arguments of the same type and you get a quietly wrong answer, not an error. Here is <code>clamp</code> called correctly and then with <code>lo</code> and <code>hi</code> swapped.</p>
+<pre class="code" data-lang="cpp" data-file="swapped_args.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int clamp(int v, int lo, int hi) {
+    if (v &lt; lo) {
+        return lo;
+    }
+    if (v > hi) {
+        return hi;
+    }
+    return v;
+}
+
+int main() {
+    std::println("clamp(5, 0, 10)  = {}", clamp(5, 0, 10));    // lo and hi in the right order
+    std::println("clamp(5, 10, 0)  = {}", clamp(5, 10, 0));    // lo and hi swapped by mistake
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="swapped_args.cpp"><code>clamp(5, 0, 10)  = 5
+clamp(5, 10, 0)  = 10
+</code></pre>
+<p>In the second call <code>lo</code> is 10, so <code>5 &lt; 10</code> is true and the function returns 10. Nothing warned you. <code>index_of(int x, int y, int width)</code> in <code>life.hpp</code> takes three <code>int</code>s, and swapping <code>x</code> and <code>y</code> in a call is the single most common Week 1 bug. When a function takes several parameters of the same type, read your calls twice, and read the declaration to confirm the order.</p></div>
+
+<h3>celsius_to_fahrenheit: doubles in, double out</h3>
+<p>The return type and the parameter types need not be <code>int</code>. Here everything is <code>double</code>, and the name says both what goes in and what comes out.</p>
+
+<pre class="code" data-lang="cpp" data-file="celsius.cpp" data-check="run"><code>#include &lt;print&gt;
+
+// Convert a temperature in degrees Celsius to degrees Fahrenheit.
+double celsius_to_fahrenheit(double c) {
+    return c * 9.0 / 5.0 + 32.0;
+}
+
+int main() {
+    std::println("{} C = {} F", 0.0, celsius_to_fahrenheit(0.0));
+    std::println("{} C = {} F", 100.0, celsius_to_fahrenheit(100.0));
+    std::println("{} C = {} F", 37.0, celsius_to_fahrenheit(37.0));
+    std::println("{} C = {} F", -40.0, celsius_to_fahrenheit(-40.0));
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="celsius.cpp"><code>0 C = 32 F
+100 C = 212 F
+37 C = 98.6 F
+-40 C = -40 F
+</code></pre>
+
+<p>The constants are written <code>9.0</code> and <code>5.0</code>, not <code>9</code> and <code>5</code>, for the reason you learned in <a href="02-values-and-types.html">chapter 2</a>: <code>9 / 5</code> is integer division and gives 1. Inside a function the arithmetic rules are exactly the same as outside; a function is not a different language, only a named piece of the same one.</p>
+
+<h3>print_row: a loop inside a void function</h3>
+<p>This one prints <code>width</code> copies of a character on one line. It is one step away from what <code>render</code> in <code>life.hpp</code> does for each row of the grid (<code>render</code> builds text instead of printing, but the loop is the same). It takes two parameters of different types, an <code>int</code> and a <code>char</code>, and returns nothing.</p>
+
+<pre class="code" data-lang="cpp" data-file="print_row.cpp" data-check="run"><code>#include &lt;print&gt;
+
+// Print `width` copies of `ch` on one line, then end the line.
+void print_row(int width, char ch) {
+    for (int i = 0; i &lt; width; ++i) {
+        std::print("{}", ch);
+    }
+    std::println("");
+}
+
+int main() {
+    print_row(10, '#');
+    print_row(10, '.');
+    print_row(3, '*');
+    print_row(0, '!');          // zero copies: just an empty line
+    print_row(10, '#');
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="print_row.cpp"><code>##########
+..........
+***
+
+##########
+</code></pre>
+
+<p>Look at <code>print_row(0, '!')</code>. The loop condition <code>0 &lt; 0</code> is false at once, so the body never runs and all you get is the newline. The function handles the edge case without any special code, because the loop was written correctly. Always ask what your function does with zero.</p>
+
+<h3>max_of: two inputs, pick one</h3>
+<p>A function that chooses between its inputs. The <code>if</code> handles one case and returns; the normal case is the last line, the same early-return layout as <code>clamp</code>. Watch the last call in <code>main</code>: it feeds the result of one <code>max_of</code> into another, just as <code>square(square(2))</code> did.</p>
+<pre class="code" data-lang="cpp" data-file="max_of.cpp" data-check="run"><code>#include &lt;print&gt;
+
+// The larger of a and b. (If they are equal, either one.)
+int max_of(int a, int b) {
+    if (a > b) {
+        return a;
+    }
+    return b;
+}
+
+int main() {
+    std::println("max_of(3, 8)   = {}", max_of(3, 8));
+    std::println("max_of(8, 3)   = {}", max_of(8, 3));
+    std::println("max_of(-2, -9) = {}", max_of(-2, -9));
+    std::println("max_of(5, 5)   = {}", max_of(5, 5));
+    std::println("largest of three: {}", max_of(max_of(4, 11), 7));
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="max_of.cpp"><code>max_of(3, 8)   = 8
+max_of(8, 3)   = 8
+max_of(-2, -9) = -2
+max_of(5, 5)   = 5
+largest of three: 11
+</code></pre>
+
+<p>The last line shows a two-input function stretched to three inputs by nesting the calls: the largest of three is the largest of (the largest of two) and the third. The comment on the function says what happens when <code>a == b</code>. Comments on a function should state the cases the name does not make obvious; that is what the comments in <code>life.hpp</code> do.</p>
+
+<h3>area: counting with std::size_t</h3>
+<p>Not every quantity is an <code>int</code>. A count of things, such as the number of cells in a grid, can never be negative, and chapter 2 introduced <code>std::size_t</code> as the type for exactly that: an unsigned integer big enough to count every byte of memory. When a function's inputs and output are counts, say so in the signature.</p>
+
+<pre class="code" data-lang="cpp" data-file="area.cpp" data-check="run"><code>#include &lt;cstddef&gt;
+#include &lt;print&gt;
+
+// Number of cells in a w-by-h grid. A count can never be negative,
+// so the inputs and the result are std::size_t.
+std::size_t area(std::size_t w, std::size_t h) {
+    return w * h;
+}
+
+int main() {
+    std::println("area(3, 2)       = {}", area(3, 2));
+    std::println("area(80, 24)     = {}", area(80, 24));
+    std::println("area(1000, 1000) = {}", area(1000, 1000));
+    std::println("sizeof(std::size_t) = {} bytes", sizeof(std::size_t));
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="area.cpp"><code>area(3, 2)       = 6
+area(80, 24)     = 1920
+area(1000, 1000) = 1000000
+sizeof(std::size_t) = 8 bytes
+</code></pre>
+
+<p>The literal <code>3</code> in <code>area(3, 2)</code> is an <code>int</code>, and the parameter is a <code>std::size_t</code>. The compiler converts the argument to the parameter type at the call, the same way it converts when you write <code>double d = 3;</code>. For small positive literals that is harmless. The trap is a <em>negative</em> <code>int</code> variable: passed to a <code>std::size_t</code> parameter it silently turns into an enormous positive count, as <a href="02-values-and-types.html#signed-meets-unsigned">chapter 2</a> showed with <code>-1</code> becoming 18 billion billion. That is why the <code>life.hpp</code> contract keeps <code>width</code> and <code>height</code> as <code>int</code>. It converts them with <code>static_cast&lt;std::size_t&gt;</code> only at the one place where a size is actually needed. You will see that line in <code>life.cpp</code>'s stub for <code>random_cells</code>, and chapter 6 explains the rest of it.</p>
+
+<h3>Functions built from functions</h3>
+<p>Once a function exists, other functions can call it. This is how small functions stay small: a bigger job is written as a few calls to smaller jobs. Here <code>is_odd</code> is defined in terms of <code>is_even</code>, and <code>print_rect</code> is now just "print <code>height</code> rows", using <code>print_row</code>.</p>
+
+<pre class="code" data-lang="cpp" data-file="compose.cpp" data-check="run"><code>#include &lt;print&gt;
+
+bool is_even(int n) {
+    return n % 2 == 0;
+}
+
+// Built out of is_even instead of repeating the arithmetic.
+bool is_odd(int n) {
+    return !is_even(n);
+}
+
+void print_row(int width, char ch) {
+    for (int i = 0; i &lt; width; ++i) {
+        std::print("{}", ch);
+    }
+    std::println("");
+}
+
+// A rectangle is just `height` rows.
+void print_rect(int width, int height, char ch) {
+    for (int y = 0; y &lt; height; ++y) {
+        print_row(width, ch);
+    }
+}
+
+int main() {
+    std::println("is_odd(7) = {}", is_odd(7));
+    std::println("is_odd(8) = {}", is_odd(8));
+    print_rect(6, 2, '#');
+    print_rect(4, 1, '=');
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="compose.cpp"><code>is_odd(7) = true
+is_odd(8) = false
+######
+######
+====
+</code></pre>
+
+<p>Compare this <code>print_rect</code> with the one at the start of the chapter. The nested loop is gone; the inner loop lives in <code>print_row</code>, and <code>print_rect</code> has one loop that reads as English. This is the pattern for the Life challenge too: <code>step</code> will call <code>count_neighbours</code> for every cell, and <code>count_neighbours</code> will call <code>wrap</code> and <code>index_of</code>. Each function trusts the one below it to do its one job.</p>
+
+<h3>return ends the function immediately</h3>
+<p>A <code>return</code> inside a loop stops the loop <em>and</em> the function in one go. This is useful for searches: as soon as you find what you want, hand it back and stop looking.</p>
+
+<pre class="code" data-lang="cpp" data-file="early_return.cpp" data-check="run"><code>#include &lt;print&gt;
+
+// The smallest number from 2 upwards that divides n. (n must be at least 2.)
+int smallest_divisor(int n) {
+    for (int d = 2; d &lt; n; ++d) {
+        if (n % d == 0) {
+            return d;                 // found one: leave immediately
+        }
+    }
+    return n;                         // nothing divided it: n is prime
+}
+
+int main() {
+    std::println("smallest_divisor(15) = {}", smallest_divisor(15));
+    std::println("smallest_divisor(49) = {}", smallest_divisor(49));
+    std::println("smallest_divisor(13) = {}", smallest_divisor(13));
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="early_return.cpp"><code>smallest_divisor(15) = 3
+smallest_divisor(49) = 7
+smallest_divisor(13) = 13
+</code></pre>
+
+<p>For 15 the loop runs with <code>d</code> = 2 (no), then <code>d</code> = 3 (yes) and returns 3 without ever trying 4 to 14. Compare with chapter 3's <code>break</code>, which only leaves the loop and then continues with whatever comes after it inside the function. <code>return</code> leaves everything.</p>
+
+<div class="callout try"><span class="label">Try it</span>
+<p>Write each of these as a complete program with a <code>main</code> that calls it with at least three different arguments. Say out loud what the function does with zero or a negative number before you run it.</p>
+<ul>
+<li><code>int min_of(int a, int b)</code>, the mirror image of <code>max_of</code>.</li>
+<li><code>double fahrenheit_to_celsius(double f)</code>, the inverse of the one above. Check that converting 100 C to F and back gives 100.</li>
+<li><code>int sum_to(int n)</code>, which returns 1 + 2 + ... + n using a loop. What should <code>sum_to(0)</code> be?</li>
+<li><code>void print_checkerboard(int width, int height)</code>, which prints rows that alternate between starting with <code>#</code> and starting with <code>.</code>. Build it from <code>print_row</code>-like pieces or from <code>is_even</code>; both work.</li>
+</ul>
+<details class="hint"><summary>Stuck on the checkerboard? First nudge</summary><p>A row's pattern depends on whether its row number is even. Inside the row, a cell's character depends on whether (x + y) is even. <code>is_even</code> already exists; use it twice, or once.</p></details>
+</div>
+
+<h2>Two warnings you will meet</h2>
+<p>Two mistakes with functions do not stop the compiler, but <code>-Wall -Wextra</code> flags them, and you should treat both as errors. You will meet the first one on day one of the challenge, because the stubs in <code>life.cpp</code> are written to avoid it.</p>
+
+<h3>Unused parameter</h3>
+<p>If a function takes a parameter and never uses it, the compiler suspects you forgot something. This program compiles, but with a warning:</p>
+
+<pre class="code" data-lang="cpp" data-file="unused_param.cpp" data-check="fragment"><code>#include &lt;print&gt;
+
+int always_zero(int x) {
+    return 0;
+}
+
+int main() {
+    std::println("{}", always_zero(5));
+    return 0;
+}
+</code></pre>
+<pre class="output"><code>unused_param.cpp:3:21: warning: unused parameter 'x' [-Wunused-parameter]
+    3 | int always_zero(int x) {
+      |                     ^
+1 warning generated.
+</code></pre>
+
+<p>Usually the fix is to use the parameter, because you did forget something. But sometimes a function genuinely does not need one of its inputs <em>yet</em>, for example a stub you have not written. The idiom for "I know, this is deliberate" is <code>(void)x;</code>: an expression that evaluates <code>x</code> and throws the result away as a nothing. It generates no machine code; it exists only to silence the warning. Now open <code>phase1-terminal/01-life/src/life.cpp</code> and look at any stub, for instance:</p>
+
+<pre class="code" data-lang="cpp" data-file="stub_fragment.cpp" data-check="fragment"><code>int wrap(int v, int n) {
+    // TODO(you): milestone 3 — careful with negative numbers
+    (void)v;
+    (void)n;
+    return 0;
+}
+</code></pre>
+
+<p>That is why the stubs compile cleanly before you have written anything. When you fill in the body and start using <code>v</code> and <code>n</code>, delete the <code>(void)</code> lines; they were scaffolding.</p>
+
+<h3>Missing return</h3>
+<p>A function with a non-void return type promises to return a value on <em>every</em> path through its body. Forget one path and the compiler warns:</p>
+
+<pre class="code" data-lang="cpp" data-file="missing_return.cpp" data-check="fragment"><code>#include &lt;print&gt;
+
+int sign(int n) {
+    if (n > 0) {
+        return 1;
+    }
+    if (n &lt; 0) {
+        return -1;
+    }
+    // what if n is exactly 0?
+}
+
+int main() {
+    std::println("{}", sign(7));
+    return 0;
+}
+</code></pre>
+<pre class="output"><code>missing_return.cpp:11:1: warning: non-void function does not return a value in all control paths [-Wreturn-type]
+   11 | }
+      | ^
+1 warning generated.
+</code></pre>
+
+<div class="callout trap"><span class="label">Trap</span><p>This warning is the most dangerous kind: the program compiles and may even appear to work. But calling <code>sign(0)</code> reaches the closing brace with no value to return, and that is <strong>undefined behaviour</strong>: the C++ rules say nothing about what happens next. The caller receives whatever garbage happens to be in the place where the result should have been. It might be 0 by luck today and 7 million tomorrow. With the sanitizer flags that <code>tools/run.sh</code> uses, calling <code>sign(0)</code> stops the program instead with <code>runtime error: execution reached the end of a value-returning function without returning a value</code>, which is the whole point of those flags. Fix the function, never the warning: add the missing <code>return</code>.</p></div>
+
+<pre class="code" data-lang="cpp" data-file="sign_fixed.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int sign(int n) {
+    if (n > 0) {
+        return 1;
+    }
+    if (n &lt; 0) {
+        return -1;
+    }
+    return 0;                         // the path that was missing
+}
+
+int main() {
+    std::println("sign(7) = {}, sign(-2) = {}, sign(0) = {}", sign(7), sign(-2), sign(0));
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="sign_fixed.cpp"><code>sign(7) = 1, sign(-2) = -1, sign(0) = 0
+</code></pre>
+
+<h2>Testing a function by hand</h2>
+<p>A function with a clear signature has a wonderful property: you can check it in isolation. Pick inputs whose correct answer you know, call the function, compare. You do not need the rest of the program to exist. For <code>clamp</code> you know by hand that <code>clamp(-7, 0, 10)</code> must be 0, so write that down as a check, and let the program tell you PASS or FAIL.</p>
+
+<pre class="code" data-lang="cpp" data-file="test_clamp.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int clamp(int v, int lo, int hi) {
+    if (v &lt; lo) {
+        return lo;
+    }
+    if (v > hi) {
+        return hi;
+    }
+    return v;
+}
+
+// Compare what clamp gave with what it should have given.
+void check_clamp(int v, int lo, int hi, int expected) {
+    int got = clamp(v, lo, hi);
+    if (got == expected) {
+        std::println("PASS  clamp({}, {}, {}) == {}", v, lo, hi, expected);
+    } else {
+        std::println("FAIL  clamp({}, {}, {}) gave {}, expected {}", v, lo, hi, got, expected);
+    }
+}
+
+int main() {
+    check_clamp(5, 0, 10, 5);        // inside the range: unchanged
+    check_clamp(-7, 0, 10, 0);       // below: pushed up to lo
+    check_clamp(123, 0, 10, 10);     // above: pushed down to hi
+    check_clamp(0, 0, 10, 0);        // exactly on the edge
+    check_clamp(10, 0, 10, 10);      // exactly on the other edge
+    check_clamp(10, 0, 10, 9);       // a deliberately wrong expectation
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="test_clamp.cpp"><code>PASS  clamp(5, 0, 10) == 5
+PASS  clamp(-7, 0, 10) == 0
+PASS  clamp(123, 0, 10) == 10
+PASS  clamp(0, 0, 10) == 0
+PASS  clamp(10, 0, 10) == 10
+FAIL  clamp(10, 0, 10) gave 10, expected 9
+</code></pre>
+
+<p>The last check is wrong on purpose so you can see what a failure looks like: it names the call, the answer it got, and the answer it wanted. That is all the information needed to start debugging. Notice the choice of inputs: one ordinary case, one below, one above, and both edges exactly. Edges are where bugs live (remember <code>&lt;=</code> versus <code>&lt;</code> in the first program), so a good set of checks always includes them.</p>
+
+<p>The checking itself is a function, <code>check_clamp</code>, so that the six checks are six readable lines rather than six copies of an <code>if</code>. This is the seed of <a href="12-testing.html">chapter 12</a>. The doctest library gives you a <code>CHECK(clamp(-7, 0, 10) == 0)</code> that does the comparing and the printing for you, for any function, and <code>tests/life_test.cpp</code> is a file of exactly such lines. You have just built the idea yourself, so the library will hold no surprises.</p>
+
+<div class="callout note"><span class="label">A habit to start today</span><p>Whenever you write a function, write three checks for it before you move on: a normal case, a zero or empty case, and an edge. It takes a minute and it catches most bugs while the function is still fresh in your mind. In <a href="14-build-life.html">chapter 14</a> the milestones are ordered so that you can do this for every contract function, one at a time.</p></div>
+
+<h2>Reading the Week 1 contract</h2>
+<p>You can now read <code>phase1-terminal/01-life/src/life.hpp</code>. Here are its declarations, with their comments, exactly as they appear in the file. This is a fragment, not a program, and it is <em>not</em> something to implement here; it is something to read. The implementing is the challenge itself, in your own <code>life.cpp</code>. Four things in it are ahead of you, so take them on trust: <code>&amp;</code> until <a href="05-references-and-const.html">chapter 5</a>, <code>std::vector</code> until <a href="06-vector.html">chapter 6</a>, <code>using</code> until <a href="07-flat-grid.html">chapter 7</a>, and <code>std::string</code> until <a href="08-strings-and-args.html">chapter 8</a>. Everything else you can already read.</p>
+
+<pre class="code" data-lang="cpp" data-file="life.hpp" data-check="fragment"><code>// A flat list of cells. (`using` gives a long type a short name.)
+using Cells = std::vector&lt;std::uint8_t&gt;;
+
+// The position in the flat vector of the cell at column x, row y.
+//   index_of(0, 0, 10) == 0,  index_of(3, 2, 10) == 23
+int index_of(int x, int y, int width);
+
+// Wrap v into the range [0, n), like the hands of a clock.
+//   wrap(-1, 10) == 9,  wrap(10, 10) == 0,  wrap(7, 10) == 7
+int wrap(int v, int n);
+
+// How many of the 8 neighbours of (x, y) are alive. The grid is a torus:
+// the left edge touches the right edge, the top touches the bottom.
+int count_neighbours(const Cells&amp; cells, int width, int height, int x, int y);
+
+// One generation of Life. Reads `current`, writes the result into `next`.
+// Both vectors already have width*height cells. `current` is never modified.
+//   Rules: a live cell with 2 or 3 live neighbours stays alive;
+//          a dead cell with exactly 3 live neighbours becomes alive;
+//          every other cell is dead in the next generation.
+void step(const Cells&amp; current, Cells&amp; next, int width, int height);
+
+// A random starting grid. Each cell is alive with probability `fill`
+// (0.0 = all dead, 1.0 = all alive). The same seed must always give
+// the same grid.
+Cells random_cells(int width, int height, unsigned int seed, double fill);
+
+// The grid as text, one row per line: '#' for alive, '.' for dead,
+// and a '\n' after every row (including the last).
+std::string render(const Cells&amp; cells, int width, int height);
+</code></pre>
+
+<p>Take each signature as a sentence. Read the return type as "gives back a ...", the name as the verb or noun, and each parameter as "given a ...".</p>
+
+<ul>
+<li><p><code>int index_of(int x, int y, int width);</code> — Given a column, a row, and the grid width, all <code>int</code>, gives back an <code>int</code>: a position in the flat list. Three inputs of the same type, so order matters: <code>x</code> first, then <code>y</code>, then <code>width</code>. The comment's examples are the first checks you should write. Just like <code>clamp</code> and <code>area</code>, this is plain arithmetic in, arithmetic out, with no other effect; it is milestone 1 for a reason.</p></li>
+
+<li><p><code>int wrap(int v, int n);</code> — Given a value and a size, gives back the value folded into the range <code>[0, n)</code>, that is 0 to n−1 inclusive. Same shape as <code>clamp</code>: a small <code>int</code> function with a few cases, one of which (negative <code>v</code>) is the trap the comment hints at. <a href="07-flat-grid.html">Chapter 7</a> teaches the arithmetic on a clock face.</p></li>
+
+<li><p><code>int count_neighbours(const Cells&amp; cells, int width, int height, int x, int y);</code> — Gives back an <code>int</code>, a count from 0 to 8. The first parameter is new: <code>const Cells&amp;</code>. <code>Cells</code> is the short name the <code>using</code> line gives to "a <code>std::vector</code> of bytes", a list of cells you will meet in <a href="06-vector.html">chapter 6</a>. The <code>&amp;</code> makes it a <em>reference</em>, and the <code>const</code> says the function promises not to change it. Read <code>const Cells&amp; cells</code> as "look at the caller's cells without copying them and without modifying them". <a href="05-references-and-const.html">Chapter 5</a> is entirely about these two words; for today, the promise is what matters: this function only <em>reads</em> the grid.</p></li>
+
+<li><p><code>void step(const Cells&amp; current, Cells&amp; next, int width, int height);</code> — Returns <em>nothing</em>, so its whole effect must be through its parameters, and the signature tells you which one. <code>current</code> is <code>const Cells&amp;</code>: read only. <code>next</code> is <code>Cells&amp;</code>, without <code>const</code>: a reference the function is allowed to write through. So <code>step</code> reads one grid and fills in the other. This is the one place in the contract where a function changes something that belongs to the caller, and it is the mechanism this chapter said pass-by-value could not do. Chapter 5 shows how. The comment also states the Life rules in words; chapter 7 and chapter 14 give you everything else you need.</p></li>
+
+<li><p><code>Cells random_cells(int width, int height, unsigned int seed, double fill);</code> — Gives back a whole <code>Cells</code>: this function <em>creates</em> a grid and returns it, the way <code>square</code> creates and returns a number. Four inputs of three different types: two <code>int</code>s for the shape, an <code>unsigned int</code> (an integer that cannot be negative) for the random seed, and a <code>double</code> between 0 and 1 for how full the grid should be. The comment's last sentence, "the same seed must always give the same grid", is a promise you will test. Randomness arrives in <a href="08-strings-and-args.html">chapter 8</a>.</p></li>
+
+<li><p><code>std::string render(const Cells&amp; cells, int width, int height);</code> — Reads a grid (<code>const</code>, read-only again) and gives back a <code>std::string</code>: text, one character per cell plus a newline per row. Chapter 8 introduces <code>std::string</code>. The signature already tells you two things: <code>render</code> does not print (it <em>returns</em> the text, and <code>main</code> decides what to do with it), and it cannot alter the grid.</p></li>
+</ul>
+
+<p>Six declarations, and you could read every one: what goes in, what comes out, which inputs may be changed. Two types (<code>Cells</code>, <code>std::string</code>) and one piece of syntax (<code>&amp;</code>) are still ahead of you, but the <em>shape</em> of each promise is already clear.</p>
+
+<div class="callout principle"><span class="label">First principle</span><p>A function's signature is a promise. The return type promises what comes back; each parameter type promises what is needed and, with <code>const</code>, whether it will be touched; the comment promises what the result means. The tests in <code>tests/life_test.cpp</code> are those promises written down as checks: <code>CHECK(wrap(-1, 10) == 9)</code> is the comment on <code>wrap</code> turned into a line the computer can verify. When your definitions keep every promise, every test is green. That is the whole of Week 1.</p></div>
+
+<div class="callout twin"><span class="label">Inference twin</span><p>In an inference engine, a <strong>tensor</strong> is a grid of numbers (one, two or more dimensions), and a <strong>kernel</strong> is a function applied to every element of a tensor, or to every small neighbourhood of elements. <code>step</code> applies <code>count_neighbours</code> plus the Life rule to every cell of the grid; a convolution kernel applies a weighted sum to every 3×3 patch of an image; a GELU kernel applies one formula to every number in a layer. Same shape: a small, pure function with a clear signature, run across a flat array. ggml, the library under llama.cpp, is a few hundred such functions, each with a signature you can read exactly the way you just read <code>life.hpp</code>. Being able to read "takes a <code>const</code> view of the input, writes into the output, returns nothing" is being able to read ggml.</p></div>
+
+<h2>Check yourself</h2>
+<div class="quiz">
+<div class="q"><p>In <code>int max_of(int a, int b)</code>, which parts are the return type, the name, and the parameter list? What is the signature?</p><details class="answer"><summary>Answer</summary><p>Return type <code>int</code>; name <code>max_of</code>; parameter list <code>(int a, int b)</code>, two <code>int</code> parameters named <code>a</code> and <code>b</code>. The signature is the whole line without a body: <code>int max_of(int a, int b)</code>, meaning "takes two ints, returns an int".</p></details></div>
+
+<div class="q"><p>A function <code>void reset(int n) { n = 0; }</code> is called as <code>reset(lives);</code> where <code>lives</code> is 3. What is <code>lives</code> afterwards, and why?</p><details class="answer"><summary>Answer</summary><p>Still 3. The argument <code>lives</code> is copied into the parameter <code>n</code>; the function sets its own copy to 0 and then that copy is destroyed. Passing by value means the caller's variable cannot be changed. Chapter 5's references are the tool for changing it.</p></details></div>
+
+<div class="q"><p>What is the difference between <code>int cube(int x);</code> and <code>int cube(int x) { return x * x * x; }</code>? How many of each may a program contain?</p><details class="answer"><summary>Answer</summary><p>The first is a declaration (prototype): it tells the compiler the function exists and its signature. The second is a definition: it also provides the body. A program may contain as many identical declarations as it likes but exactly one definition. A declaration must appear before the first call; the definition can be anywhere, even in another file.</p></details></div>
+
+<div class="q"><p>Why does this fail to compile, and what is the one-line fix without moving any code?</p>
+<pre class="code" data-lang="cpp" data-file="quiz_order.cpp" data-check="fragment"><code>int main() {
+    return twice(4);
+}
+int twice(int n) { return 2 * n; }
+</code></pre>
+<details class="answer"><summary>Answer</summary><p>The compiler reads top to bottom and meets <code>twice</code> in <code>main</code> before it has seen any declaration of it: "use of undeclared identifier 'twice'". Add the prototype <code>int twice(int n);</code> above <code>main</code>. (The return value 8 would also become the program's exit code, which is legal but odd.)</p></details></div>
+
+<div class="q"><p>Functions <code>a</code> and <code>b</code> each declare a local variable called <code>total</code>. <code>a</code> calls <code>b</code>. While <code>b</code> is running, how many variables called <code>total</code> exist, and where do they live?</p><details class="answer"><summary>Answer</summary><p>Two, one in each stack frame: <code>a</code>'s frame (paused, underneath) and <code>b</code>'s frame (active, on top). They are different boxes with the same label and do not interfere. When <code>b</code> returns, its frame and its <code>total</code> disappear; <code>a</code>'s is unchanged.</p></details></div>
+
+<div class="q"><p>What does <code>return 0;</code> at the end of <code>main</code> actually do, and who reads the value?</p><details class="answer"><summary>Answer</summary><p>It ends <code>main</code>, so the program, and hands the <code>int</code> 0 to the operating system as the exit code. 0 means success by convention; any other value means failure. The shell exposes it as <code>$?</code>, and tools such as <code>ctest</code> read it to decide whether a test program passed.</p></details></div>
+
+<div class="q"><p>Read this declaration from <code>life.hpp</code> as a sentence: <code>void step(const Cells&amp; current, Cells&amp; next, int width, int height);</code>. Which parameter can the function change?</p><details class="answer"><summary>Answer</summary><p>"<code>step</code> returns nothing; it is given read-only access to <code>current</code>, writable access to <code>next</code>, and the two <code>int</code> dimensions." Only <code>next</code> can be changed: it is a reference (<code>&amp;</code>) without <code>const</code>. <code>current</code> is <code>const</code>, so the function promises not to modify it, and the <code>int</code>s are copies anyway. The test "step: does not modify current" checks exactly this promise.</p></details></div>
+
+<div class="q"><p>The compiler says <code>warning: non-void function does not return a value in all control paths</code>. Why is this more serious than a typical warning?</p><details class="answer"><summary>Answer</summary><p>Because reaching the end of a non-void function without a <code>return</code> is undefined behaviour: the caller receives an unpredictable value and the program may seem to work until it does not. The fix is to add the missing <code>return</code> for the forgotten path (often the "otherwise" case at the bottom), never to silence the warning.</p></details></div>
+</div>
+
+<h2>What you can do now</h2>
+<ul>
+<li>Replace repeated code with a named function and call it with different arguments.</li>
+<li>Write a function with a return type, a name, typed parameters, a body and <code>return</code>, and a <code>void</code> function that returns nothing.</li>
+<li>Explain why a function cannot change the caller's variables (arguments are copied) and predict the output of a program that tries.</li>
+<li>Recognise "use of undeclared identifier" and fix it with a prototype; tell a declaration from a definition.</li>
+<li>Say where a local variable is visible and when it is destroyed; explain why two functions can share a variable name.</li>
+<li>Describe the call stack: one frame per active call, stacked, discarded on return.</li>
+<li>Design small, single-purpose functions with honest names, and test one by hand with PASS/FAIL checks on normal, zero and edge inputs.</li>
+<li>Read every signature in <code>phase1-terminal/01-life/src/life.hpp</code> and state what goes in, what comes out, and which parameter may be modified.</li>
+</ul>
+</main>
+</body>
+</html>

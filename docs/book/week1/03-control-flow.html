@@ -1,0 +1,990 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>03 · Decisions and loops — C++ from zero to Life</title>
+<link rel="stylesheet" href="assets/book.css?v=9">
+<link rel="stylesheet" href="assets/tutor.css?v=9">
+<script src="assets/theme.js?v=9"></script>
+<script defer src="assets/book.js?v=9"></script>
+<script defer src="assets/tutor.js?v=9"></script>
+</head>
+<body>
+<nav class="sidebar" aria-label="Chapters"></nav>
+<main>
+<p class="chapter-kicker">Chapter 03</p>
+<h1>Decisions and loops</h1>
+<p class="lede">At the end of this chapter you can make a program choose between paths and repeat work a controlled number of times. You will print a rectangle of dots and a checkerboard with two nested loops, and you will write the skeleton of the game loop that runs Life.</p>
+
+<div class="callout note"><span class="label">In this chapter</span>
+<ul>
+<li>Conditions: comparisons that produce a <code>bool</code>, and the words <code>&amp;&amp;</code>, <code>||</code>, <code>!</code> that combine them.</li>
+<li><code>if</code>, <code>else if</code>, <code>else</code>, and what the braces around a block really mean.</li>
+<li><code>while</code>: repeat as long as something is true, including the loop that never stops.</li>
+<li><code>std::print</code>, which stays on the line, and <code>for</code>: the counting loop, why it counts from 0, and the off-by-one trap.</li>
+<li><code>break</code> and <code>continue</code>.</li>
+<li>Nested loops: rows and columns, a frame of the game, and what a loop costs.</li>
+<li>The game loop in words and as C++, and its twin, the decode loop.</li>
+</ul>
+</div>
+
+<h2>Two new powers</h2>
+<p>Every program you have written so far has the same shape. The CPU starts at the first line of <code>main</code>, performs each line once, in order, and stops at <code>return 0</code>. That is a straight road. It is enough to print a greeting or calculate the size of an <code>int</code>, but it cannot play a game. A game has to <em>look</em> at the state of the world and act differently depending on what it sees, and it has to do that again and again, frame after frame, until you quit. (A <strong>frame</strong> is one complete picture drawn on the screen; an animation is many frames shown one after another, and in Life each frame shows one generation.)</p>
+<p>This chapter adds exactly two powers to the straight road:</p>
+<ul>
+<li><strong>Choosing.</strong> Run this piece of code only if some question has the answer yes. In C++ this is <code>if</code>.</li>
+<li><strong>Repeating.</strong> Run this piece of code again and again as long as some question has the answer yes. In C++ this is a <strong>loop</strong>, written with <code>while</code> or <code>for</code>.</li>
+</ul>
+<p>Together these two are called <strong>control flow</strong>: they control which way execution flows. The Game of Life is a loop (one pass per generation) containing two loops (one per row, one per cell in the row) containing an <code>if</code> (does this cell live or die?). An inference engine that writes text is a loop (one pass per word) containing loops over millions of numbers. Same two powers, arranged differently.</p>
+
+<div class="callout principle"><span class="label">First principle</span><p>The CPU has an instruction that says "compare these two numbers" and an instruction that says "jump to a different place in the program if the last comparison came out a certain way". That is all. <code>if</code> is a compare followed by a jump forward over the code you want to skip. A loop is a compare followed by a jump <em>backward</em> to code you want to run again. Every construct in this chapter is one of those two jumps wearing a readable costume.</p></div>
+
+<h2>Conditions: questions with a yes or no answer</h2>
+<p>Before you can choose, you need something to choose on. A <strong>condition</strong> is an expression whose value is either <code>true</code> or <code>false</code>. You met the type that holds such a value in <a href="02-values-and-types.html">chapter 2</a>: <code>bool</code>. The most common way to make a <code>bool</code> is to compare two numbers.</p>
+
+<h3>Comparison operators</h3>
+<p>C++ has six <strong>comparison operators</strong>. Each one takes two values, asks a question about them, and produces a <code>bool</code>:</p>
+<ul>
+<li><code>a == b</code> &mdash; is <code>a</code> equal to <code>b</code>? (Two equals signs. One equals sign means something else; see the trap below.)</li>
+<li><code>a != b</code> &mdash; is <code>a</code> different from <code>b</code>? (Read <code>!=</code> as "not equal".)</li>
+<li><code>a &lt; b</code>, <code>a &lt;= b</code> &mdash; less than, less than or equal.</li>
+<li><code>a &gt; b</code>, <code>a &gt;= b</code> &mdash; greater than, greater than or equal.</li>
+</ul>
+<p>Here is a program that asks all six questions about one number. The number is a person's age, because "how old are you?" is the question a doorman asks, and the next section builds a whole door policy out of it. One line uses <code>||</code>, which you have not met yet: take it on trust for a moment as "or", it is explained in the next section.</p>
+
+<pre class="code" data-lang="cpp" data-file="compare.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int main() {
+    const int age = 17;
+
+    std::println("age == 18 is {}", age == 18);
+    std::println("age != 18 is {}", age != 18);
+    std::println("age &lt;  18 is {}", age &lt; 18);
+    std::println("age &lt;= 17 is {}", age &lt;= 17);
+    std::println("age &gt;  18 is {}", age &gt; 18);
+    std::println("age &gt;= 18 is {}", age &gt;= 18);
+
+    const bool reduced_fare = age &lt; 12 || age &gt;= 65;
+    std::println("reduced_fare is {}", reduced_fare);
+    std::println("a bool takes {} byte", sizeof(reduced_fare));
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="compare.cpp"><code>age == 18 is false
+age != 18 is true
+age &lt;  18 is true
+age &lt;= 17 is true
+age &gt;  18 is false
+age &gt;= 18 is false
+reduced_fare is false
+a bool takes 1 byte
+</code></pre>
+
+<p>Three things to notice. First, <code>std::println</code> prints a <code>bool</code> as the word <code>true</code> or <code>false</code>. Second, a comparison is an ordinary value: you can store it in a <code>const bool</code>, as the program does with <code>reduced_fare</code> (children and pensioners pay less), or use it directly inside an <code>if</code>, as the next sections do. Third, a <code>bool</code> occupies one byte. It needs only one bit, but memory is handed out in whole bytes: there is no way to name a single bit on its own, so the smallest possible variable is one byte.</p>
+
+<h3>Combining conditions: and, or, not</h3>
+<p>Real questions are compound. A door policy might say "you may enter if you are 18 or older <em>and</em> on the guest list, <em>or</em> if you are staff; everyone else is turned away". C++ gives you three <strong>logical operators</strong> for this:</p>
+<ul>
+<li><code>a &amp;&amp; b</code> &mdash; <strong>and</strong>: true only when both <code>a</code> and <code>b</code> are true.</li>
+<li><code>a || b</code> &mdash; <strong>or</strong>: true when at least one of them is true (both is fine too).</li>
+<li><code>!a</code> &mdash; <strong>not</strong>: flips <code>true</code> to <code>false</code> and <code>false</code> to <code>true</code>.</li>
+</ul>
+<p>The <code>&amp;</code> character is an ampersand; <code>|</code> is a vertical bar (on a US-layout Mac keyboard, <kbd>Shift</kbd> plus the backslash key). Both are doubled on purpose: single <code>&amp;</code> and single <code>|</code> mean something different (bitwise operations, week 9), so always type two.</p>
+
+<pre class="code" data-lang="cpp" data-file="logic.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int main() {
+    const int age = 17;
+    const bool on_list = true;
+    const bool is_staff = false;
+
+    // AND: both sides must be true
+    const bool adult_guest = age &gt;= 18 &amp;&amp; on_list;
+    // OR: at least one side must be true
+    const bool may_enter = adult_guest || is_staff;
+    // NOT: flips true to false and false to true
+    const bool turned_away = !may_enter;
+
+    std::println("true  &amp;&amp; true  = {}", true &amp;&amp; true);
+    std::println("true  &amp;&amp; false = {}", true &amp;&amp; false);
+    std::println("false || true  = {}", false || true);
+    std::println("false || false = {}", false || false);
+    std::println("!true          = {}", !true);
+    std::println("");
+    std::println("adult_guest = {}", adult_guest);
+    std::println("may_enter   = {}", may_enter);
+    std::println("turned_away = {}", turned_away);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="logic.cpp"><code>true  &amp;&amp; true  = true
+true  &amp;&amp; false = false
+false || true  = true
+false || false = false
+!true          = false
+
+adult_guest = false
+may_enter   = false
+turned_away = true
+</code></pre>
+
+<p>Look at the three lines that compute the policy. A 17-year-old on the list is not an <code>adult_guest</code> (the <code>&amp;&amp;</code> fails on age), is not staff either (so the <code>||</code> fails), and is therefore <code>turned_away</code>. The rule of Life, stated in words at the top of <code>phase1-terminal/01-life/src/life.hpp</code> ("a live cell with 2 or 3 live neighbours stays alive; a dead cell with exactly 3 becomes alive; every other cell is dead"), is a compound condition of exactly this kind: an "is alive" part, a count compared with two numbers, an "and" and an "or". Translating it into C++ is your job in milestone 4. What you lack today is a grid to apply it to, which comes in <a href="06-vector.html">chapter 6</a> and chapter 7.</p>
+<p>One useful detail: <code>&amp;&amp;</code> and <code>||</code> are <strong>short-circuit</strong> operators. When the left side of <code>&amp;&amp;</code> is false, the right side is never evaluated, because the answer is already false; likewise when the left side of <code>||</code> is true. This is not only a saving of effort, it is a safety guarantee you can lean on. Chapter 2 told you that dividing by zero is undefined behaviour. The program below divides by <code>n</code> only after checking that <code>n</code> is not zero, and because of short-circuiting the check really does protect the division:</p>
+
+<pre class="code" data-lang="cpp" data-file="shortcircuit.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int main() {
+    const int n = 0;
+
+    if (n != 0 &amp;&amp; 100 / n &gt; 3) {
+        std::println("100 / n is bigger than 3");
+    } else {
+        std::println("n is 0, so the division was never attempted");
+    }
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="shortcircuit.cpp"><code>n is 0, so the division was never attempted
+</code></pre>
+
+<p><code>n != 0</code> is false, so the CPU never reaches <code>100 / n</code>. Swap the two halves (<code>100 / n &gt; 3 &amp;&amp; n != 0</code>) and the division runs first, on zero, and the program is broken. The order of the two sides of <code>&amp;&amp;</code> matters: put the check on the left and the thing it protects on the right. In <a href="08-strings-and-args.html">chapter 8</a> you will use the same pattern to write <code>arg == "--width" &amp;&amp; i + 1 &lt; argc</code>, where reading <code>argv[i + 1]</code> without the check on the left would be the dangerous half.</p>
+
+<div class="callout analogy"><span class="label">Analogy</span><p>A condition is a question a bouncer asks at a door, and <code>logic.cpp</code> is that door. "Are you 18 <em>and</em> on the list?" Both must be yes. "Are you a guest who passed <em>or</em> are you staff?" Either one will do. The analogy breaks in one place: a bouncer can shrug and say "maybe". A C++ condition cannot. Every condition is exactly <code>true</code> or exactly <code>false</code>, every time, with no third option. That strictness is what makes programs predictable.</p></div>
+
+<h3>Precedence: when in doubt, add parentheses</h3>
+<p>Operators have a pecking order called <strong>precedence</strong>, just as multiplication happens before addition. Comparisons happen before <code>&amp;&amp;</code>, and <code>&amp;&amp;</code> before <code>||</code>; that is why <code>age &lt; 12 || age &gt;= 65</code> and <code>age &gt;= 18 &amp;&amp; on_list</code> work without parentheses. <code>!</code> binds tightest of all: it applies to the single thing immediately to its right, so <code>!weekend &amp;&amp; open</code> means "(not weekend) and open", never "not (weekend and open)". But the full table has seventeen levels and nobody keeps it in their head. The rule this book follows: <strong>when two different operators meet in one condition, put parentheses around the part you want evaluated first.</strong></p>
+<p>Here is a case where leaving them out stops the program from compiling. In mathematics 1 &lt; x &lt; 5 means "x is between 1 and 5". In C++ it is two comparisons in a row: <code>1 &lt; x</code> produces a <code>bool</code>, and then that <code>bool</code> is compared with 5. If the compiler let that through, the <code>bool</code> would be treated as a number (<code>true</code> counts as 1, <code>false</code> as 0), <code>1 &lt; 5</code> would be true, and the program would claim that 50 is between 1 and 5. Clang recognises the classic mistake and refuses:</p>
+
+<pre class="code" data-lang="cpp" data-file="chained.cpp" data-check="error"><code>#include &lt;print&gt;
+
+int main() {
+    const int x = 50;
+
+    // What you MEANT: is x between 1 and 5?
+    const bool wrong = 1 &lt; x &lt; 5;
+    const bool right = 1 &lt; x &amp;&amp; x &lt; 5;
+
+    std::println("1 &lt; x &lt; 5        gives {}", wrong);
+    std::println("1 &lt; x &amp;&amp; x &lt; 5   gives {}", right);
+    return 0;
+}
+</code></pre>
+<pre class="output"><code>chained.cpp:7:30: error: chained comparison 'X &lt; Y &lt; Z' does not behave the same as a mathematical expression [-Wparentheses]
+    7 |     const bool wrong = 1 &lt; x &lt; 5;
+      |                              ^
+1 error generated.
+</code></pre>
+
+<p>Every clang message has the same anatomy: <em>file</em>:<em>line</em>:<em>column</em>, <code>error</code> or <code>warning</code>, a sentence, then the offending line with a caret <code>^</code> under the spot. The name in square brackets, <code>[-Wparentheses]</code>, is the switch that controls this particular check; most warnings carry one, most errors do not. (This check is unusual: clang treats it as an error even without <code>-Wall</code>.) The fix is the <code>right</code> line: both halves explicitly, joined with <code>&amp;&amp;</code>.</p>
+<p>Clang is similarly suspicious when <code>&amp;&amp;</code> and <code>||</code> meet without parentheses. This compiles and runs, but with <code>-Wall</code> it warns:</p>
+
+<pre class="code" data-lang="cpp" data-file="mixed.cpp" data-check="fragment"><code>#include &lt;print&gt;
+
+int main() {
+    const bool a = true;
+    const bool b = false;
+    const bool c = true;
+    std::println("{}", a || b &amp;&amp; c);
+    return 0;
+}
+</code></pre>
+<pre class="shell"><code>$ clang++ -std=c++23 -Wall -Wextra mixed.cpp -o mixed
+mixed.cpp:7:31: warning: '&amp;&amp;' within '||' [-Wlogical-op-parentheses]
+    7 |     std::println("{}", a || b &amp;&amp; c);
+      |                          ~~ ~~^~~~
+mixed.cpp:7:31: note: place parentheses around the '&amp;&amp;' expression to silence this warning
+    7 |     std::println("{}", a || b &amp;&amp; c);
+      |                               ^
+      |                             (     )
+1 warning generated.
+$ ./mixed
+true
+</code></pre>
+
+<p>The answer <code>true</code> is correct here, because <code>&amp;&amp;</code> is done first and <code>a</code> alone is enough for the <code>||</code>. The warning is not about the answer; it is about the reader. Take the hint and write <code>a || (b &amp;&amp; c)</code>, so that nobody has to remember the table to know what you meant.</p>
+
+<h3>The trap: <code>=</code> is not <code>==</code></h3>
+<p>A single <code>=</code> is <strong>assignment</strong>: "store this value in that variable". A double <code>==</code> is <strong>comparison</strong>: "are these equal?". Both are legal inside an <code>if</code>, which is the problem. Here is a program with the bug in it. It compiles, and the compiler tells you exactly what is wrong, but only if you read the warnings:</p>
+
+<pre class="code" data-lang="cpp" data-file="assign.cpp" data-check="fragment"><code>#include &lt;print&gt;
+
+int main() {
+    int neighbours = 2;
+
+    if (neighbours = 3) {
+        std::println("exactly three neighbours (neighbours is now {})", neighbours);
+    } else {
+        std::println("not three");
+    }
+    return 0;
+}
+</code></pre>
+<pre class="shell"><code>$ clang++ -std=c++23 -Wall -Wextra assign.cpp -o assign
+assign.cpp:6:20: warning: using the result of an assignment as a condition without parentheses [-Wparentheses]
+    6 |     if (neighbours = 3) {
+      |         ~~~~~~~~~~~^~~
+assign.cpp:6:20: note: place parentheses around the assignment to silence this warning
+    6 |     if (neighbours = 3) {
+      |                    ^  
+      |         (             )
+assign.cpp:6:20: note: use '==' to turn this assignment into an equality comparison
+    6 |     if (neighbours = 3) {
+      |                    ^
+      |                    ==
+1 warning generated.
+$ ./assign
+exactly three neighbours (neighbours is now 3)
+</code></pre>
+
+<p>What happened: <code>neighbours = 3</code> stored 3 in <code>neighbours</code>, destroying the 2. The value of an assignment is the value stored, so the condition became <code>3</code>, and any non-zero number counts as <code>true</code>. The <code>if</code> took the first branch and printed a lie. No crash, just a wrong answer and a quietly corrupted variable.</p>
+<p>Two defences. First, <strong>never ignore a warning</strong>: this book and the project's <code>CMakeLists.txt</code> compile with <code>-Wall -Wextra</code> precisely so that mistakes like this are reported. Second, <code>const</code>. Had <code>neighbours</code> been <code>const int</code>, the typo would be a hard error, because you cannot assign to a constant:</p>
+
+<pre class="code" data-lang="cpp" data-file="assign_const.cpp" data-check="error"><code>#include &lt;print&gt;
+
+int main() {
+    const int neighbours = 2;
+
+    if (neighbours = 3) {
+        std::println("exactly three neighbours");
+    }
+    return 0;
+}
+</code></pre>
+<pre class="output"><code>assign_const.cpp:6:20: error: cannot assign to variable 'neighbours' with const-qualified type 'const int'
+    6 |     if (neighbours = 3) {
+      |         ~~~~~~~~~~ ^
+assign_const.cpp:4:15: note: variable 'neighbours' declared const here
+    4 |     const int neighbours = 2;
+      |     ~~~~~~~~~~^~~~~~~~~~~~~~
+1 error generated.
+</code></pre>
+
+<div class="callout trap"><span class="label">Trap</span><p><code>if (x = 5)</code> compiles and is almost always wrong. Train your eye: inside the parentheses of an <code>if</code> or a loop, a single <code>=</code> should make you stop and look. Make everything <code>const</code> that does not need to change, and the compiler will catch the slip for you.</p></div>
+
+<h2><code>if</code>, <code>else if</code>, <code>else</code></h2>
+<p>Now you can choose. The shape is:</p>
+<pre class="code" data-lang="cpp" data-file="if-shape.cpp" data-check="fragment"><code>if (condition) {
+    // runs only when condition is true
+} else if (another_condition) {
+    // runs only when condition was false AND another_condition is true
+} else {
+    // runs when every condition above was false
+}
+</code></pre>
+<p>The parentheses around the condition are required. The braces are not, when a branch is a single statement, but this book always writes them and so should you: a branch without braces is a bug waiting for the day someone adds a second line. <code>else if</code> is not a separate keyword: it is an <code>else</code> whose single statement happens to be another <code>if</code>, written on one line because that reads better than nesting the braces. It may be repeated as often as you need; <code>else</code> is optional and must be last. The conditions are evaluated top to bottom and the <em>first</em> true one wins; everything after its branch is skipped. At most one branch runs, possibly none if there is no <code>else</code>.</p>
+<p>Here is a shop deciding whether it is open, with the day and the hour baked in as constants. The shop opens 10 to 18 at the weekend and 8 to 20 on weekdays:</p>
+
+<pre class="code" data-lang="cpp" data-file="ifelse.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int main() {
+    const bool weekend = true;
+    const int hour = 23;
+
+    if (weekend &amp;&amp; (hour &gt;= 10 &amp;&amp; hour &lt; 18)) {
+        std::println("open (weekend hours)");
+    } else if (!weekend &amp;&amp; (hour &gt;= 8 &amp;&amp; hour &lt; 20)) {
+        std::println("open (weekday hours)");
+    } else {
+        std::println("closed");
+    }
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="ifelse.cpp"><code>closed
+</code></pre>
+
+<p>Trace it by hand once. <code>weekend</code> is true but <code>hour</code> is 23, so the first condition is false. <code>!weekend</code> is false, so the second is false without even looking at the hour (short-circuit). <code>else</code> catches the rest. The Life rule, once you have a grid, is an <code>if</code>/<code>else if</code>/<code>else</code> of exactly this shape: one branch for staying alive, one for being born, <code>else</code> for dead.</p>
+
+<div class="callout try"><span class="label">Try it</span><p>In <code>ifelse.cpp</code>, change <code>hour</code> to 15 and predict the output before you run it. Then also change <code>weekend</code> to <code>false</code> and predict again. Finally set <code>hour</code> to 18 with <code>weekend</code> back to <code>true</code>: is the shop open at exactly 18:00? Check your prediction against the condition <code>hour &lt; 18</code>.</p>
+<details class="answer"><summary>Show the answer</summary><p><code>hour = 15</code>, weekend: <code>open (weekend hours)</code>. <code>hour = 15</code>, weekday: the first condition fails on <code>weekend</code>, the second passes, <code>open (weekday hours)</code>. <code>hour = 18</code>, weekend: <code>18 &lt; 18</code> is false, so <code>closed</code>. The shop is open from 10:00 up to but not including 18:00, which is what "10 to 18" usually means. Note how the same start-inclusive, end-exclusive shape comes back in the counting loop later in this chapter.</p></details></div>
+<p>Branch order matters when conditions overlap. Here every condition is a plain <code>&lt;</code>, and the chain works only because the thresholds are checked from smallest upward:</p>
+
+<pre class="code" data-lang="cpp" data-file="fever.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int main() {
+    const double temperature = 38.6;
+
+    if (temperature &lt; 35.0) {
+        std::println("{} is too cold", temperature);
+    } else if (temperature &lt; 37.5) {
+        std::println("{} is normal", temperature);
+    } else if (temperature &lt; 39.0) {
+        std::println("{} is a mild fever", temperature);
+    } else {
+        std::println("{} is a high fever", temperature);
+    }
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="fever.cpp"><code>38.6 is a mild fever
+</code></pre>
+
+<p>38.6 is less than 39.0, but it is also less than a million; the program says "mild fever" only because the lower thresholds were asked first and answered false. Reverse the branches and every temperature under 39.0 becomes a mild fever. Whenever you write an <code>else if</code> chain, ask whether the order matters. Usually it does.</p>
+
+<h2>Blocks and scope</h2>
+<p>The pair of braces <code>{ }</code> after an <code>if</code> is not decoration. A pair of braces is a <strong>block</strong>: a group of statements that the language treats as one unit. Blocks have a second job that you have been relying on since chapter 1 without knowing it. <strong>A variable declared inside a block exists only until the closing brace of that block.</strong> The region of the program where a name is usable is called its <strong>scope</strong>.</p>
+<p>You can write a bare block anywhere, with no <code>if</code> in front of it, to see this on its own:</p>
+
+<pre class="code" data-lang="cpp" data-file="scope.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int main() {
+    const int outer = 1;
+    {
+        const int inner = 2;
+        std::println("inside the block: outer = {}, inner = {}", outer, inner);
+    }
+    std::println("after the block: outer = {}", outer);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="scope.cpp"><code>inside the block: outer = 1, inner = 2
+after the block: outer = 1
+</code></pre>
+
+<p>Inside the block, both names work: <code>inner</code> was declared there, and <code>outer</code> was declared in an enclosing block (the body of <code>main</code>), and inner blocks can see outward. After the closing brace, <code>inner</code> is gone. Not "set to zero", not "empty": the name no longer refers to anything. Try to use it and the compiler stops you:</p>
+
+<pre class="code" data-lang="cpp" data-file="scope_error.cpp" data-check="error"><code>#include &lt;print&gt;
+
+int main() {
+    {
+        const int inner = 2;
+        std::println("inside the block: inner = {}", inner);
+    }
+    std::println("after the block: inner = {}", inner);
+    return 0;
+}
+</code></pre>
+<pre class="output"><code>scope_error.cpp:8:49: error: use of undeclared identifier 'inner'
+    8 |     std::println("after the block: inner = {}", inner);
+      |                                                 ^~~~~
+1 error generated.
+</code></pre>
+
+<p>"Undeclared identifier" is the message you will see most often in your first weeks. It always means one of two things: you misspelled a name, or you are using a name outside the block where it was declared. Check the braces first.</p>
+
+<div class="callout analogy"><span class="label">Analogy</span><p>A block is a room. Things you put down in the room are there while you are in it. When you walk out through the closing brace, the room and everything in it is demolished. The corridor outside (the enclosing block) is still there, and so is anything you left in the corridor. Where the analogy breaks: in a building you could walk back into the room and find your things. In C++, entering the same block again (as a loop does, many times) builds a fresh room with fresh variables every time. Nothing survives from the previous pass unless it was declared outside.</p></div>
+
+<p>Why does the language work this way? Memory. The bytes for a block's variables are needed only while the block runs; once it ends they can be reused for whatever comes next, and the compiler plans that reuse for you (in practice it often reserves the space for a whole function at once, but the rule you see is the one above). It also protects you: a variable that exists for six lines can only be misused in six lines. <a href="04-functions.html">Chapter 4</a> extends the idea to functions, which are blocks with a name.</p>
+
+<h2><code>while</code>: repeat as long as</h2>
+<p>A <code>while</code> loop is an <code>if</code> that jumps back to its own start:</p>
+<pre class="code" data-lang="cpp" data-file="while-shape.cpp" data-check="fragment"><code>while (condition) {
+    // the loop body: runs, then the condition is checked again
+}
+</code></pre>
+<p>The CPU checks the condition. If it is true, it runs the body, then jumps back up and checks the condition again. If it is false, it jumps past the closing brace and carries on with the rest of the program. Each pass through the body is called an <strong>iteration</strong>. The body may run zero times, if the condition is false the very first time.</p>
+<p>The smallest honest loop counts:</p>
+
+<pre class="code" data-lang="cpp" data-file="count5.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int main() {
+    int count = 1;
+    while (count &lt;= 5) {
+        std::println("count is {}", count);
+        count = count + 1;
+    }
+    std::println("done, count is now {}", count);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="count5.cpp"><code>count is 1
+count is 2
+count is 3
+count is 4
+count is 5
+done, count is now 6
+</code></pre>
+
+<p><code>count</code> is declared <em>outside</em> the loop and without <code>const</code>: the condition reads it, the body changes it, and the change must survive to the next pass. Notice the final line: after the loop, <code>count</code> is 6, not 5. The body ran with <code>count</code> at 5, pushed it to 6, and then <code>6 &lt;= 5</code> came out false. The loop variable ends one step past the last value for which the body ran.</p>
+<p>Loops are not only for counting up. Here one halves a number until it reaches 1:</p>
+
+<pre class="code" data-lang="cpp" data-file="halve.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int main() {
+    int n = 100;
+    int halvings = 0;
+    while (n &gt; 1) {
+        n = n / 2;
+        halvings = halvings + 1;
+        std::println("after {} halvings: {}", halvings, n);
+    }
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="halve.cpp"><code>after 1 halvings: 50
+after 2 halvings: 25
+after 3 halvings: 12
+after 4 halvings: 6
+after 5 halvings: 3
+after 6 halvings: 1
+</code></pre>
+
+<p>Integer division (chapter 2) throws away the remainder, so 25 becomes 12 and 3 becomes 1. The loop runs six times for 100, 19 times for a million and 29 times for a billion (change <code>n</code> and let the computer count). Notice how slowly that grows: the number went up a million-fold, the passes went up from 6 to 29. Each halving cuts the remaining work in half, so the number of passes is the number of times 2 must be multiplied by itself to reach <code>n</code>; mathematicians write that log<sub>2</sub>(n), but the idea is "how many halvings until 1". That "halve until done" shape is why finding a word in a dictionary is fast: open in the middle, discard half, repeat. In week 5 you will use the same shape to search a sorted list.</p>
+
+<div class="callout try"><span class="label">Try it</span><p>Write the opposite of <code>halve.cpp</code>: start <code>value</code> at 1, double it while it is at most 1000, and count the doublings. Before running, say in one sentence which variable moves toward the exit and in which direction. Then predict the final value: is it below or above 1000?</p>
+<details class="hint"><summary>Stuck? First nudge</summary><p>The condition is <code>value &lt;= 1000</code>; the body does <code>value = value * 2</code> and adds one to a counter. The loop stops the first time <code>value</code> is bigger than 1000, so the printed value will be above 1000.</p></details>
+<details class="answer"><summary>Show the answer</summary>
+<pre class="code" data-lang="cpp" data-file="doublings.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int main() {
+    int value = 1;
+    int doublings = 0;
+    while (value &lt;= 1000) {
+        value = value * 2;
+        doublings = doublings + 1;
+    }
+    std::println("after {} doublings the value is {}", doublings, value);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="doublings.cpp"><code>after 10 doublings the value is 1024
+</code></pre>
+<p><code>value</code> moves up toward 1001 or more. The last pass ran with <code>value</code> at 512 (which is at most 1000), doubled it to 1024, and then <code>1024 &lt;= 1000</code> came out false. As in <code>count5.cpp</code>, the variable ends one step past the last value for which the body ran.</p>
+</details></div>
+
+<div class="callout principle"><span class="label">First principle</span><p>Every loop has a variable that moves toward the exit. In <code>count5.cpp</code> it is <code>count</code>, moving up toward 6. In <code>halve.cpp</code> it is <code>n</code>, moving down toward 1. In the game it will be the generation number, or a flag that becomes true when you press a key. Before you write a loop, name that variable and say in one sentence how each pass moves it closer to making the condition false. If you cannot say that sentence, the loop is not finished being designed. If nothing in the body moves it, you have written the next program.</p></div>
+
+<h3>The infinite loop</h3>
+<p>If the condition never becomes false, the loop never ends. Sometimes that is a bug. Sometimes it is exactly what you want: a game runs "forever", until the player quits. Here is the simplest forever loop. Compile it, run it, and watch it fill your terminal:</p>
+
+<pre class="code" data-lang="cpp" data-file="forever.cpp" data-check="compile"><code>#include &lt;print&gt;
+
+int main() {
+    int tick = 0;
+    while (true) {
+        std::println("tick {}", tick);
+        tick = tick + 1;
+    }
+    return 0;
+}
+</code></pre>
+<pre class="shell"><code>$ clang++ -std=c++23 -Wall -Wextra forever.cpp -o forever
+$ ./forever
+tick 0
+tick 1
+tick 2
+tick 3
+...
+tick 184306
+^C
+$
+</code></pre>
+
+<p>The condition is the literal <code>true</code>, so it is never false, and nothing in the body can change that. The program runs until you stop it from outside: hold <kbd>Ctrl</kbd> and press <kbd>C</kbd>. The terminal shows <code>^C</code> and your prompt returns: the operating system saw the key press and killed the running program for you, since the program itself was never going to stop. <kbd>Ctrl</kbd>+<kbd>C</kbd> is your emergency brake for the rest of this course. The number your terminal reaches will differ from the one shown.</p>
+<p>The <code>return 0</code> after the loop never runs, and that is fine. In chapter 9 the body becomes "draw the grid, wait a tenth of a second", and the Life animation is a <code>while (true)</code> exactly like this one, stopped with <kbd>Ctrl</kbd>+<kbd>C</kbd> or a step limit.</p>
+
+<h2><code>for</code>: the counting loop</h2>
+<p>One small tool first, so that the loop example has only one new thing in it. Until now every line of output came from <code>std::println</code>, which prints its text and then moves to a new line. Its sibling <code>std::print</code> (no <code>ln</code>) prints the text and stays on the same line, leaving the cursor right after the last character:</p>
+
+<pre class="code" data-lang="cpp" data-file="print_vs_println.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int main() {
+    std::print("one ");
+    std::print("two ");
+    std::print("three");
+    std::println("");
+    std::println("four");
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="print_vs_println.cpp"><code>one two three
+four
+</code></pre>
+
+<p>Three <code>print</code> calls landed on one line. The <code>std::println("")</code> prints nothing but the line break, which is how you end a line you built up piece by piece. You will use this pair constantly from here on: <code>print</code> for each cell in a row, <code>println</code> at the end of the row.</p>
+<p>Now look back at <code>count5.cpp</code>. Three separate lines are about the counter: declaring it, testing it, advancing it, in three different places. Counting is so common that C++ has a loop that puts all three in one line:</p>
+
+<pre class="code" data-lang="cpp" data-file="for10.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int main() {
+    const int n = 10;
+    for (int i = 0; i &lt; n; ++i) {
+        std::print("{} ", i);
+    }
+    std::println("");
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="for10.cpp"><code>0 1 2 3 4 5 6 7 8 9
+</code></pre>
+
+<p>Each <code>std::print("{} ", i)</code> prints one number and a space and stays on the line, so the ten numbers land side by side, and the <code>std::println("")</code> after the loop ends the line. The new thing is the <code>for</code> header. Inside the parentheses are three parts separated by semicolons:</p>
+<ol>
+<li><code>int i = 0</code> &mdash; the <strong>initialisation</strong>. Runs exactly once, before anything else. It declares the <strong>loop variable</strong> <code>i</code> and gives it a starting value.</li>
+<li><code>i &lt; n</code> &mdash; the <strong>condition</strong>. Checked before every pass, including the first. When it is false the loop ends.</li>
+<li><code>++i</code> &mdash; the <strong>step</strong>. Runs after every pass through the body, just before the condition is checked again. <code>++i</code> adds one to <code>i</code>; it is a short way of writing <code>i = i + 1</code>, and it gets its own short section below.</li>
+</ol>
+<p>So the CPU does this: set <code>i</code> to 0; check <code>0 &lt; 10</code>, true, run the body; add one; check <code>1 &lt; 10</code>, true, run the body; and so on, until <code>10 &lt; 10</code> is false and the loop ends having run the body ten times, with <code>i</code> taking the values 0 through 9.</p>
+<p>A <code>for</code> loop is nothing more than a <code>while</code> loop with the three counter lines gathered in one place. This program does exactly what <code>for10.cpp</code> does, with the parts pulled apart and labelled:</p>
+
+<pre class="code" data-lang="cpp" data-file="unrolled.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int main() {
+    const int n = 10;
+    int i = 0;                 // 1. initialisation, runs once
+    while (i &lt; n) {            // 2. condition, checked before every pass
+        std::print("{} ", i);  //    body
+        ++i;                   // 3. step, runs after every pass
+    }
+    std::println("");
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="unrolled.cpp"><code>0 1 2 3 4 5 6 7 8 9
+</code></pre>
+
+<p>One difference matters: in the <code>for</code> version, <code>i</code> is declared in the header, so its scope is the loop and it does not exist after the closing brace, exactly like <code>inner</code> in the scope example. The counter is the loop's private business and the compiler enforces that. In the <code>while</code> version <code>i</code> is still alive afterwards (with the value 10), which is occasionally useful and usually confusing.</p>
+
+<h3><code>++i</code></h3>
+<p><code>++i</code> is the <strong>increment</strong> operator: it adds one to <code>i</code>, exactly like <code>i = i + 1</code>. The short form exists because adding one is the most common thing anyone does to a variable. There is also <code>i++</code>; both add one, and they differ only in what the expression is worth inside a larger expression, which you will not do in this book. This book and the project's code write <code>++i</code>, so use that form. (Its mirror, <code>--i</code>, subtracts one.) Put next to the compound assignment from <a href="02-values-and-types.html">chapter 2</a>, the three spellings form a ladder: <code>++i</code> is <code>i += 1</code> is <code>i = i + 1</code>. The same shortcut exists for any amount, so <code>total += x</code> means <code>total = total + x</code>, and <code>-=</code> and <code>*=</code> work the same way; you will see <code>+=</code> adding things up in nearly every loop from <a href="06-vector.html">chapter 6</a> on.</p>
+
+<h3>Why count from 0, and why <code>&lt;</code> and not <code>&lt;=</code></h3>
+<p>The loop printed 0 to 9, not 1 to 10. To a newcomer that looks perverse. It is the most important habit in this chapter, and chapters 6 and 7 depend on it completely.</p>
+<p>When <code>n</code> things are stored one after another in memory (the cells of a grid row, say), the natural way to name them is by <em>distance from the start</em>. The first is at distance 0: it <em>is</em> the start. The last of <code>n</code> things is at distance <code>n - 1</code>. Counting from 0 makes "distance from the start" and "which one" the same number; counting from 1 would force a subtraction every time, and you would forget, and the program would read the wrong byte. Every list-like type in C++ numbers its items from 0 (<code>std::vector</code>, in <a href="06-vector.html">chapter 6</a>, is the first you will meet), and the formula in <code>life.hpp</code>, cell (<code>x</code>, <code>y</code>) at position <code>y * width + x</code>, is only correct if <code>x</code> and <code>y</code> start at 0. Check it with the first cell: <code>x = 0</code>, <code>y = 0</code> gives position 0, the start. With counting from 1 the first cell would land at position <code>width + 1</code>, and nothing would be where you expect.</p>
+<p>Once the count starts at 0, the condition must be <code>i &lt; n</code>, never <code>i &lt;= n</code>. With <code>i &lt; n</code> the body runs for 0, 1, …, n&minus;1: exactly <code>n</code> times, ending on the last of the <code>n</code> things. With <code>i &lt;= n</code> it runs <code>n + 1</code> times and the final pass uses position <code>n</code>: one past the end, a cell that does not exist. Reading or writing it is the most common serious bug in C and C++. Here is the difference counted:</p>
+
+<pre class="code" data-lang="cpp" data-file="offbyone.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int main() {
+    const int n = 5;
+
+    int passes_lt = 0;
+    for (int i = 0; i &lt; n; ++i) {
+        passes_lt = passes_lt + 1;
+    }
+
+    int passes_le = 0;
+    for (int i = 0; i &lt;= n; ++i) {
+        passes_le = passes_le + 1;
+    }
+
+    std::println("n = {}", n);
+    std::println("i &lt; n  ran the body {} times", passes_lt);
+    std::println("i &lt;= n ran the body {} times", passes_le);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="offbyone.cpp"><code>n = 5
+i &lt; n  ran the body 5 times
+i &lt;= n ran the body 6 times
+</code></pre>
+
+<p>Being wrong by one is so common that it has a name: an <strong>off-by-one error</strong>. The cure is the idiom. Burn this line into your fingers, for every time you need to visit <code>n</code> things:</p>
+<pre class="code" data-lang="cpp" data-file="idiom.cpp" data-check="fragment"><code>for (int i = 0; i &lt; n; ++i) { ... }
+</code></pre>
+<p>Start at 0, stop before <code>n</code>, step by one. Whenever you catch yourself writing <code>i = 1</code> or <code>&lt;=</code> in a loop header, stop and ask why. Occasionally there is a reason. Usually there is not.</p>
+
+<div class="callout try"><span class="label">Try it</span><p>Change <code>for10.cpp</code> to print the numbers from 10 down to 1, one per line, using <code>--i</code>. Then write a second program that prints the even numbers from 0 to 20, including 20, on one line, by changing the step to <code>i = i + 2</code> (or its shorthand <code>i += 2</code>). The step part of a <code>for</code> header can be any statement, not just <code>++i</code>. For each program, write down the start value, the condition and the step <em>before</em> you type, and say how many times the body will run.</p>
+<details class="hint"><summary>Stuck? First nudge</summary><p>Counting down: start at 10, keep going while <code>i &gt;= 1</code>, step <code>--i</code>. Here <code>&gt;=</code> is right, because 1 is the last value you want to see. Even numbers up to and including 20: start at 0, condition <code>i &lt;= 20</code>, step <code>i = i + 2</code>. This is one of the rare honest uses of <code>&lt;=</code>: the task said "including 20", so 20 is a value to visit, not a count of things.</p></details>
+<details class="answer"><summary>Show the answer</summary>
+<pre class="code" data-lang="cpp" data-file="countdown.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int main() {
+    for (int i = 10; i &gt;= 1; --i) {
+        std::println("{}", i);
+    }
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="countdown.cpp"><code>10
+9
+8
+7
+6
+5
+4
+3
+2
+1
+</code></pre>
+<pre class="code" data-lang="cpp" data-file="evens.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int main() {
+    for (int i = 0; i &lt;= 20; i = i + 2) {
+        std::print("{} ", i);
+    }
+    std::println("");
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="evens.cpp"><code>0 2 4 6 8 10 12 14 16 18 20
+</code></pre>
+<p>The countdown body runs 10 times (10 down to 1). The even-number body runs 11 times (0, 2, …, 20): eleven values, because both ends are included. If you predicted 10, you have just met the off-by-one error from the other side.</p>
+</details></div>
+
+<h2><code>break</code> and <code>continue</code></h2>
+<p>Two small words give you fine control from inside a loop body.</p>
+<p><code>break</code> ends the loop immediately. The CPU jumps to the first line after the closing brace, skipping the rest of the body and skipping the condition. Use it when you have found what you were looking for and there is no point continuing:</p>
+
+<pre class="code" data-lang="cpp" data-file="breakdemo.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int main() {
+    // Find the first number whose square is bigger than 50.
+    for (int i = 0; i &lt; 100; ++i) {
+        if (i * i &gt; 50) {
+            std::println("first i with i*i &gt; 50 is {}", i);
+            break;             // leave the loop right now
+        }
+        std::println("{} squared is {}, keep looking", i, i * i);
+    }
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="breakdemo.cpp"><code>0 squared is 0, keep looking
+1 squared is 1, keep looking
+2 squared is 4, keep looking
+3 squared is 9, keep looking
+4 squared is 16, keep looking
+5 squared is 25, keep looking
+6 squared is 36, keep looking
+7 squared is 49, keep looking
+first i with i*i &gt; 50 is 8
+</code></pre>
+
+<p>The header says "up to 100", but <code>break</code> stopped it at 8. The header is the <em>outer limit</em>; <code>break</code> is the early exit. A generous bound plus an <code>if</code> with a <code>break</code> is how you write "search until found, but never search forever".</p>
+<p><code>continue</code> is gentler. It ends the <em>current pass</em> only: the CPU skips the rest of the body, runs the step (<code>++i</code>), checks the condition, and carries on with the next pass. Use it to skip over cases you are not interested in:</p>
+
+<pre class="code" data-lang="cpp" data-file="continuedemo.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int main() {
+    // Print the numbers 0..9, but skip the multiples of 3.
+    for (int i = 0; i &lt; 10; ++i) {
+        if (i % 3 == 0) {
+            continue;          // skip the rest of THIS pass, go to ++i
+        }
+        std::print("{} ", i);
+    }
+    std::println("");
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="continuedemo.cpp"><code>1 2 4 5 7 8
+</code></pre>
+
+<p><code>%</code> is the remainder operator from chapter 2: <code>7 % 3</code> is 1, because 7 is two threes with one left over, so <code>i % 3 == 0</code> is true exactly when <code>i</code> is a multiple of 3. Chapter 2 also showed its one nasty surprise, that <code>-1 % 10</code> is <code>-1</code>; chapter 7 uses <code>%</code> to wrap around the edge of the grid and shows the fix. For now, remainders of non-negative numbers are all you need.</p>
+<div class="callout trap"><span class="label">Trap</span><p><code>continue</code> inside a <code>while</code> loop jumps straight to the condition. There is no step part to run on the way, so if the line that moves your variable toward the exit sits <em>below</em> the <code>continue</code>, it is skipped, the variable never moves, and the loop runs forever. Here is <code>continuedemo.cpp</code> rewritten as a <code>while</code>, with exactly that mistake:</p>
+<pre class="code" data-lang="cpp" data-file="continue_trap.cpp" data-check="compile"><code>#include &lt;print&gt;
+
+int main() {
+    int i = 0;
+    while (i &lt; 10) {
+        if (i % 3 == 0) {
+            continue;          // jumps to the condition; ++i below is skipped
+        }
+        std::print("{} ", i);
+        ++i;
+    }
+    std::println("");
+    return 0;
+}
+</code></pre>
+<p>Trace it: <code>i</code> is 0, <code>0 % 3 == 0</code> is true, <code>continue</code>, back to the condition with <code>i</code> still 0, and again, and again. The program prints nothing and never ends; <kbd>Ctrl</kbd>+<kbd>C</kbd> is the only way out. This is the reason to prefer <code>for</code> when you are counting: the step lives in the header, and <code>continue</code> cannot skip it.</p></div>
+
+<p>A note of restraint: <code>break</code> and <code>continue</code> are jumps, and a body full of jumps is hard to read. If a loop needs more than one of each, it wants a clearer condition or, from chapter 4, a function.</p>
+
+<h2>Nested loops: rows and columns</h2>
+<p>A loop body is a block, and a block can contain anything, including another loop. A loop inside a loop is called a <strong>nested loop</strong>, and it is the shape of every grid you will ever process. The outer loop walks the rows; for each row, the inner loop walks across the columns. Here it is with the coordinates printed so you can see the order the cells are visited in:</p>
+
+<pre class="code" data-lang="cpp" data-file="coords.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int main() {
+    const int width = 4;
+    const int height = 3;
+
+    for (int y = 0; y &lt; height; ++y) {
+        for (int x = 0; x &lt; width; ++x) {
+            std::print("({},{}) ", x, y);
+        }
+        std::println("");
+    }
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="coords.cpp"><code>(0,0) (1,0) (2,0) (3,0)
+(0,1) (1,1) (2,1) (3,1)
+(0,2) (1,2) (2,2) (3,2)
+</code></pre>
+
+<p>Follow the CPU. <code>y</code> starts at 0. The inner loop runs <code>x</code> from 0 to 3, printing four cells; <code>println("")</code> ends the row; <code>++y</code> runs; and the inner loop <em>starts over from <code>x = 0</code></em>, because its initialisation runs afresh every time the CPU enters it (a fresh room). Twelve cells, visited row by row, left to right, top to bottom. The convention that <code>x</code> is the column (across) and <code>y</code> the row (down), with (0,0) top left, is the one <code>life.hpp</code> uses, and the one terminals and most image formats use. <code>y</code> is the outer loop because you finish one whole row before the next, which is the order the terminal prints lines.</p>
+<p>Now replace the coordinates with a dot, and you have drawn the empty board:</p>
+
+<pre class="code" data-lang="cpp" data-file="rect.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int main() {
+    const int width = 10;
+    const int height = 4;
+
+    for (int y = 0; y &lt; height; ++y) {
+        for (int x = 0; x &lt; width; ++x) {
+            std::print(".");
+        }
+        std::println("");
+    }
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="rect.cpp"><code>..........
+..........
+..........
+..........
+</code></pre>
+
+<p>Pause on this one. <strong>This is one frame of the Game of Life</strong>, minus the content. The finished game's <code>render</code> produces exactly this shape of text, a <code>width</code> by <code>height</code> block with a line break after every row, except that some dots will be <code>#</code> for live cells. What you are missing is a way to store which cells are alive (<a href="06-vector.html">chapter 6</a>) and a way to find a cell's storage from its <code>x</code> and <code>y</code> (chapter 7).</p>
+<p>To prove that the inner loop can make a decision per cell, here is a checkerboard. A cell is dark when <code>x + y</code> is even, light when it is odd. Moving one step right or one step down changes <code>x + y</code> by one, which flips even to odd, which is exactly the alternation a checkerboard needs:</p>
+
+<pre class="code" data-lang="cpp" data-file="checker.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int main() {
+    const int width = 8;
+    const int height = 4;
+
+    for (int y = 0; y &lt; height; ++y) {
+        for (int x = 0; x &lt; width; ++x) {
+            if ((x + y) % 2 == 0) {
+                std::print("#");
+            } else {
+                std::print(".");
+            }
+        }
+        std::println("");
+    }
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="checker.cpp"><code>#.#.#.#.
+.#.#.#.#
+#.#.#.#.
+.#.#.#.#
+</code></pre>
+
+<p>Three constructs, one inside the other: a <code>for</code> over rows, a <code>for</code> over columns, an <code>if</code>/<code>else</code> per cell. That loop-loop-decision nesting is the shape of the Life <code>step</code> function, of a blur filter on a photograph, and of a convolution layer in a neural network. You will write it hundreds of times.</p>
+
+<div class="callout try"><span class="label">Try it</span><p>Print a hollow rectangle: <code>#</code> on the border, <code>.</code> inside. Decide the condition first, in words: a cell is on the border when it is in the first column, the last column, the first row, or the last row. Then translate each clause into a comparison and join them with <code>||</code>. Remember that the last column is <code>width - 1</code>, not <code>width</code>.</p>
+<details class="hint"><summary>Stuck? First nudge</summary><p>Compute the condition into a <code>const bool</code> named <code>on_edge</code> at the top of the inner loop body, then write <code>if (on_edge)</code>. Naming a condition makes it much easier to get right.</p></details>
+<details class="answer"><summary>Show the answer</summary>
+<pre class="code" data-lang="cpp" data-file="hollow.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int main() {
+    const int width = 10;
+    const int height = 4;
+
+    for (int y = 0; y &lt; height; ++y) {
+        for (int x = 0; x &lt; width; ++x) {
+            const bool on_edge = x == 0 || x == width - 1 || y == 0 || y == height - 1;
+            if (on_edge) {
+                std::print("#");
+            } else {
+                std::print(".");
+            }
+        }
+        std::println("");
+    }
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="hollow.cpp"><code>##########
+#........#
+#........#
+##########
+</code></pre>
+</details>
+</div>
+
+<h2>What a loop costs</h2>
+<p>A loop body that runs a thousand times costs a thousand times as much as running it once. That sounds obvious until you nest loops, because then the costs <em>multiply</em>. The inner loop of <code>rect.cpp</code> runs <code>width</code> times for each of the <code>height</code> passes of the outer loop, so the body runs <code>width &times; height</code> times in total: 40 for the little rectangle above. For a 1000 by 1000 grid that is a million. And the Life rule, for each of those million cells, has to look at all 8 neighbours. Let the computer count for you:</p>
+
+<pre class="code" data-lang="cpp" data-file="cost.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int main() {
+    const int width = 1000;
+    const int height = 1000;
+
+    int cells_visited = 0;
+    int neighbour_checks = 0;
+
+    for (int y = 0; y &lt; height; ++y) {
+        for (int x = 0; x &lt; width; ++x) {
+            cells_visited = cells_visited + 1;
+            for (int k = 0; k &lt; 8; ++k) {
+                neighbour_checks = neighbour_checks + 1;
+            }
+        }
+    }
+
+    std::println("cells visited:    {}", cells_visited);
+    std::println("neighbour checks: {}", neighbour_checks);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="cost.cpp"><code>cells visited:    1000000
+neighbour checks: 8000000
+</code></pre>
+
+<p>Eight million operations per generation, and each is more than a single addition: it works out where the neighbour is, wraps around the edges, and reads a byte from memory. A CPU core performs a few billion simple operations per second, so one step of this grid might take a few milliseconds or fifty, depending on how the loop is written and compiled. That gap is why Week 1 ends with a benchmark: <code>phase1-terminal/01-life/bench/bench_life.cpp</code> runs <code>step</code> twenty times on exactly this grid and prints milliseconds per step, and chapter 13 teaches you to read that number and shrink it. For now: <strong>the cost of a nested loop is the product of the loop counts, so a small change to the inner body is multiplied by a million.</strong></p>
+
+<div class="callout twin"><span class="label">Inference twin</span><p>A language model computing the next word does, at its core, a vast number of multiply-and-add operations arranged as nested loops over rows and columns of numbers. The "attention" step compares every word in the context with every other word, a loop inside a loop, so the cost grows with the <em>square</em> of the context length, just as the Life step grows with <code>width &times; height</code>. When you read that a model slows down on long prompts, you are reading about a nested loop. Counting iterations before you run, as <code>cost.cpp</code> does, is the first skill of a performance engineer.</p></div>
+
+<h2>The game loop</h2>
+<p>You now have enough to write the outline of the whole program. In words, the Game of Life does this:</p>
+<ol>
+<li>Set up: make a grid of the requested size and fill it with random live cells.</li>
+<li>Repeat, once per generation:
+  <ul>
+  <li>Update: compute the next generation from the current one.</li>
+  <li>Draw: clear the screen and print the grid.</li>
+  <li>Wait: pause for a fraction of a second so the eye can follow.</li>
+  </ul>
+</li>
+<li>Stop when the generation limit is reached, or when the player presses <kbd>Ctrl</kbd>+<kbd>C</kbd>.</li>
+</ol>
+<p>Every video game has this shape: set up, then loop over update-draw-wait. In C++, with the parts you do not have yet left as comments, and counting to 10 generations instead of running forever:</p>
+
+<pre class="code" data-lang="cpp" data-file="gameloop.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int main() {
+    // set-up: make the grid, fill it with random cells   (chapters 6 and 8)
+
+    int generation = 0;
+    while (generation &lt; 10) {
+        // update: compute the next grid from the current one   (chapters 7 and 14)
+        // draw:   clear the screen and print the grid           (chapter 9)
+        std::println("generation {}", generation);
+        // wait:   pause so the eye can follow                   (chapter 9)
+        ++generation;
+    }
+
+    std::println("stopped after {} generations", generation);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="gameloop.cpp"><code>generation 0
+generation 1
+generation 2
+generation 3
+generation 4
+generation 5
+generation 6
+generation 7
+generation 8
+generation 9
+stopped after 10 generations
+</code></pre>
+
+<p>Compare this with the plan in the comments at the top of <code>phase1-terminal/01-life/src/main.cpp</code>. It is the same list with two small differences. The file draws first and updates second ("clear screen, print, step, swap, sleep"), so that the player sees the starting grid before it changes; both orders are fine, and you will pick one in milestone 6. And it has an extra "swap" step between update and sleep, which belongs to chapter 7. The variable that moves toward the exit is <code>generation</code>, declared before the loop because its final value is reported after it. In milestone 5 the number 10 becomes a <code>--steps</code> argument (<a href="08-strings-and-args.html">chapter 8</a> teaches how to read such flags; <a href="14-build-life.html">chapter 14</a> adds this one) and the comment lines become function calls (<a href="04-functions.html">chapter 4</a>). The loop itself will not change.</p>
+<p>Why <code>while</code> and not <code>for</code>? Either works. This version uses <code>while</code> because the finished game will have a second way out (the player quitting), and a <code>while</code> with a named variable reads better as the exit condition grows. That is taste. The next trap is not.</p>
+
+<div class="callout trap"><span class="label">Trap</span><p>Never change the loop's bound inside the loop. If the condition is <code>i &lt; n</code>, the body must not assign to <code>n</code>. Doing so moves the finish line while the runner is running: the loop runs a different number of times from what the header promises, and anyone reading the header is misled. In the worst case the bound keeps moving away and the loop never ends. The program below shows the mild version: the header says ten passes, the body quietly makes it five.</p>
+<pre class="code" data-lang="cpp" data-file="boundtrap.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int main() {
+    int n = 10;
+    int passes = 0;
+    for (int i = 0; i &lt; n; ++i) {
+        passes = passes + 1;
+        if (i == 2) {
+            n = 5;             // moving the finish line while running
+        }
+    }
+    std::println("n started at 10, the body ran {} times", passes);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="boundtrap.cpp"><code>n started at 10, the body ran 5 times
+</code></pre>
+<p>The fix is the one from earlier: declare the bound <code>const</code>. Then the assignment to <code>n</code> is a compile error and the trap cannot be sprung. In every grid loop you write this week, <code>width</code> and <code>height</code> should be <code>const</code>.</p></div>
+
+<h2>Inference twin: the decode loop and the stencil loop</h2>
+<p>This book keeps promising that game code and inference code share their shapes. Here is the first place you can see it, because the loops at the heart of each use nothing but this chapter's constructs.</p>
+<p>A language model produces text one <strong>token</strong> at a time (a word or piece of a word): compute the next token from the text so far, append it, repeat, until a special stop token appears or a length limit is hit. That is the <strong>decode loop</strong>. Here is a toy one, where the "model" is a one-line formula instead of billions of multiplications:</p>
+
+<pre class="code" data-lang="cpp" data-file="decode.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int main() {
+    // A pretend "model": the next token is computed from the previous one.
+    // A real model does billions of multiplications here; the LOOP is the same.
+    const int stop_token = 0;
+    const int max_tokens = 20;
+
+    int token = 1;
+    int produced = 0;
+    while (token != stop_token &amp;&amp; produced &lt; max_tokens) {
+        std::print("{} ", token);
+        token = (token * 11 + 1) % 20;   // "the model": one token in, one token out
+        ++produced;
+    }
+    std::println("");
+    std::println("stopped after {} tokens", produced);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="decode.cpp"><code>1 12 13 4 5 16 17 8 9
+stopped after 9 tokens
+</code></pre>
+
+<p>Read the output against the code. The first token is 1. The "model" turns 1 into <code>(1 * 11 + 1) % 20</code>, which is <code>12 % 20</code>, which is 12; then 12 into <code>133 % 20</code>, which is 13; and so on along the printed line. After the ninth token, 9, it computes <code>(9 * 11 + 1) % 20</code>, which is <code>100 % 20</code>, which is 0: the stop token. The condition <code>token != stop_token</code> becomes false and the loop ends after 9 tokens, well short of the budget of 20. Change <code>max_tokens</code> to 5 and the other exit fires first: five tokens, then <code>produced &lt; max_tokens</code> fails.</p>
+<p>Two exits joined by <code>&amp;&amp;</code>: the natural one (the model said stop) and the safety one (the budget ran out). Real engines have exactly these two exits, usually under names like <code>eos_token</code> ("end of sequence") and <code>max_new_tokens</code>. The Life step is in the same family: visit each cell, look at its surroundings, compute a new value, write it to the next generation. A loop that computes each output from a small neighbourhood of inputs is a <strong>stencil loop</strong>. Side by side, in outline:</p>
+
+<pre class="code" data-lang="cpp" data-file="twin-shapes.cpp" data-check="fragment"><code>// Decode loop: one token per pass; the state is the token so far.
+while (token != stop_token &amp;&amp; produced &lt; max_tokens) {
+    // compute the next token from the current one      (the model)
+    // print it
+    ++produced;
+}
+
+// Stencil loop: one cell per pass; the state is the grid so far.
+for (int y = 0; y &lt; height; ++y) {
+    for (int x = 0; x &lt; width; ++x) {
+        // look at the 8 neighbours of (x, y)             (chapters 7 and 14)
+        // decide alive or dead with if / else            (this chapter)
+        // write the answer into the next grid
+    }
+}
+</code></pre>
+
+<p>Both are "for each thing, compute the new thing from the old things nearby". The decode loop's neighbourhood is "everything so far" and it is one loop deep; the stencil's is "the 8 cells around me" and it is two deep. You write the stencil loop for real this week, in <code>step</code>, and the decode loop for real in week 18, and you will recognise the braces.</p>
+
+<div class="callout note"><span class="label">What is deferred</span><p><code>do { } while (condition);</code> checks its condition at the <em>end</em>, so the body runs at least once; you will not need it this week. <code>switch</code> chooses between many fixed values and arrives in week 3 with Snake. The range-based <code>for</code> that walks a container without an index appears in <a href="06-vector.html">chapter 6</a>.</p></div>
+
+<h2>Check yourself</h2>
+<div class="quiz">
+<div class="q"><p>What does <code>std::println("{}", 7 &gt; 3 &amp;&amp; 2 == 3)</code> print, and why?</p><details class="answer"><summary>Answer</summary><p><code>false</code>. <code>7 &gt; 3</code> is true and <code>2 == 3</code> is false; <code>&amp;&amp;</code> needs both to be true. The comparisons are evaluated before the <code>&amp;&amp;</code> because of precedence, and <code>println</code> prints a <code>bool</code> as a word.</p></details></div>
+
+<div class="q"><p>A programmer writes <code>if (neighbours = 3)</code>. Does it compile? What does it do? How would <code>const</code> have changed the outcome?</p><details class="answer"><summary>Answer</summary><p>It compiles, with a <code>-Wparentheses</code> warning. It stores 3 in <code>neighbours</code>, and because 3 is non-zero the condition counts as true, so the branch always runs. Had <code>neighbours</code> been <code>const</code>, the assignment would be a hard error ("cannot assign to variable with const-qualified type") and the bug could not have been built.</p></details></div>
+
+<div class="q"><p>How many times does the body of <code>for (int i = 0; i &lt; 8; ++i)</code> run, and what is the last value of <code>i</code> inside the body? What if the condition were <code>i &lt;= 8</code>?</p><details class="answer"><summary>Answer</summary><p>8 times, and the last value seen inside the body is 7. With <code>i &lt;= 8</code> it runs 9 times and the last value is 8, which, if <code>i</code> is a position among 8 things, is one past the end: an off-by-one error.</p></details></div>
+
+<div class="q"><p>After this code, what does the last line print?</p>
+<pre class="code" data-lang="cpp" data-file="quiz-scope.cpp" data-check="fragment"><code>int total = 0;
+for (int i = 0; i &lt; 3; ++i) {
+    int bump = 10;
+    total = total + bump;
+}
+std::println("{}", total);
+</code></pre>
+<details class="answer"><summary>Answer</summary><p><code>30</code>. <code>bump</code> is declared inside the loop body, so it is a fresh variable set to 10 on every pass and gone at the closing brace; <code>total</code> is declared outside, so it survives and accumulates 10 three times. Trying to print <code>bump</code> or <code>i</code> after the loop would be a compile error: undeclared identifier.</p></details></div>
+
+<div class="q"><p>What is the difference between <code>break</code> and <code>continue</code>?</p><details class="answer"><summary>Answer</summary><p><code>break</code> leaves the loop entirely; execution resumes after the loop's closing brace. <code>continue</code> abandons only the current pass; execution goes to the step (<code>++i</code> in a <code>for</code>), then the condition is checked and the loop carries on if it is still true.</p></details></div>
+
+<div class="q"><p>A nested loop visits a grid 640 wide and 480 high, and for each cell checks 8 neighbours. How many neighbour checks is that per step, and roughly how does the count change if you double both the width and the height?</p><details class="answer"><summary>Answer</summary><p>640 &times; 480 = 307,200 cells, times 8 = 2,457,600 checks. Doubling both dimensions multiplies the cell count by 4 (1280 &times; 960 = 1,228,800), so the checks go up four times too, to 9,830,400. Nested loop costs multiply.</p></details></div>
+
+<div class="q"><p>Two questions about the grid loops. In <code>coords.cpp</code> you swap the two <code>for</code> lines, so that <code>x</code> is the outer loop and <code>y</code> the inner one, and leave everything else alone: how many lines does the program print now, and what is on the first line? And in <code>checker.cpp</code>, why does <code>(x + y) % 2</code> produce a checkerboard rather than stripes?</p><details class="answer"><summary>Answer</summary><p>Swapped <code>coords.cpp</code> prints four lines, one per value of <code>x</code>, each holding three cells. The first line is <code>(0,0) (0,1) (0,2)</code>: <code>x</code> stays at 0 while the inner loop runs <code>y</code> through 0, 1, 2. The twelve cells are still all visited, but column by column instead of row by row, and the picture comes out turned on its side. That is why the row loop must be the outer one when you print a grid: the terminal prints one line at a time, and a line is a row.</p><p>In <code>checker.cpp</code>, moving one cell to the right adds 1 to <code>x</code>; moving one cell down adds 1 to <code>y</code>. Either move changes <code>x + y</code> by exactly 1, which flips it between even and odd, so every neighbour to the right, left, above or below has the opposite colour. Stripes would need the colour to depend on only <code>x</code> (vertical stripes) or only <code>y</code> (horizontal stripes).</p></details></div>
+
+<div class="q"><p>Name the variable that moves toward the exit in <code>halve.cpp</code>, in <code>gameloop.cpp</code> and in <code>decode.cpp</code>, and say which direction it moves.</p><details class="answer"><summary>Answer</summary><p><code>halve.cpp</code>: <code>n</code>, moving down toward 1. <code>gameloop.cpp</code>: <code>generation</code>, moving up toward 10. <code>decode.cpp</code>: two of them, because there are two exits joined by <code>&amp;&amp;</code>: <code>produced</code> moving up toward <code>max_tokens</code>, and <code>token</code>, which does not move in a straight line but is expected to eventually equal <code>stop_token</code>. The budget exists precisely because <code>token</code> alone is not guaranteed to get there.</p></details></div>
+</div>
+
+<h2>What you can do now</h2>
+<ul>
+<li>Write a condition from a sentence in English, using <code>==</code>, <code>!=</code>, <code>&lt;</code>, <code>&lt;=</code>, <code>&gt;</code>, <code>&gt;=</code>, <code>&amp;&amp;</code>, <code>||</code> and <code>!</code>, with parentheses wherever two different operators meet.</li>
+<li>Put a safety check on the left of <code>&amp;&amp;</code> and the thing it protects on the right, and say why short-circuiting makes that order matter.</li>
+<li>Choose between paths with <code>if</code>, <code>else if</code> and <code>else</code>, and order the branches so that overlapping conditions are checked in the right sequence.</li>
+<li>Explain what a block is, why a variable declared inside one is gone at the closing brace, and read an "undeclared identifier" error.</li>
+<li>Repeat work with <code>while</code>, point to the variable that moves toward the exit, and stop a runaway program with <kbd>Ctrl</kbd>+<kbd>C</kbd>.</li>
+<li>Type <code>for (int i = 0; i &lt; n; ++i)</code> without thinking, say why it starts at 0 and stops before <code>n</code>, and spot an off-by-one error.</li>
+<li>Leave a loop early with <code>break</code> and skip a pass with <code>continue</code>.</li>
+<li>Draw a <code>width</code> by <code>height</code> rectangle and a checkerboard with two nested loops, <code>std::print</code> for cells and <code>std::println</code> at the end of each row, and count how many times the inner body runs.</li>
+<li>Write the update-draw-wait game loop as a <code>while</code> over a generation counter, and recognise the same shape in a decode loop.</li>
+</ul>
+</main>
+</body>
+</html>

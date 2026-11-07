@@ -1,0 +1,703 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>11 · CMake and Ninja: the build recipe — C++ from zero to Life</title>
+<link rel="stylesheet" href="assets/book.css?v=9">
+<link rel="stylesheet" href="assets/tutor.css?v=9">
+<script src="assets/theme.js?v=9"></script>
+<script defer src="assets/book.js?v=9"></script>
+<script defer src="assets/tutor.js?v=9"></script>
+</head>
+<body>
+<nav class="sidebar" aria-label="Chapters"></nav>
+<main>
+<p class="chapter-kicker">Chapter 11</p>
+<h1>CMake and Ninja: the build recipe</h1>
+<p class="lede">At the end of this chapter you can read every line of <code>phase1-terminal/01-life/CMakeLists.txt</code> and say what it does, build the three Life programs with two commands, rebuild only what changed, keep a Debug build and a Release build side by side, run the tests through <code>ctest</code>, and recognise the three ways a build most often breaks.</p>
+
+<div class="callout note"><span class="label">In this chapter</span>
+<ul>
+<li>Why one long <code>clang++</code> line stops being enough once you have three programs and four source files.</li>
+<li>Two tools with two jobs: CMake writes the build plan, Ninja carries it out.</li>
+<li>The smallest possible recipe, then the real one: every line of the Life <code>CMakeLists.txt</code>, in order.</li>
+<li>Configure versus build; what <code>-S</code>, <code>-B</code>, <code>-G</code> and <code>-D</code> mean; why the <code>build/</code> folder is disposable.</li>
+<li>Debug and Release builds in two folders; what the optimiser does and why the sanitizers live in Debug only.</li>
+<li>Building one target, running tests with <code>ctest</code>, and the <code>compile_commands.json</code> file your editor wants.</li>
+<li>The three common failures and the one line you change when you add a source file.</li>
+</ul>
+</div>
+
+<h2>The problem: three programs and one very long line</h2>
+<p>In <a href="10-headers-and-files.html">chapter 10</a> you split a program across several files and compiled them together by naming every <code>.cpp</code> on the command line. That works. Now look at what the Life project actually asks for. The folder <code>phase1-terminal/01-life</code> holds four source files and wants <strong>three</strong> programs out of them:</p>
+<ul>
+<li><code>life</code>, the game: <code>src/main.cpp</code> plus <code>src/life.cpp</code>.</li>
+<li><code>life_tests</code>, the tests: <code>tests/life_test.cpp</code> plus <code>src/life.cpp</code>.</li>
+<li><code>life_bench</code>, the benchmark: <code>bench/bench_life.cpp</code> plus <code>src/life.cpp</code>.</li>
+</ul>
+<p>Each one needs the same flags: the C++ standard, the warnings, the sanitizers, and two <code>-I</code> options (the "look in this folder for headers" flag from <a href="10-headers-and-files.html">chapter 10</a>) so the compiler can find <code>life.hpp</code> in <code>src/</code> and <code>doctest.h</code> in the repo's <code>third_party/doctest</code> folder, two levels up from the project. By hand, that is this, typed three times with small differences:</p>
+
+<pre class="shell"><code>$ cd phase1-terminal/01-life
+$ clang++ -std=c++23 -Wall -Wextra -Wpedantic -g -fsanitize=address,undefined -fno-omit-frame-pointer -Isrc -I../../third_party/doctest src/main.cpp src/life.cpp -o life
+$ clang++ -std=c++23 -Wall -Wextra -Wpedantic -g -fsanitize=address,undefined -fno-omit-frame-pointer -Isrc -I../../third_party/doctest tests/life_test.cpp src/life.cpp -o life_tests
+$ clang++ -std=c++23 -Wall -Wextra -Wpedantic -g -fsanitize=address,undefined -fno-omit-frame-pointer -Isrc -I../../third_party/doctest bench/bench_life.cpp src/life.cpp -o life_bench
+</code></pre>
+
+<p>Those three lines take about two and a half seconds on your Mac (measured: 2.5 s). Now think about the week. You change one line in <code>life.cpp</code> and want to run the tests. You fish the second line out of your shell history (the list of past commands the up-arrow key walks through), and the compiler translates <strong>everything again</strong>: <code>life_test.cpp</code>, which did not change and which pulls in the 360 KB <code>doctest.h</code>, as well as <code>life.cpp</code>. If you also want the game and the benchmark, <code>life.cpp</code> is compiled a third and fourth time. You will do this hundreds of times, and each time there is a chance of a typo, a forgotten flag, or a test binary secretly older than the code it claims to test.</p>
+<p>There are three separate annoyances here:</p>
+<ol>
+<li><strong>The recipe is not written down.</strong> The flags live in your memory and your shell history.</li>
+<li><strong>Everything is rebuilt every time.</strong> The compiler has no memory of what it did last time, so it cannot skip the files that did not change.</li>
+<li><strong>Nothing runs in parallel.</strong> A <strong>core</strong> is one complete processor inside the chip, able to run one program at a time; your M5 has ten of them (<code>sysctl -n hw.ncpu</code> prints <code>10</code>). Compiling four files one after the other uses one core and leaves nine idle.</li>
+</ol>
+<p>A <strong>build system</strong> solves all three: it reads a file that records the recipe, rebuilds only the outputs that are older than their inputs, and runs independent compilations at the same time. The one this curriculum uses, and the one <code>llama.cpp</code> and most of the C++ world use, is CMake together with Ninja.</p>
+
+<h2>Two tools, two jobs</h2>
+<p>It surprises people that "the build system" is two programs, so be precise about who does what.</p>
+<p><strong>CMake</strong> reads a file named exactly <code>CMakeLists.txt</code>, which you write, and <strong>generates</strong> a second file: a detailed, machine-oriented plan that lists every compiler command, every output file, and which outputs depend on which inputs. CMake does not compile anything itself. It is a translator from your short recipe into that long plan.</p>
+<p><strong>Ninja</strong> reads the plan (a file named <code>build.ninja</code>) and <strong>executes</strong> it. It checks the <strong>timestamp</strong> of every input and output (the date and time a file was last saved, which the operating system records for every file), decides which commands actually need to run, and runs them, as many at once as you have cores. Ninja never reads <code>CMakeLists.txt</code>; it does not even know what CMake is. It only knows how to run commands in the right order, fast.</p>
+
+<div class="callout analogy"><span class="label">Analogy</span><p>CMake is the architect; Ninja is the builder. You tell the architect what you want in a few sentences ("three programs, from these files, with these flags"). The architect produces detailed drawings for every wall and wire. The builder works only from the drawings and never speaks to you; if you change your mind, you go back to the architect, who redraws, and the builder reads the new drawings. <em>Where the analogy breaks:</em> a real builder cannot tell which walls are already standing. Ninja can. It compares dates on files, so if only one source file changed it rebuilds only the pieces that depend on it, in well under a second.</p></div>
+
+<p>Why two tools? Because the plan Ninja wants is tedious and platform-specific: which compiler is installed, where it lives, which flags it needs on macOS versus Linux. CMake deals with all of that once, when it generates the plan, so your <code>CMakeLists.txt</code> stays short and identical on every machine. That matters in week 6 when you build the same projects inside a Linux container.</p>
+<p>You will also hear of <strong>Make</strong>, a much older builder that reads <code>Makefile</code>s. CMake can generate those too, and many projects still use them. Ninja does the same job but was designed for speed and for being generated rather than hand-written. This book uses Ninja everywhere; nothing in the recipe would change if you switched.</p>
+
+<h2>The smallest recipe</h2>
+<p>Before the real recipe, build a toy one, so you can see every moving part with nothing else in the way. Make a folder <code>scratch/ch11/hello_cmake</code> with one source file and one <code>CMakeLists.txt</code>.</p>
+
+<pre class="code" data-lang="cpp" data-file="hello_cmake.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int main() {
+    std::println("Built by CMake and Ninja.");
+    std::println("The compiler flags came from CMakeLists.txt, not from me.");
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="hello_cmake.cpp"><code>Built by CMake and Ninja.
+The compiler flags came from CMakeLists.txt, not from me.
+</code></pre>
+
+<pre class="code" data-lang="cmake" data-file="CMakeLists.txt"><code>cmake_minimum_required(VERSION 3.25)
+project(hello_cmake LANGUAGES CXX)
+set(CMAKE_CXX_STANDARD 23)
+add_executable(hello_cmake hello_cmake.cpp)
+</code></pre>
+
+<p>Four lines, each a <strong>command</strong>: a name followed by arguments in round brackets. That is the whole of the CMake language you need this week. Read them as English: "I need CMake 3.25 or newer. This project is called <code>hello_cmake</code> and is written in C++ (<code>CXX</code> is CMake's spelling of C++). Use the C++23 standard. Make a program called <code>hello_cmake</code> out of the file <code>hello_cmake.cpp</code>." Take the <code>set(...)</code> line on trust for a moment; the Life recipe below explains what <code>set</code> does and why the real file has three of them.</p>
+<p>Now the two steps. The first is called <strong>configuring</strong>: CMake reads the recipe and writes the plan into a folder you name.</p>
+
+<pre class="shell"><code>$ cd scratch/ch11/hello_cmake
+$ cmake -S . -B build -G Ninja
+-- The CXX compiler identification is AppleClang 21.0.0.21000101
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: /usr/bin/c++ - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Configuring done (0.2s)
+-- Generating done (0.0s)
+-- Build files have been written to: /Users/dan/Desktop/projects/cpp-101/scratch/ch11/hello_cmake/build
+</code></pre>
+
+<p>Notice that CMake went looking for a compiler and found Apple clang 21 at <code>/usr/bin/c++</code>, which on your Mac is the same program as <code>clang++</code>. It checked that the compiler works and asked it which C++ features it supports. The two lines about "ABI info" are CMake asking how this compiler lays out compiled code; take them on trust, they never matter this year. Then "Configuring done" means the recipe was read without errors, and "Generating done" means the plan was written. The last line tells you where.</p>
+<p>The second step is <strong>building</strong>: Ninja carries out the plan.</p>
+
+<pre class="shell"><code>$ cmake --build build
+[1/2] Building CXX object CMakeFiles/hello_cmake.dir/hello_cmake.cpp.o
+[2/2] Linking CXX executable hello_cmake
+$ ./build/hello_cmake
+Built by CMake and Ninja.
+The compiler flags came from CMakeLists.txt, not from me.
+</code></pre>
+
+<p>Two steps, exactly as in chapter 10: compile the source into an object file, then link the object file into a program. The difference is that you did not type either command. Look inside the <code>build</code> folder to see what CMake made.</p>
+
+<pre class="shell"><code>$ ls build
+CMakeCache.txt
+CMakeFiles
+build.ninja
+cmake_install.cmake
+compile_commands.json
+hello_cmake
+</code></pre>
+
+<p><code>build.ninja</code> is the plan (about 145 lines for this four-line recipe). <code>CMakeCache.txt</code> is CMake's memory of the choices it made while configuring: which compiler, which generator, which build type. <code>CMakeFiles/</code> holds the object files. <code>compile_commands.json</code> is a list of the compile commands for your editor. The recipe did not ask for it; your shell did. An <strong>environment variable</strong> is a named setting that the shell hands to every program it starts, and <code>~/.zshrc</code>, the file your shell runs each time a terminal opens, contains the line <code>export CMAKE_EXPORT_COMPILE_COMMANDS=ON</code>. CMake reads that variable and writes the file. It gets its own section further down. And <code>hello_cmake</code> is your program. Every one of these can be regenerated from the recipe, which leads to the most useful habit in this chapter.</p>
+
+<div class="callout principle"><span class="label">First principle</span><p>Everything inside <code>build/</code> is <strong>derived</strong>: made by a tool from your source files and your recipe. Nothing you wrote lives there. So <code>build/</code> is disposable. When a build behaves strangely, <code>rm -rf build</code> and configure again. You lose nothing but a few seconds of compile time, and you gain a clean start. The same is true of every <code>build-*</code> folder you will make. (They are git-ignored for exactly this reason.)</p></div>
+
+<h3>What Ninja actually ran</h3>
+<p>There is no magic in the plan. You can ask Ninja to print the exact commands it would run for a target, and you will recognise them. In the line below, <code>-C build</code> means "change into the folder <code>build</code> first" (Ninja always works from inside the build folder), and <code>-t commands</code> picks Ninja's built-in <em>tool</em> named <code>commands</code>, which prints instead of running.</p>
+
+<pre class="shell"><code>$ ninja -C build -t commands hello_cmake
+ccache /usr/bin/c++   -std=gnu++23 -arch arm64 -MD -MT CMakeFiles/hello_cmake.dir/hello_cmake.cpp.o -MF CMakeFiles/hello_cmake.dir/hello_cmake.cpp.o.d -o CMakeFiles/hello_cmake.dir/hello_cmake.cpp.o -c /Users/dan/Desktop/projects/cpp-101/scratch/ch11/hello_cmake/hello_cmake.cpp
+: &amp;&amp; /usr/bin/c++ -arch arm64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names CMakeFiles/hello_cmake.dir/hello_cmake.cpp.o -o hello_cmake   &amp;&amp; :
+</code></pre>
+
+<p>Line one is the compile step: <code>-c</code> compiles one file into an object. The <code>-MD -MT -MF</code> options ask the compiler to also write down which headers the file included, so Ninja can rebuild it when a header changes. Line two is the link step (the <code>: &amp;&amp;</code> and <code>&amp;&amp; :</code> around it are shell padding that does nothing). Two kinds of flag here are new and can be taken on trust: <code>-arch arm64</code> names the kind of chip the program is for (Apple Silicon), and the <code>-Wl,...</code> flags are settings CMake passes through to the linker on macOS. Neither changes what your program does. Note one oddity: the standard is <code>-std=gnu++23</code>, not <code>-std=c++23</code>. The real recipe fixes that, and you will see why.</p>
+
+<div class="callout note"><span class="label">Note</span><p>The word <code>ccache</code> in front of the compiler is not CMake's doing either. Your <code>~/.zshrc</code> exports <code>CMAKE_CXX_COMPILER_LAUNCHER=ccache</code>, and CMake obeys it by putting that program in front of every compile command. <strong>ccache</strong> is a compiler cache: it remembers the object file produced for a given source text and flags, and hands it back instantly if you ask for the same compile again (after an <code>rm -rf build</code>, say). It never changes what the compiler produces. Read past it; the real command starts at <code>/usr/bin/c++</code>. If you unset the variable, the word disappears and nothing else changes.</p></div>
+
+<div class="callout try"><span class="label">Try it</span><p>Run <code>cmake --build build</code> a second time without changing anything. Ninja prints <code>ninja: no work to do.</code> Then open <code>hello_cmake.cpp</code>, change the text, save, and build again: one compile and one link, nothing else. That is annoyance number two solved: Ninja compares the date on <code>hello_cmake.cpp</code> with the date on <code>hello_cmake.cpp.o</code> and only runs the command when the source is newer.</p></div>
+
+<h2>Configure, then build: the flags</h2>
+<p>You will type the configure line many times this week, so know what each piece means rather than copying it.</p>
+<ul>
+<li><code>cmake</code> with <code>-S .</code>: the <strong>source</strong> folder is <code>.</code>, the current one. This is where <code>CMakeLists.txt</code> must be.</li>
+<li><code>-B build</code>: the <strong>binary</strong> (output) folder is <code>build</code>. CMake creates it if needed. You may call it anything, and you may have several.</li>
+<li><code>-G Ninja</code>: the <strong>generator</strong>, meaning "plans for which builder?" Run <code>cmake --help</code> and the end of the output lists the choices on your machine: <code>Unix Makefiles</code>, <code>Ninja</code>, <code>Xcode</code> and more. The one marked with <code>*</code> is the default. On a fresh Mac the default is <code>Unix Makefiles</code>. On this machine the star sits on <code>Ninja</code> only because <code>~/.zshrc</code> also exports the environment variable <code>CMAKE_GENERATOR=Ninja</code>. Do not rely on that: always say <code>-G Ninja</code> explicitly. It costs nothing when it is already the default, and it saves you from a Makefile build on a machine without that setting.</li>
+<li><code>-DCMAKE_BUILD_TYPE=Debug</code>: <code>-D</code> <strong>defines</strong> a variable before the recipe is read. Here it sets the build type, which the recipe uses to decide on sanitizers and optimisation. You will see <code>-D</code> used for other variables later in the curriculum; the shape is always <code>-DNAME=value</code>, no spaces.</li>
+</ul>
+<p>And the build line: <code>cmake --build build</code> means "run the builder in the folder <code>build</code>". CMake looks in <code>CMakeCache.txt</code> to see that the builder is Ninja and simply runs <code>ninja</code> there for you. Typing <code>ninja -C build</code> does the same thing directly (<code>-C</code> means "change into this folder first"). Use whichever you like; the book uses <code>cmake --build</code> because it works for any generator.</p>
+<p>The two steps are separate for a reason. Configuring only needs to happen when the recipe or the machine changes; building happens every time you save a file. If you edit <code>CMakeLists.txt</code>, you do not reconfigure by hand: Ninja notices the recipe is newer than the plan and reruns CMake first, printing <code>Re-running CMake...</code> at the top of the build output.</p>
+
+<div class="callout trap"><span class="label">Trap</span><p>Configure and build take <em>different</em> folder arguments. Configure wants <code>-S</code> (source) and <code>-B</code> (build). Build wants only the build folder, with no <code>-B</code>: <code>cmake --build build</code>. People type <code>cmake --build .</code> from inside the project folder, where there is no plan, and get <code>Error: not a CMake build directory (missing CMakeCache.txt)</code>. Stay in the project folder and name the build folder.</p></div>
+
+<h2>The Life recipe, line by line</h2>
+<p>Here is the real file, <code>phase1-terminal/01-life/CMakeLists.txt</code>, reproduced in full. Lines starting with <code>#</code> are comments. Read it once now; the rest of this section walks through it group by group.</p>
+
+<pre class="code" data-lang="cmake" data-file="CMakeLists.txt"><code># CMakeLists.txt — the recipe that turns the source files in this folder into
+# three programs: `life` (the game), `life_tests` (the tests), `life_bench`.
+#
+# Configure once, then build as often as you like:
+#   cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
+#   cmake --build build
+#   ./build/life_tests
+#
+# Book chapter 11 explains every line below.
+
+cmake_minimum_required(VERSION 3.25)
+project(life LANGUAGES CXX)
+
+# Which C++ we speak: C++23, and nothing vendor-specific.
+set(CMAKE_CXX_STANDARD 23)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+# Writes build/compile_commands.json so editors (VS Code, clangd) understand the project.
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+# Default to a Debug build if nobody said otherwise.
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Debug)
+endif()
+
+# Warnings are free bug reports: turn them all on.
+add_compile_options(-Wall -Wextra -Wpedantic)
+
+# In Debug builds, the sanitizers turn memory bugs into readable error messages.
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+  add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+  add_link_options(-fsanitize=address,undefined)
+endif()
+
+# Every program here can #include "life.hpp" and "doctest.h".
+include_directories(src ${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/doctest)
+
+# The three programs. Each one is made from the listed source files.
+add_executable(life       src/main.cpp        src/life.cpp)
+add_executable(life_tests tests/life_test.cpp src/life.cpp)
+add_executable(life_bench bench/bench_life.cpp src/life.cpp)
+
+# Lets `ctest --test-dir build` run the tests too.
+enable_testing()
+add_test(NAME life_tests COMMAND life_tests)
+</code></pre>
+
+<h3>Version and project</h3>
+<p><code>cmake_minimum_required(VERSION 3.25)</code> must be the first command. CMake has changed its behaviour in small ways over the years, and this line says "interpret this file the way CMake 3.25 would"; anyone with an older CMake gets a clear error instead of a mysterious one. Your Mac has CMake 4.4, so the line is satisfied.</p>
+<p><code>project(life LANGUAGES CXX)</code> names the project and declares the languages; <code>CXX</code> is C++. This is the command that makes CMake go and look for a C++ compiler. Without <code>LANGUAGES CXX</code> it would also look for a C compiler you do not need.</p>
+
+<h3>Which C++</h3>
+<p>Three <code>set</code> commands follow. <strong><code>set(NAME value)</code></strong> gives a <strong>variable</strong> a value. A CMake variable is simpler than a C++ one: it has no type and no size in bytes, it holds nothing but a piece of text, and it exists only while CMake is reading the recipe. The names that begin with <code>CMAKE_</code> are variables CMake itself reads when it writes the plan; <code>set</code> on one of those is how you change CMake's behaviour.</p>
+<p><code>CMAKE_CXX_STANDARD 23</code> says which edition of the language you are writing. This is what puts <code>-std=...23</code> on every compile command, instead of you remembering it.</p>
+<p><code>CMAKE_CXX_STANDARD_REQUIRED ON</code> says "and if the compiler cannot do C++23, stop with an error". Without it, CMake would quietly fall back to an older standard, and you would get baffling errors about <code>std::println</code> not existing.</p>
+<p><code>CMAKE_CXX_EXTENSIONS OFF</code> fixes the oddity from the toy project. Compilers offer small non-standard extras on top of the standard; clang signals "standard plus extras" with <code>-std=gnu++23</code>, and CMake asks for the extras by default. Turning extensions <code>OFF</code> gives plain <code>-std=c++23</code>, the flag you have used since chapter 1. The point is portability: code that relies on one compiler's extras may not compile on another, and in week 6 you move to a second compiler on Linux.</p>
+
+<div class="callout try"><span class="label">Try it</span><p>In the toy project, add the line <code>set(CMAKE_CXX_EXTENSIONS OFF)</code> after the <code>set(CMAKE_CXX_STANDARD 23)</code> line, run <code>cmake --build build</code> (watch it print <code>Re-running CMake...</code> first), then <code>ninja -C build -t commands hello_cmake | head -1</code>. The flag is now <code>-std=c++23</code>. Remove the line, build, and look again: <code>-std=gnu++23</code> is back. One recipe line, one compiler flag; that is the whole relationship between the two files.</p></div>
+
+<h3>A map for your editor</h3>
+<p><code>set(CMAKE_EXPORT_COMPILE_COMMANDS ON)</code> asks CMake to write one more file into the build folder, <code>compile_commands.json</code>, listing the exact compile command for every source file. The compiler never reads it. Your editor does, so it can show you errors as you type. This gets its own section further down.</p>
+
+<h3>A default build type</h3>
+<pre class="code" data-lang="cmake" data-file="default-build-type.cmake"><code>if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Debug)
+endif()
+</code></pre>
+<p>CMake has <code>if</code>, written as <code>if(...)</code>, a body, and <code>endif()</code>. <strong><code>CMAKE_BUILD_TYPE</code></strong> chooses between a <strong>Debug</strong> build (no optimisation, debugging information, and in this recipe the sanitizers) and a <strong>Release</strong> build (full optimisation, nothing else). If you passed <code>-DCMAKE_BUILD_TYPE=Debug</code> on the configure line, the variable already has a value and the <code>if</code> does nothing. If you passed nothing, CMake leaves it <em>empty</em>, which means "neither": no <code>-g</code>, no <code>-O</code>, no sanitizers. (<code>-g</code> and <code>-O</code> are the compiler's flags for debugging information and for optimisation; the section "Debug and Release: two folders" below shows both on real command lines.) Empty is a poor default for a learner, so this block fills in <code>Debug</code>. So <code>cmake -S . -B build -G Ninja</code> on its own gives a Debug build, and you only need <code>-D</code> for something else.</p>
+
+<h3>Warnings for every file</h3>
+<p><code>add_compile_options(-Wall -Wextra -Wpedantic)</code> appends flags to every compile command in the project. You know <code>-Wall</code> and <code>-Wextra</code> from the first chapter. <strong><code>-Wpedantic</code></strong> adds warnings about anything that is not strictly standard C++, the same portability idea as <code>CMAKE_CXX_EXTENSIONS OFF</code> from the other side: extensions are off, and if you accidentally use one anyway, the compiler tells you.</p>
+
+<h3>Sanitizers in Debug only</h3>
+<pre class="code" data-lang="cmake" data-file="sanitizers.cmake"><code>if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+  add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+  add_link_options(-fsanitize=address,undefined)
+endif()
+</code></pre>
+<p><code>STREQUAL</code> compares two strings for equality, so this block runs only when the build type is Debug. Inside, three flags you have met through <code>tools/run.sh</code> since <a href="00-start-here.html">chapter 0</a>; <a href="02-values-and-types.html">chapters 2</a> and <a href="06-vector.html">6</a> showed what the sanitizers catch, so here is only what each flag asks the compiler to do:</p>
+<ul>
+<li><strong><code>-fsanitize=address</code></strong> is AddressSanitizer (ASan): a check in front of every memory read and write, which is what catches a read past the end of a vector and produces the report <a href="06-vector.html">chapter 6</a> decoded.</li>
+<li><strong><code>-fsanitize=undefined</code></strong> is UndefinedBehaviorSanitizer (UBSan): checks at the operations the standard leaves undefined, such as the signed overflow you watched in <a href="02-values-and-types.html">chapter 2</a>. The two sanitizers are listed together, separated by a comma.</li>
+<li><strong><code>-fno-omit-frame-pointer</code></strong> asks the compiler to keep a small piece of bookkeeping that records how functions called each other. It lives in a <strong>register</strong>, one of the few dozen storage slots built into the CPU itself, far faster than memory and therefore precious. Normally an optimiser may reuse that slot for something else to save an instruction or two. The sanitizers use it to print the chain of calls (<code>main</code> called <code>step</code> called <code>count_neighbours</code>) that led to the error, which is what makes the report readable.</li>
+</ul>
+<p>The sanitizers must be present both when compiling (to insert the checks) and when linking (to pull in the library that prints the reports), which is why <code>-fsanitize</code> appears in <code>add_compile_options</code> and again in <code>add_link_options</code>. Forget the second and you get a long linker error about missing <code>__asan_</code> symbols.</p>
+<p>Why Debug only? Because the checks are not free: a sanitized program is typically two to three times slower and uses more memory. For finding bugs that is a bargain; for the benchmark number this week ends with, it would make the number meaningless. Debug for correctness, Release for speed, and the recipe remembers the flags for you.</p>
+<p>Here is the difference made visible. Put this file and recipe in <code>scratch/ch11/oops</code>. The program writes one position past the end of a four-element vector, the bug the sanitizers exist for.</p>
+
+<pre class="code" data-lang="cpp" data-file="oops.cpp" data-check="compile"><code>#include &lt;print&gt;
+#include &lt;vector&gt;
+
+int main() {
+    std::vector&lt;int&gt; scores(4, 0);   // positions 0, 1, 2, 3
+    int position = 4;                // one past the end
+    scores[position] = 99;           // writes outside the vector
+    std::println("wrote 99 to position {}", position);
+    return 0;
+}
+</code></pre>
+
+<pre class="code" data-lang="cmake" data-file="CMakeLists.txt"><code>cmake_minimum_required(VERSION 3.25)
+project(oops LANGUAGES CXX)
+set(CMAKE_CXX_STANDARD 23)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Debug)
+endif()
+
+add_compile_options(-Wall -Wextra -Wpedantic)
+
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+  add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+  add_link_options(-fsanitize=address,undefined)
+endif()
+
+add_executable(oops oops.cpp)
+</code></pre>
+
+<p>Configure and build it twice, into two folders, with two build types. As in <a href="06-vector.html">chapter 6</a>, the long numbers starting with <code>0x</code> are memory addresses and the <code>==63167==</code> is a process id; both differ on every run. The words are what you read.</p>
+
+<pre class="shell"><code>$ cd scratch/ch11/oops
+$ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
+...
+$ cmake --build build
+[1/2] Building CXX object CMakeFiles/oops.dir/oops.cpp.o
+[2/2] Linking CXX executable oops
+$ ./build/oops
+=================================================================
+==63167==ERROR: AddressSanitizer: heap-buffer-overflow on address 0x6020000000e0 at pc 0x000100d01718 bp 0x00016f0fdc30 sp 0x00016f0fdc28
+WRITE of size 4 at 0x6020000000e0 thread T0
+    #0 0x000100d01714 in main oops.cpp:7
+    #1 0x000186c214e0 in start+0x1b4c (dyld:arm64e+0x204e0)
+
+0x6020000000e0 is located 0 bytes after 16-byte region [0x6020000000d0,0x6020000000e0)
+...
+$ cmake -S . -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release
+...
+$ cmake --build build-release
+[1/2] Building CXX object CMakeFiles/oops.dir/oops.cpp.o
+[2/2] Linking CXX executable oops
+$ ./build-release/oops
+wrote 99 to position 4
+</code></pre>
+
+<p>Same source, same recipe. The Debug build stops at line 7 and says it wrote 4 bytes just after a 16-byte region (four <code>int</code>s of 4 bytes each). It does not reach the <code>println</code>, and it exits with a non-zero status so that anything waiting on it, such as <code>ctest</code>, knows it failed. The Release build writes 99 somewhere it does not own, prints a cheerful message, and exits with status 0. The program has no defined meaning. Today it happened to look fine; tomorrow, with a bigger vector, it corrupts something and crashes far from the real cause. This is why every test run this week happens in the Debug build.</p>
+<p>One more thing to notice: the compiler never warned, in either build, even though <code>position</code> is plainly 4. <code>scores[position]</code> is a call to a function inside <code>std::vector</code>, and the compiler does not check what a function will do with its argument. A vector's bounds are checked only while the program runs, and only if something like ASan is watching.</p>
+
+<h3>Where the headers are</h3>
+<p><code>include_directories(src ${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/doctest)</code> adds <code>-I</code> options to every compile command. Each argument is a folder in which the compiler should look when it meets <code>#include "something.h"</code>.</p>
+<p>The first, <code>src</code>, is relative to the project folder, so <code>#include "life.hpp"</code> works from <code>tests/life_test.cpp</code> and <code>bench/bench_life.cpp</code> even though they live elsewhere. The second uses a <strong>variable reference</strong>: <code>${CMAKE_CURRENT_SOURCE_DIR}</code> is replaced by the absolute path of the folder holding this <code>CMakeLists.txt</code>, so the whole thing reads "from this folder, go up two levels to the repo root and into <code>third_party/doctest</code>". That is where <code>doctest.h</code>, the single-file test framework for chapter 12, is kept. A copy is checked into the repo, so nothing needs installing. The path is written relative to the recipe, not as an absolute <code>/Users/dan/...</code>. That is what lets the same file work on any machine, including the Linux container in week 6.</p>
+
+<h3>Three programs from four files</h3>
+<pre class="code" data-lang="cmake" data-file="targets.cmake"><code>add_executable(life       src/main.cpp        src/life.cpp)
+add_executable(life_tests tests/life_test.cpp src/life.cpp)
+add_executable(life_bench bench/bench_life.cpp src/life.cpp)
+</code></pre>
+<p>This is the heart of the recipe. <strong><code>add_executable(name sources...)</code></strong> declares a <strong>target</strong>: a program to be built, with the list of <code>.cpp</code> files that make it. Headers are not listed; the compiler finds them through <code>#include</code> and the <code>-I</code> folders, and Ninja learns about them from the dependency files you saw earlier.</p>
+<p>Each line is one program, and the sources after the name are exactly the files you would have typed on the <code>clang++</code> line. Read down the second column: <code>main.cpp</code>, <code>life_test.cpp</code>, <code>bench_life.cpp</code>. Each contains a <code>main</code> function, and a program may have only one, which is why they cannot be combined. Read down the third column: <code>life.cpp</code> three times. That file holds the functions all three programs need, and the only way a program can call <code>step</code> is to have <code>life.cpp</code> compiled into it.</p>
+<p>Is compiling <code>life.cpp</code> three times wasteful? A little; you can see <code>life.cpp.o</code> produced once per target in the build output below. It is also completely fine: the three compiles run in parallel, take a fraction of a second, and keep the recipe at three readable lines. CMake has a tidier way (compile <code>life.cpp</code> once into a <strong>library</strong>, then link it into each program), and you will meet it in week 3.</p>
+
+<h3>Telling CMake about the tests</h3>
+<p><code>enable_testing()</code> switches on CMake's test runner support for this folder, and <code>add_test(NAME life_tests COMMAND life_tests)</code> registers one test named <code>life_tests</code> whose command is the <code>life_tests</code> program. The convention is simple: the test passes if the program exits with 0, fails otherwise. doctest, which you meet in chapter 12, exits with 1 when any check fails, so the two agree. These two lines are what make <code>ctest</code> work, shown below.</p>
+
+<h2>Building the Life project</h2>
+<p>Now do the real thing. From the project folder, one configure and one build:</p>
+
+<pre class="shell"><code>$ cd phase1-terminal/01-life
+$ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
+-- The CXX compiler identification is AppleClang 21.0.0.21000101
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: /usr/bin/c++ - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Configuring done (0.2s)
+-- Generating done (0.0s)
+-- Build files have been written to: /Users/dan/Desktop/projects/cpp-101/phase1-terminal/01-life/build
+$ cmake --build build
+[1/9] Building CXX object CMakeFiles/life.dir/src/life.cpp.o
+[2/9] Building CXX object CMakeFiles/life_bench.dir/src/life.cpp.o
+[3/9] Building CXX object CMakeFiles/life_tests.dir/src/life.cpp.o
+[4/9] Building CXX object CMakeFiles/life.dir/src/main.cpp.o
+[5/9] Linking CXX executable life
+[6/9] Building CXX object CMakeFiles/life_bench.dir/bench/bench_life.cpp.o
+[7/9] Linking CXX executable life_bench
+[8/9] Building CXX object CMakeFiles/life_tests.dir/tests/life_test.cpp.o
+[9/9] Linking CXX executable life_tests
+</code></pre>
+
+<p>Nine steps: six compiles (four files, with <code>life.cpp</code> three times) and three links. The order looks odd: <code>life</code> is linked before <code>bench_life.cpp</code> is compiled. That is because Ninja runs steps in parallel and prints each as it finishes, and a step only starts after everything it needs is done, so your order will differ from this one. The whole thing takes about 1.2 seconds (measured: 1.23 s), against 2.5 for the three hand-typed lines, because the compiles overlap. Annoyance number three solved.</p>
+<p>Now run the tests. The stubs in <code>life.cpp</code> return wrong answers on purpose, so expect red:</p>
+
+<pre class="shell"><code>$ ./build/life_tests
+[doctest] doctest version is "2.5.3"
+[doctest] run with "--help" for options
+===============================================================================
+/Users/dan/Desktop/projects/cpp-101/phase1-terminal/01-life/tests/life_test.cpp:22:
+TEST CASE:  index_of: row-major flat index
+
+/Users/dan/Desktop/projects/cpp-101/phase1-terminal/01-life/tests/life_test.cpp:24: ERROR: CHECK( index_of(9, 0, 10) == 9 ) is NOT correct!
+  values: CHECK( 0 == 9 )
+
+...  (many more failures)
+
+===============================================================================
+[doctest] test cases:    13 |     1 passed | 12 failed | 0 skipped
+[doctest] assertions: 10061 | 10010 passed | 51 failed |
+[doctest] Status: FAILURE!
+</code></pre>
+
+<p>This is the starting line of the week. <a href="12-testing.html">Chapter 12</a> teaches you to read these reports; chapter 14 walks you through turning them green one milestone at a time. For now the point is that the program was built with the right flags, found <code>doctest.h</code> and <code>life.hpp</code>, and ran under the sanitizers, and you typed two commands.</p>
+<p>Now the loop you will live in. Build again with nothing changed, then change one file and build again:</p>
+
+<pre class="shell"><code>$ cmake --build build
+ninja: no work to do.
+$ touch src/main.cpp
+$ cmake --build build
+[1/2] Building CXX object CMakeFiles/life.dir/src/main.cpp.o
+[2/2] Linking CXX executable life
+$ touch src/life.cpp
+$ cmake --build build
+[1/6] Building CXX object CMakeFiles/life_tests.dir/src/life.cpp.o
+[2/6] Building CXX object CMakeFiles/life.dir/src/life.cpp.o
+[3/6] Building CXX object CMakeFiles/life_bench.dir/src/life.cpp.o
+[4/6] Linking CXX executable life
+[5/6] Linking CXX executable life_bench
+[6/6] Linking CXX executable life_tests
+</code></pre>
+
+<p>(<code>touch</code> updates a file's modification time without changing its contents, which is enough to make Ninja think it changed.) Touching <code>main.cpp</code> rebuilds two things: that object and the one program that uses it. Touching <code>life.cpp</code> rebuilds six, because three programs depend on it; <code>life_test.cpp</code> and <code>bench_life.cpp</code> are left alone. A rebuild after a one-line edit in <code>life.cpp</code> takes about a fifth of a second (measured: 0.18 s for the six steps above, after a real edit rather than a <code>touch</code>). Edit, build, run tests: that is the rhythm for the rest of the week.</p>
+
+<div class="callout note"><span class="label">Note</span><p>Editing <code>life.hpp</code> rebuilds every source file that includes it. Right now that is every file except the stub <code>main.cpp</code>, which only includes <code>&lt;print&gt;</code>: <code>touch src/life.hpp</code> gives eight steps, five compiles and three links. Once you write the real <code>main</code> it will include <code>life.hpp</code> too and the count becomes nine. That is correct, not a bug: a header is pasted into each file that includes it, so a change there changes all of them. It is one reason to keep headers small and stable, which <code>life.hpp</code> is.</p></div>
+
+<h2>Debug and Release: two folders</h2>
+<p>The benchmark at the end of the week needs a Release build, and you still want the Debug build for tests. You do not have to choose. A build folder remembers its build type in <code>CMakeCache.txt</code>, so make a second folder with a different type:</p>
+
+<pre class="shell"><code>$ cmake -S . -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release
+-- The CXX compiler identification is AppleClang 21.0.0.21000101
+...
+-- Build files have been written to: /Users/dan/Desktop/projects/cpp-101/phase1-terminal/01-life/build-release
+$ cmake --build build-release
+[1/9] Building CXX object CMakeFiles/life.dir/src/life.cpp.o
+...
+[9/9] Linking CXX executable life_tests
+</code></pre>
+
+<p>Now <code>build/</code> holds Debug programs and <code>build-release/</code> holds Release ones, from the same sources. Ask Ninja what differed:</p>
+
+<pre class="shell"><code>$ ninja -C build -t commands life_bench | head -1
+ccache /usr/bin/c++  -I/Users/dan/Desktop/projects/cpp-101/phase1-terminal/01-life/src -I/Users/dan/Desktop/projects/cpp-101/phase1-terminal/01-life/../../third_party/doctest -g -std=c++23 -arch arm64 -Wall -Wextra -Wpedantic -fsanitize=address,undefined -fno-omit-frame-pointer -MD -MT CMakeFiles/life_bench.dir/bench/bench_life.cpp.o -MF CMakeFiles/life_bench.dir/bench/bench_life.cpp.o.d -o CMakeFiles/life_bench.dir/bench/bench_life.cpp.o -c /Users/dan/Desktop/projects/cpp-101/phase1-terminal/01-life/bench/bench_life.cpp
+$ ninja -C build-release -t commands life_bench | head -1
+ccache /usr/bin/c++  -I/Users/dan/Desktop/projects/cpp-101/phase1-terminal/01-life/src -I/Users/dan/Desktop/projects/cpp-101/phase1-terminal/01-life/../../third_party/doctest -O3 -DNDEBUG -std=c++23 -arch arm64 -Wall -Wextra -Wpedantic -MD -MT CMakeFiles/life_bench.dir/bench/bench_life.cpp.o -MF CMakeFiles/life_bench.dir/bench/bench_life.cpp.o.d -o CMakeFiles/life_bench.dir/bench/bench_life.cpp.o -c /Users/dan/Desktop/projects/cpp-101/phase1-terminal/01-life/bench/bench_life.cpp
+</code></pre>
+
+<p>Everything from the recipe is in both: the two <code>-I</code> folders, <code>-std=c++23</code>, the three warning flags. The Debug line adds <code>-g</code>, which stores debugging information (variable names, line numbers) so that error reports and, from week 3, the debugger can point at your source, plus the sanitizer flags from the <code>if</code> block. The Release line has neither and instead has <code>-O3 -DNDEBUG</code>. Careful with that <code>-D</code>: it is the <em>compiler's</em> <code>-D</code>, not CMake's. Two different programs happen to use the same letter. CMake's <code>-DNAME=value</code> on the configure line sets a CMake variable; the compiler's <code>-DNAME</code> defines a name for the <code>#include</code> machinery from chapter 10, as if the file began with <code>#define NAME</code>. <code>NDEBUG</code> ("no debug") switches off <code>assert</code> checks, a self-check mechanism you have not used yet. <code>-O3</code> is the optimiser, and it deserves a paragraph.</p>
+<p>An <strong>optimiser</strong> is the part of the compiler that rewrites your program into a faster one with the same visible behaviour. <code>-O0</code>, the default when no <code>-O</code> is given, does almost none of this: every variable gets a slot in memory, every statement becomes machine code in the order you wrote it, every function call is a real call. That is easy to debug and slow. At <code>-O2</code> and <code>-O3</code> the compiler does four big things. It keeps values in the CPU's registers (the fast built-in slots mentioned above) instead of memory. It removes computations whose result is never used. It reorders instructions so the CPU is never waiting. And it <strong>inlines</strong> small functions: it pastes the body of <code>index_of</code> into the place that called it instead of jumping there and back. For a loop over a million cells that calls <code>index_of</code> and <code>wrap</code> many times per cell, the difference is typically five to thirty times. CMake's Release type picks <code>-O3</code>, the most aggressive level; <code>-O2</code> is a common conservative choice, and in week 6 you will measure them against each other.</p>
+<p>So: <strong>Debug</strong> for correctness, <strong>Release</strong> for numbers. Never report a benchmark from a Debug build, and never trust a Release build that has not passed the tests in Debug. <a href="13-timing-and-benchmark.html">Chapter 13</a> builds <code>life_bench</code> both ways on the 1000 by 1000 grid and puts the two numbers side by side in <code>BENCH.md</code>; the ratio is your first concrete measurement of what the optimiser is worth.</p>
+
+<div class="callout principle"><span class="label">First principle</span><p>One source tree, many build folders. Debug, Release, a build with a different compiler, a build for Linux: each is one more <code>-B</code> folder with its own <code>CMakeCache.txt</code>. They never interfere, because nothing in them is shared, and any of them can be deleted and remade. The sources are the truth; the builds are views of it.</p></div>
+
+<div class="callout trap"><span class="label">Trap</span><p>The folder name means nothing to CMake. If you type <code>cmake -S . -B build-release -G Ninja</code> and forget <code>-DCMAKE_BUILD_TYPE=Release</code>, the <code>if(NOT CMAKE_BUILD_TYPE)</code> block fills in Debug, and you have a folder called <code>build-release</code> full of sanitized, unoptimised programs. Your benchmark number will be somewhere between ten and a hundred times too slow (the missing optimiser and the extra sanitizer checks multiply) and you will not know why. Check what a folder really is with <code>grep CMAKE_BUILD_TYPE build-release/CMakeCache.txt</code>; it prints <code>CMAKE_BUILD_TYPE:STRING=Release</code> when all is well and <code>CMAKE_BUILD_TYPE:STRING=</code> (empty) when you forgot. The fix is to run the configure line again with the <code>-D</code>; CMake updates the cache in place, and the next build recompiles everything with the new flags.</p></div>
+
+<h2>One target, and ctest</h2>
+<p>You do not always want all three programs. <code>--target</code> builds one target and whatever it depends on, and nothing else:</p>
+
+<pre class="shell"><code>$ touch tests/life_test.cpp
+$ cmake --build build --target life_tests
+[1/2] Building CXX object CMakeFiles/life_tests.dir/tests/life_test.cpp.o
+[2/2] Linking CXX executable life_tests
+</code></pre>
+
+<p>The <code>enable_testing</code> and <code>add_test</code> lines pay off with <strong><code>ctest</code></strong>, a program that comes with CMake and runs every registered test, reporting pass or fail for each. <code>--test-dir build</code> names the build folder, and <code>--output-on-failure</code> shows the test program's own output when a test fails (by default it is hidden, which is unhelpful).</p>
+
+<pre class="shell"><code>$ ctest --test-dir build --output-on-failure
+Test project /Users/dan/Desktop/projects/cpp-101/phase1-terminal/01-life/build
+    Start 1: life_tests
+1/1 Test #1: life_tests .......................***Failed    0.51 sec
+[doctest] doctest version is "2.5.3"
+[doctest] run with "--help" for options
+...  (the same doctest report as before)
+[doctest] test cases:    13 |     1 passed | 12 failed | 0 skipped
+[doctest] assertions: 10061 | 10010 passed | 51 failed |
+[doctest] Status: FAILURE!
+
+
+0% tests passed, 1 tests failed out of 1
+
+Total Test time (real) =   0.51 sec
+
+The following tests FAILED:
+	  1 - life_tests (Failed)
+Errors while running CTest
+</code></pre>
+
+<p>With one test registered, <code>ctest</code> adds little over running <code>./build/life_tests</code> directly, and during the week you will mostly run the program itself. The value comes later: a project with twenty test programs runs them all with one command. This repository has <strong>continuous integration</strong> from week 1, a server that builds and tests every commit you push, and in week 13 you extend it into a release workflow; it is <code>ctest</code> that it calls to decide whether a commit is green.</p>
+
+<h2>compile_commands.json and your editor</h2>
+<p>Because the recipe set <code>CMAKE_EXPORT_COMPILE_COMMANDS ON</code> (and your shell asks for the same thing, which is why the toy project had one too), the build folder contains a file your editor can use. It is plain text in <strong>JSON</strong> format (a widely used way of writing lists and name/value pairs so that programs can read them: square brackets for a list, curly brackets for one entry, <code>"name": value</code> inside), one entry per source file. It looks like this (shortened; notice that the <code>ccache</code> prefix is left out here, because the editor wants the compiler, not the cache):</p>
+
+<pre class="code" data-lang="text" data-file="compile_commands.json"><code>[
+{
+  "directory": "/Users/dan/Desktop/projects/cpp-101/phase1-terminal/01-life/build",
+  "command": "/usr/bin/c++ -I/Users/dan/Desktop/projects/cpp-101/phase1-terminal/01-life/src -I/Users/dan/Desktop/projects/cpp-101/phase1-terminal/01-life/../../third_party/doctest -g -std=c++23 -arch arm64 -Wall -Wextra -Wpedantic -fsanitize=address,undefined -fno-omit-frame-pointer -o CMakeFiles/life.dir/src/main.cpp.o -c /Users/dan/Desktop/projects/cpp-101/phase1-terminal/01-life/src/main.cpp",
+  "file": "/Users/dan/Desktop/projects/cpp-101/phase1-terminal/01-life/src/main.cpp",
+  "output": "/Users/dan/Desktop/projects/cpp-101/phase1-terminal/01-life/build/CMakeFiles/life.dir/src/main.cpp.o"
+},
+...
+]
+</code></pre>
+
+<p>Why does an editor need this? When your editor underlines a mistake before you compile, it is running the front half of a real compiler on your file as you type. The program that does this is called a <strong>language server</strong>; for C++ it is <strong>clangd</strong>, a helper built from the same code as <code>clang++</code>. Zed, the editor from <a href="00-start-here.html">chapter 0</a>'s machine table, uses clangd out of the box; VS Code gets it through the clangd extension; CLion has it built in. To do that correctly it must know what the build knows: which standard, which <code>-I</code> folders, which flags. Without them, every <code>#include "doctest.h"</code> is a false error and <code>std::println</code> is "not found". <code>compile_commands.json</code> is how CMake hands those facts to the editor, per file.</p>
+<p>clangd looks for the file in the folder of the source you have open, then in each parent folder. In each of those it also peeks into a sub-folder named exactly <code>build/</code>. So for the Life project, with its Debug build in <code>build/</code>, it finds the file on its own. The lookup breaks as soon as your build folder has another name (<code>build-release/</code>, or <code>build-asan/</code> later in the curriculum). And <code>clang-tidy</code>, the checker from <code>goal.md</code>'s formatting row that you set up in week 3, does not peek into <code>build/</code> at all; it wants the file beside the sources. The convention in this repo is therefore to make a link from the project folder, once:</p>
+
+<pre class="shell"><code>$ cd phase1-terminal/01-life
+$ ln -s build/compile_commands.json compile_commands.json
+</code></pre>
+
+<p>A <strong>symbolic link</strong> is a small file that points at another file; the editor follows it and sees the real one. Because CMake rewrites the real file every time it configures, the link never goes stale, and <code>compile_commands.json</code> is in <code>.gitignore</code> so the link is never committed. If your editor insists on the repository root instead, make the link there, pointing at <code>phase1-terminal/01-life/build/compile_commands.json</code>. Reload the editor window afterwards and the red underlines should match what <code>cmake --build</code> would say.</p>
+
+<h2>When it goes wrong</h2>
+<p>Three failures account for most build trouble in week 1. Learn their messages so you recognise them in two seconds instead of twenty minutes.</p>
+
+<h3>A path that does not exist</h3>
+<p>Misspell a source file in <code>add_executable</code> (here <code>mian.cpp</code>) and CMake stops at the generate step, before Ninja ever runs:</p>
+
+<pre class="shell"><code>$ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
+...
+-- Configuring done (0.2s)
+CMake Error at CMakeLists.txt:40 (add_executable):
+  Cannot find source file:
+
+    src/mian.cpp
+
+
+CMake Error at CMakeLists.txt:40 (add_executable):
+  No SOURCES given to target: life
+
+
+CMake Generate step failed.  Build files cannot be regenerated correctly.
+</code></pre>
+
+<p>The message gives the recipe line (40) and the command. Misspell an <em>include</em> folder instead (say <code>source</code> for <code>src</code>) and CMake cannot know; it does not check that <code>-I</code> folders exist. Configuring succeeds and the error arrives from the compiler during the build:</p>
+
+<pre class="shell"><code>$ cmake --build build
+[1/9] Building CXX object CMakeFiles/life_tests.dir/src/life.cpp.o
+[2/9] Building CXX object CMakeFiles/life.dir/src/life.cpp.o
+[3/9] Building CXX object CMakeFiles/life_bench.dir/src/life.cpp.o
+[4/9] Building CXX object CMakeFiles/life_bench.dir/bench/bench_life.cpp.o
+FAILED: [code=1] CMakeFiles/life_bench.dir/bench/bench_life.cpp.o
+ccache /usr/bin/c++  -I/Users/dan/Desktop/projects/cpp-101/phase1-terminal/01-life/source -I/Users/dan/Desktop/projects/cpp-101/phase1-terminal/01-life/../../third_party/doctest -g -std=c++23 -arch arm64 -Wall -Wextra -Wpedantic -fsanitize=address,undefined -fno-omit-frame-pointer -MD -MT CMakeFiles/life_bench.dir/bench/bench_life.cpp.o -MF CMakeFiles/life_bench.dir/bench/bench_life.cpp.o.d -o CMakeFiles/life_bench.dir/bench/bench_life.cpp.o -c /Users/dan/Desktop/projects/cpp-101/phase1-terminal/01-life/bench/bench_life.cpp
+/Users/dan/Desktop/projects/cpp-101/phase1-terminal/01-life/bench/bench_life.cpp:13:10: fatal error: 'life.hpp' file not found
+   13 | #include "life.hpp"
+      |          ^~~~~~~~~~
+1 error generated.
+[5/9] Building CXX object CMakeFiles/life.dir/src/main.cpp.o
+[6/9] Building CXX object CMakeFiles/life_tests.dir/tests/life_test.cpp.o
+FAILED: [code=1] CMakeFiles/life_tests.dir/tests/life_test.cpp.o
+...
+/Users/dan/Desktop/projects/cpp-101/phase1-terminal/01-life/tests/life_test.cpp:10:10: fatal error: 'life.hpp' file not found
+   10 | #include "life.hpp"
+      |          ^~~~~~~~~~
+1 error generated.
+ninja: build stopped: subcommand failed.
+</code></pre>
+
+<p>Whenever a step fails, Ninja prints <code>FAILED:</code>, then the full command it ran (so you can see the flags it used; here the wrong <code>-I.../source</code> is right there), then the compiler's message. Note what did and did not fail. <code>src/life.cpp</code> compiled, because it sits next to <code>life.hpp</code> and <code>#include "..."</code> always looks beside the including file first; <code>main.cpp</code> compiled because the stub does not include <code>life.hpp</code> at all. The files in <code>bench/</code> and <code>tests/</code> relied on the <code>-I</code> folder and failed. When you see <code>file not found</code> for a header you know exists, check the <code>include_directories</code> line.</p>
+
+<h3>A build folder that moved</h3>
+<p><code>CMakeCache.txt</code> records absolute paths. If you rename or move the project folder (here to <code>01-life-renamed</code>) and try to build, CMake notices that the folder it is in is not the folder the cache was made for:</p>
+
+<pre class="shell"><code>$ cmake --build build
+CMake Error: The current CMakeCache.txt directory /Users/dan/Desktop/projects/cpp-101/phase1-terminal/01-life-renamed/build/CMakeCache.txt is different than the directory /Users/dan/Desktop/projects/cpp-101/phase1-terminal/01-life/build where CMakeCache.txt was created. This may result in binaries being created in the wrong place. If you are not sure, reedit the CMakeCache.txt
+[0/1] Re-running CMake...
+CMake Error: The source directory "/Users/dan/Desktop/projects/cpp-101/phase1-terminal/01-life" does not appear to contain CMakeLists.txt.
+...
+ninja: error: rebuilding 'build.ninja': subcommand failed
+</code></pre>
+
+<p>Do not edit <code>CMakeCache.txt</code> as the message suggests. The build folder is derived: <code>rm -rf build</code>, configure again, done. The same cure applies to any inexplicable build behaviour after you upgrade the compiler or CMake, switch branches, or copy the project between machines.</p>
+
+<h3>A source file you forgot to list</h3>
+<p>Remove <code>src/life.cpp</code> from the <code>life_tests</code> line and everything compiles, because <code>life_test.cpp</code> only needs the <em>declarations</em> in <code>life.hpp</code> to compile. The failure comes at the very last step, the link, when the linker looks for the <em>definitions</em> and cannot find them:</p>
+
+<pre class="shell"><code>$ cmake --build build
+...
+[8/8] Linking CXX executable life_tests
+FAILED: [code=1] life_tests
+: &amp;&amp; /usr/bin/c++ -g -arch arm64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names -fsanitize=address,undefined CMakeFiles/life_tests.dir/tests/life_test.cpp.o -o life_tests   &amp;&amp; :
+Undefined symbols for architecture arm64:
+  "random_cells(int, int, unsigned int, double)", referenced from:
+      DOCTEST_ANON_FUNC_29() in life_test.cpp.o
+      DOCTEST_ANON_FUNC_29() in life_test.cpp.o
+      ...
+  "count_neighbours(std::__1::vector&lt;unsigned char, std::__1::allocator&lt;unsigned char&gt;&gt; const&amp;, int, int, int, int)", referenced from:
+      DOCTEST_ANON_FUNC_35() in life_test.cpp.o
+      ...
+  "step(std::__1::vector&lt;unsigned char, std::__1::allocator&lt;unsigned char&gt;&gt; const&amp;, std::__1::vector&lt;unsigned char, std::__1::allocator&lt;unsigned char&gt;&gt;&amp;, int, int)", referenced from:
+      DOCTEST_ANON_FUNC_41() in life_test.cpp.o
+      ...
+  "wrap(int, int)", referenced from:
+      DOCTEST_ANON_FUNC_33() in life_test.cpp.o
+      ...
+  "render(std::__1::vector&lt;unsigned char, std::__1::allocator&lt;unsigned char&gt;&gt; const&amp;, int, int)", referenced from:
+      DOCTEST_ANON_FUNC_31() in life_test.cpp.o
+      ...
+  "index_of(int, int, int)", referenced from:
+      DOCTEST_ANON_FUNC_27() in life_test.cpp.o
+      ...
+ld: symbol(s) not found for architecture arm64
+clang++: error: linker command failed with exit code 1 (use -v to see invocation)
+ninja: build stopped: subcommand failed.
+</code></pre>
+
+<p>You met <code>Undefined symbols</code> in chapter 10 when you forgot a <code>.cpp</code> on the <code>clang++</code> line. Same error, same cause, and now the fix is in one place: the function named in quotes is defined in some <code>.cpp</code> missing from that target's <code>add_executable</code> line. Here it is every function from <code>life.hpp</code>, which points straight at <code>life.cpp</code>. Look at the command Ninja echoed after <code>FAILED:</code> and you can see it directly: only <code>life_test.cpp.o</code> was handed to the linker.</p>
+<p>Two oddities in the message. The linker writes <code>Cells</code> out in full as <code>std::__1::vector&lt;unsigned char, ...&gt;</code>, because <code>std::uint8_t</code> is another name for <code>unsigned char</code> on this machine and <code>using</code> names vanish after compilation. And <code>DOCTEST_ANON_FUNC_29</code> is the hidden function doctest generates for one <code>TEST_CASE</code>; chapter 12 explains how.</p>
+
+<div class="callout trap"><span class="label">Trap</span><p>The linker reports the <em>caller</em>, not the missing file: "<code>wrap</code>, referenced from <code>life_test.cpp.o</code>". Beginners read that as "something is wrong in <code>life_test.cpp</code>" and stare at a correct file. The sentence means "<code>life_test.cpp</code> calls <code>wrap</code>, and no object file I was given defines it". Ask which <code>.cpp</code> defines it, and check that it is listed.</p></div>
+
+<h2>Adding a new source file</h2>
+<p>Week 1 does not need a new source file, but the stretch goals and every later week will, so here is the procedure on a toy. Suppose you have a two-file greeting program in <code>scratch/ch11/greet</code>:</p>
+
+<pre class="code" data-lang="cpp" data-file="greet.hpp" data-check="fragment"><code>#pragma once
+#include &lt;string&gt;
+
+// Builds a greeting for one person.
+std::string greeting_for(const std::string&amp; name);
+</code></pre>
+
+<pre class="code" data-lang="cpp" data-file="greet.cpp" data-check="fragment"><code>#include "greet.hpp"
+
+std::string greeting_for(const std::string&amp; name) {
+    return "Hello, " + name + "!";
+}
+</code></pre>
+
+<pre class="code" data-lang="cmake" data-file="CMakeLists.txt"><code>cmake_minimum_required(VERSION 3.25)
+project(greet LANGUAGES CXX)
+set(CMAKE_CXX_STANDARD 23)
+add_executable(greet main.cpp greet.cpp)
+</code></pre>
+
+<p>Configure and build it once, so there is a plan and a working program to start from:</p>
+
+<pre class="shell"><code>$ cd scratch/ch11/greet
+$ cmake -S . -B build -G Ninja
+...
+-- Build files have been written to: /Users/dan/Desktop/projects/cpp-101/scratch/ch11/greet/build
+$ cmake --build build
+[1/3] Building CXX object CMakeFiles/greet.dir/greet.cpp.o
+[2/3] Building CXX object CMakeFiles/greet.dir/main.cpp.o
+[3/3] Linking CXX executable greet
+$ ./build/greet
+Hello, Danish!
+</code></pre>
+
+<p>Now you add a farewell in a new pair of files, <code>farewell.hpp</code> and <code>farewell.cpp</code>, with exactly the same shape as the greeting pair: the header declares <code>std::string farewell_for(const std::string&amp; name);</code> and the source defines it to return <code>"Goodbye, "</code>, the name, and a full stop. Then <code>main.cpp</code> calls both:</p>
+
+<pre class="code" data-lang="cpp" data-file="main.cpp" data-check="fragment"><code>#include &lt;print&gt;
+#include "greet.hpp"
+#include "farewell.hpp"
+
+int main() {
+    std::println("{}", greeting_for("Danish"));
+    std::println("{}", farewell_for("Danish"));
+    return 0;
+}
+</code></pre>
+
+<p>Build without touching the recipe and you get the third failure from the previous section, because CMake does not scan folders for <code>.cpp</code> files; it builds exactly what you list:</p>
+
+<pre class="shell"><code>$ cmake --build build
+[1/2] Building CXX object CMakeFiles/greet.dir/main.cpp.o
+[2/2] Linking CXX executable greet
+FAILED: [code=1] greet
+: &amp;&amp; /usr/bin/c++ -arch arm64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names CMakeFiles/greet.dir/main.cpp.o CMakeFiles/greet.dir/greet.cpp.o -o greet   &amp;&amp; :
+Undefined symbols for architecture arm64:
+  "farewell_for(std::__1::basic_string&lt;char, std::__1::char_traits&lt;char&gt;, std::__1::allocator&lt;char&gt;&gt; const&amp;)", referenced from:
+      _main in main.cpp.o
+ld: symbol(s) not found for architecture arm64
+clang++: error: linker command failed with exit code 1 (use -v to see invocation)
+ninja: build stopped: subcommand failed.
+</code></pre>
+
+<p>(The long <code>std::__1::basic_string&lt;...&gt;</code> is the linker's full name for <code>std::string</code>. Read it as "<code>farewell_for</code> taking a <code>const std::string&amp;</code>".) The fix is the one line: add the new file to the target.</p>
+
+<pre class="code" data-lang="cmake" data-file="CMakeLists.txt"><code>add_executable(greet main.cpp greet.cpp farewell.cpp)
+</code></pre>
+
+<pre class="shell"><code>$ cmake --build build
+[0/1] Re-running CMake...
+-- Configuring done (0.0s)
+-- Generating done (0.0s)
+-- Build files have been written to: /Users/dan/Desktop/projects/cpp-101/scratch/ch11/greet/build
+[1/3] Building CXX object CMakeFiles/greet.dir/farewell.cpp.o
+[2/3] Linking CXX executable greet
+$ ./build/greet
+Hello, Danish!
+Goodbye, Danish.
+</code></pre>
+
+<p>See the first line: Ninja saw that <code>CMakeLists.txt</code> was newer than the plan, reran CMake, then built with the new file included. Only <code>farewell.cpp</code> was compiled; <code>main.cpp.o</code> and <code>greet.cpp.o</code> from the failed attempt were still good and were reused. (The counter says <code>/3</code> but you see only two numbered lines because the CMake re-run was the third step; Ninja printed it as <code>[0/1]</code> before it knew the total.) The rule: <strong>new <code>.cpp</code> file, one more word on the <code>add_executable</code> line</strong>. New header: nothing to do, as long as it sits in a folder the compiler already searches.</p>
+
+<div class="callout try"><span class="label">Try it</span><p>Write <code>farewell.hpp</code> and <code>farewell.cpp</code> yourself (declaration in the header with <code>#pragma once</code>, definition in the source), reproduce the linker error, then fix the recipe and watch the <code>Re-running CMake...</code> line appear. Then delete <code>build/</code> entirely, configure, and build from nothing, to convince yourself the folder really is disposable.</p></div>
+
+<h2>What comes later</h2>
+<p>Other projects' recipes use commands this chapter did not, and it helps to know they exist. <code>add_library(name sources...)</code> compiles a set of files once into a <strong>library</strong>, and <code>target_link_libraries(program library)</code> attaches it to each program that needs it; that is how a grown-up version of this recipe would avoid compiling <code>life.cpp</code> three times. <code>target_include_directories(name PUBLIC folder)</code> and <code>target_compile_options(name PRIVATE flags)</code> attach include folders and flags to <em>one target</em> rather than to every file in the folder as <code>include_directories</code> and <code>add_compile_options</code> do. These target-scoped commands are the modern style and scale to hundreds of targets; you switch to them in week 3 when the shared <code>common/</code> headers appear. For a four-file project, the directory-scoped commands are shorter and say the same thing.</p>
+
+<div class="callout twin"><span class="label">Inference twin</span><p><code>llama.cpp</code> is built with exactly the two commands you learned today: <code>cmake -B build</code> (with no <code>-S</code>, CMake takes the current folder as the source folder) and <code>cmake --build build</code>. Its recipe has the same <code>if(NOT CMAKE_BUILD_TYPE)</code> block as yours, except that it fills in <code>Release</code>, because its users want speed; and with no <code>-G</code> it takes your machine's default generator, which on your Mac is Ninja. Its top-level <code>CMakeLists.txt</code> is about three hundred lines and pulls in the <code>ggml/</code> and <code>src/</code> recipes with <code>add_subdirectory</code>, yet it is made of the same ideas: <code>project</code>, <code>set(CMAKE_CXX_STANDARD 17)</code> (in <code>ggml/</code>), <code>if(...)</code> blocks that turn features on and off, <code>add_library</code> for ggml and for llama itself, <code>add_executable</code> for the tools, and <code>-D</code> options such as <code>-DGGML_CUDA=ON</code> that you pass on the configure line. When you open it in week 27 you will skim it rather than study it, because every command will be one you have met.</p></div>
+
+<h2>Check yourself</h2>
+<div class="quiz">
+<div class="q"><p>CMake and Ninja: which one reads <code>CMakeLists.txt</code>, which one runs the compiler, and what file passes between them?</p><details class="answer"><summary>Answer</summary><p>CMake reads <code>CMakeLists.txt</code> and generates <code>build.ninja</code> in the build folder. Ninja reads <code>build.ninja</code> and runs the compiler and linker commands listed there, in parallel, skipping the ones whose outputs are already up to date. Ninja never reads <code>CMakeLists.txt</code>.</p></details></div>
+
+<div class="q"><p>You run <code>cmake -S . -B build -G Ninja</code> on the Life project with no <code>-D</code>. Which build type do you get, and which line of the recipe decides it?</p><details class="answer"><summary>Answer</summary><p>Debug. CMake leaves <code>CMAKE_BUILD_TYPE</code> empty when you pass nothing, and the block <code>if(NOT CMAKE_BUILD_TYPE) set(CMAKE_BUILD_TYPE Debug) endif()</code> fills in Debug. Empty on its own would mean no <code>-g</code>, no <code>-O</code> and no sanitizers.</p></details></div>
+
+<div class="q"><p>Why does <code>src/life.cpp</code> appear in all three <code>add_executable</code> lines, and why can the three programs not be merged into one?</p><details class="answer"><summary>Answer</summary><p>Each program calls functions defined in <code>life.cpp</code>, and the only way a program gets a definition is by having that file compiled and linked into it. They cannot be merged because <code>main.cpp</code>, <code>life_test.cpp</code> and <code>bench_life.cpp</code> each contain a <code>main</code>, and a program may have exactly one.</p></details></div>
+
+<div class="q"><p>The sanitizers are enabled only when <code>CMAKE_BUILD_TYPE STREQUAL "Debug"</code>. Give one reason for having them on and one for having them off.</p><details class="answer"><summary>Answer</summary><p>On: they catch memory errors and undefined behaviour at the moment they happen, with a file and line, instead of letting the program silently corrupt memory. Off: they make the program two to three times slower and heavier, which would make the Release benchmark number meaningless.</p></details></div>
+
+<div class="q"><p>You rename the folder <code>01-life</code> to <code>life-game</code> and run <code>cmake --build build</code>. What happens and what do you do?</p><details class="answer"><summary>Answer</summary><p>CMake reports that the <code>CMakeCache.txt</code> directory differs from the one it was created in, then fails to find the old source folder. The build folder stores absolute paths. Delete it (<code>rm -rf build</code>) and configure again; nothing you wrote lives in there.</p></details></div>
+
+<div class="q"><p>Compilation succeeds for every file, then the link step prints <code>Undefined symbols ... "wrap(int, int)", referenced from: ... in life_test.cpp.o</code>. Which file is probably wrong, and which line do you check?</p><details class="answer"><summary>Answer</summary><p>Not <code>life_test.cpp</code>; it only calls <code>wrap</code>. The file that <em>defines</em> <code>wrap</code> (<code>src/life.cpp</code>) is missing from the <code>add_executable(life_tests ...)</code> line in <code>CMakeLists.txt</code>. Add it there.</p></details></div>
+
+<div class="q"><p>What is <code>compile_commands.json</code> for, and who reads it?</p><details class="answer"><summary>Answer</summary><p>It lists the exact compile command for every source file (standard, include folders, flags). Your editor's language server (clangd, which Zed uses out of the box, VS Code via the clangd extension, and CLion built in) reads it so that the errors it shows as you type match what the real build would say. The compiler and Ninja do not use it.</p></details></div>
+
+<div class="q"><p>In one sentence each: what does <code>-O0</code> do, and what does <code>-O3</code> do?</p><details class="answer"><summary>Answer</summary><p><code>-O0</code> translates the program almost literally: every variable in memory, every statement in order, every call a real call, which is slow but easy to debug. <code>-O3</code> rewrites it for speed with the same visible behaviour: values kept in registers, dead computations removed, instructions reordered, small functions inlined into their callers.</p></details></div>
+</div>
+
+<h2>What you can do now</h2>
+<ul>
+<li>Explain the division of labour between CMake (generates the plan from <code>CMakeLists.txt</code>) and Ninja (executes the plan, in parallel, rebuilding only what changed).</li>
+<li>Write a four-line <code>CMakeLists.txt</code> for a small program and build it with <code>cmake -S . -B build -G Ninja</code> and <code>cmake --build build</code>.</li>
+<li>Read every line of <code>phase1-terminal/01-life/CMakeLists.txt</code> and say what it adds to the compiler commands, including the sanitizer flags and why they are Debug-only.</li>
+<li>Keep a Debug build in <code>build/</code> and a Release build in <code>build-release/</code>, and explain the <code>-g</code> versus <code>-O3</code> difference between them.</li>
+<li>Build a single target with <code>--target</code>, run the tests with <code>ctest --test-dir build --output-on-failure</code>, and ask Ninja what commands it ran with <code>ninja -C build -t commands</code>.</li>
+<li>Link <code>compile_commands.json</code> into the project folder so your editor sees the same flags as the build.</li>
+<li>Recognise the three common failures (missing path, moved build folder, unlisted source file) from their messages and fix each one.</li>
+<li>Add a new <code>.cpp</code> file to a project by changing one line.</li>
+</ul>
+</main>
+</body>
+</html>

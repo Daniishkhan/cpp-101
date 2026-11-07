@@ -1,0 +1,566 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>01 · What a program is — C++ from zero to Life</title>
+<link rel="stylesheet" href="assets/book.css?v=9">
+<link rel="stylesheet" href="assets/tutor.css?v=9">
+<script src="assets/theme.js?v=9"></script>
+<script defer src="assets/book.js?v=9"></script>
+<script defer src="assets/tutor.js?v=9"></script>
+</head>
+<body>
+<nav class="sidebar" aria-label="Chapters"></nav>
+<main>
+<p class="chapter-kicker">Chapter 01</p>
+<h1>What a program is</h1>
+<p class="lede">At the end of this chapter you will know what is physically happening when a program runs, you will have written, compiled and run your own first C++ programs, and you will be able to read a compiler error message without panic.</p>
+
+<div class="callout note"><span class="label">In this chapter</span>
+<ul>
+<li>The machine underneath: a CPU, a long row of bytes, and the devices that move bytes in and out.</li>
+<li>Source code versus machine code, and what a compiler and linker do.</li>
+<li>Your first program, with every single character explained.</li>
+<li>Compiling and running it from the terminal, and what the exit code is.</li>
+<li>Placeholders: printing numbers inside a sentence.</li>
+<li>The edit-compile-run loop, and how to read a real clang error.</li>
+<li>Comments, and a first 5×5 grid of dots.</li>
+</ul>
+</div>
+
+<h2>The machine underneath</h2>
+<p>Before you write a line of C++, it is worth being precise about what a computer is, because everything in this book is a way of telling that machine what to do. Strip away the case, the screen and the operating system, and three things remain.</p>
+
+<p>The first is the <strong>CPU</strong> (central processing unit). It does one tiny thing at a time: add two numbers, copy a number from one place to another, compare two numbers, jump to a different instruction. Each of these is an <strong>instruction</strong>. A single instruction is almost useless. The usefulness comes from the sheer number and from the order they are carried out in. The M5 chip in your Mac ticks roughly four billion times every second, and each tick finishes one or more instructions. So "a few billion instructions per second" is the right order of magnitude to keep in your head; it will matter when you time your first benchmark in <a href="13-timing-and-benchmark.html">chapter 13</a>.</p>
+
+<p>The second is <strong>memory</strong> (RAM). Picture one enormous row of boxes, numbered 0, 1, 2, 3, and so on up into the billions. Each box is a <strong>byte</strong>. A byte is eight tiny switches, each of which is either off or on. Eight switches that can each be in two positions give 2 × 2 × 2 × 2 × 2 × 2 × 2 × 2 = 256 possible patterns. So a byte can hold one of 256 different values, and nothing more. Anything larger, such as a big number, a word, or a picture, is stored as several bytes side by side. The number of a box is its <strong>address</strong>. The CPU reads a byte by asking for its address, and writes one by sending an address and a new pattern.</p>
+
+<pre class="grid-figure">address:   0     1     2     3     4     5     6     7     8   ...
+         +-----+-----+-----+-----+-----+-----+-----+-----+-----+
+byte:    | 72  | 101 | 108 | 108 | 111 |  0  | 42  | 0   | 0   | ...
+         +-----+-----+-----+-----+-----+-----+-----+-----+-----+
+one byte = 8 switches:   0 1 0 0 1 0 0 0   = 72
+</pre>
+
+<p>Two things in that figure need saying. First, the switches are read as a number the way a car's odometer is read, except that each position can only show 0 or 1, so each position is worth twice the one to its right: 128, 64, 32, 16, 8, 4, 2, 1. The pattern <code>0 1 0 0 1 0 0 0</code> has the 64 switch and the 8 switch on, and 64 + 8 = 72. Second, the five bytes 72, 101, 108, 108, 111 are not random: they are the word <code>Hello</code>. Every letter has an agreed number (72 is <code>H</code>, 101 is <code>e</code>, 108 is <code>l</code>, 111 is <code>o</code>), and text in memory is nothing but a row of those numbers. <a href="02-values-and-types.html">Chapter 2</a> shows you some of those codes. The 0 after the word and the 42 two boxes later are simply other values that happen to be stored next to it. Memory does not know which bytes are text and which are numbers; only the program does.</p>
+
+<p>The third is everything else: the <strong>devices</strong>. The keyboard sends bytes in when you press keys. The screen receives bytes and turns them into light. The disk (the SSD in your Mac) keeps bytes when the power is off. The CPU talks to all of these by reading and writing bytes.</p>
+
+<p>One more name before the central idea. The <strong>operating system</strong> (macOS on your Mac) is itself a program, one that is always running. It owns the devices and the memory, and it starts and stops every other program on your behalf. When you type a command in the terminal, it is the operating system that finds the file and starts it.</p>
+
+<p>Now the central idea of the chapter. A <strong>program</strong> is a list of instructions sitting in memory. When you run a program, the operating system copies its instructions from disk into memory, points the CPU at the first one, and steps back. The CPU reads an instruction, carries it out, moves to the next, and keeps going until it reaches an instruction that says "stop". That is all that running a program is. There is no understanding, no intention, no common sense anywhere in the machine. There is only the next instruction.</p>
+
+<div class="callout principle"><span class="label">First principle</span><p>A computer is a CPU that executes one small instruction at a time, a numbered row of bytes it can read and write, and devices that move bytes in and out. A program is a list of those instructions. Every C++ construct in this book is, in the end, a way of producing such a list.</p></div>
+
+<div class="callout analogy"><span class="label">Analogy</span><p>Think of a recipe followed by a cook who is astonishingly fast and completely literal. The cook reads one line, does exactly what it says, and moves to the next. If the recipe says "add salt" but never says how much, the cook does not guess; the cook stops and complains. If the recipe says "add the eggs" before "crack the eggs", the cook adds whole eggs, shell and all. The cook never gets bored, never skips a step, and never notices that the result is nonsense.</p>
+<p><em>Where the analogy breaks:</em> a human cook has at least a little understanding of food and can fill small gaps. The CPU has none. Also, a real cook can take a vague instruction and do something sensible; the CPU can only perform the handful of instruction kinds it was built with, so every vague human wish has to be broken down into those instructions before it can run at all. That breaking-down is your job, and the compiler's. And one correction to the recipe itself: the part of the story where the cook "stops and complains" about a missing amount is really the compiler's job, which you will see in a moment. The CPU itself never complains. Give it a nonsensical instruction and it carries it out anyway, and the nonsense shows up later as wrong output or a crash.</p></div>
+
+<h2>Source code and machine code</h2>
+<p>The instructions the CPU understands are patterns of bytes called <strong>machine code</strong>. Nobody writes machine code by hand any more. It is unreadable, and it is different for every kind of CPU. Instead you write <strong>source code</strong>: ordinary text, in a language such as C++, that a human can read.</p>
+
+<p>Something has to turn the one into the other. A program called a <strong>compiler</strong> reads your text and translates it into machine code. Your program is not the only code involved, though: when you print, you use ready-made code that somebody else wrote. That ready-made code is the <strong>standard library</strong>, and it ships with the compiler. A second program called the <strong>linker</strong> glues your translated code together with the pieces of the standard library you used and writes one file, the <strong>executable</strong>, that the operating system can load and run. "Executable" is the noun for "a file the operating system can run".</p>
+
+<p>The compiler used in this book is <strong>clang</strong>. It comes with Apple's command line tools. The same compiler has two names on your machine: <code>clang</code> compiles the older C language, and <code>clang++</code> is the same program told to speak C++. You always type <code>clang++</code>; the book says "clang" when it means the compiler in general. <a href="10-headers-and-files.html">Chapter 10</a> and <a href="11-cmake.html">chapter 11</a> go much deeper into compiling and linking. For now, all you need is this picture: text in, executable out.</p>
+
+<pre class="grid-figure">  hello.cpp          clang++            hello
+ (your text)  --> compiler + linker -->  (machine code the CPU can run)
+   81 bytes                             301,992 bytes
+</pre>
+
+<p>The two byte counts are real; a few pages from here you will measure both of them yourself.</p>
+
+<h2>Your first program</h2>
+<p>Here is a complete C++ program: the same six lines you typed into <code>scratch/hello.cpp</code> in <a href="00-start-here.html">chapter 0</a>. It prints one line of text and stops. You will take a few parts of it on trust for a chapter or two, but by the end of this section you will know what every character is for.</p>
+
+<pre class="code" data-lang="cpp" data-file="hello.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int main() {
+    std::println("Hello, Life.");
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="hello.cpp"><code>Hello, Life.
+</code></pre>
+
+<p>Six lines, one of them blank. Take them one at a time.</p>
+
+<h3>#include &lt;print&gt;</h3>
+<p>C++ by itself does not know how to print anything. Printing is done by code in the standard library, and the library is organised into named parts. Each part is a file called a <strong>header</strong>. <code>#include &lt;print&gt;</code> tells the compiler: "before you read the rest of this file, bring in the header called <code>print</code>". The angle brackets <code>&lt;</code> and <code>&gt;</code> around the name mean "look for this among the standard headers that came with the compiler", as opposed to a file of your own; you will meet the other spelling, with double quotes, in <a href="10-headers-and-files.html">chapter 10</a>. The line begins with <code>#</code>, which marks it as an instruction to the compiler itself rather than an instruction for the program to carry out. Note that it has no semicolon at the end; lines beginning with <code>#</code> never do.</p>
+
+<div class="callout analogy"><span class="label">Analogy</span><p>Think of <code>#include</code> as borrowing the printing toolbox and putting it on the bench before you start work. <em>Where it breaks:</em> nothing is moved or borrowed. The compiler literally reads the text of the header file at that point, as if you had typed all of it into your own file. That is why the line must come before the first use of <code>std::println</code>: the compiler reads top to bottom and cannot use a name it has not yet seen. Chapter 10 shows you this happening.</p></div>
+
+<h3>int main()</h3>
+<p>When the operating system has loaded your program, it needs to know where to begin. In C++ it always begins at a <strong>function</strong> named <code>main</code>. A function is a named, self-contained piece of a program; <a href="04-functions.html">chapter 4</a> is all about them, so for now take <code>main</code> on trust as "the starting point". The <code>int</code> before the name says that when <code>main</code> finishes, it hands back a whole number (<code>int</code> is short for integer) to whoever called it, which is the operating system. The empty parentheses <code>()</code> say that <code>main</code> takes no inputs. Every program has exactly one <code>main</code>.</p>
+
+<h3>The braces { and }</h3>
+<p>The opening brace <code>{</code> after <code>main()</code> and the closing brace <code>}</code> on the last line mark the beginning and end of the <strong>body</strong> of <code>main</code>: the list of things to do. Braces always come in pairs and they group. Everything between them belongs to <code>main</code>. You will see braces used to group things all through C++.</p>
+
+<h3>std::println("Hello, Life.");</h3>
+<p>This is the one line that does something you can see. Read it from the inside out.</p>
+<ul>
+<li><code>"Hello, Life."</code> is a <strong>string literal</strong>: a piece of text, written between double quotes, exactly as it should appear. The quotes are not printed; they tell the compiler where the text starts and stops.</li>
+<li><code>println</code> is the name of a function in the standard library that prints its text and then moves to the next line. (The <code>ln</code> at the end stands for "line".)</li>
+<li><code>std</code> is the name of the <strong>namespace</strong> that the whole standard library lives in. A namespace is like a labelled drawer of names; it stops a library name from clashing with one of yours. <code>std</code> is short for "standard". (Where the drawer picture breaks: a drawer holds things, but a namespace holds only names, and you never have to "open" it. Writing <code>std::</code> in front of a name is the whole act.)</li>
+<li><code>::</code> means "look inside". So <code>std::println</code> reads as "the <code>println</code> that is inside <code>std</code>".</li>
+<li>The parentheses after <code>println</code> hold what you hand to it. Each thing you hand to a function is called an <strong>argument</strong>; here there is one argument, the string literal. Handing the arguments over and letting the function work is called <strong>calling</strong> the function. Remember the word "argument": the compiler uses it in its messages.</li>
+<li>The semicolon <code>;</code> at the very end marks the end of a <strong>statement</strong>. A statement is one complete instruction in C++, the way a sentence is one complete thought. The compiler needs the semicolon to know where one statement stops and the next begins. Forgetting it is the single most common beginner error, and later in this chapter you will forget it on purpose to see what happens.</li>
+</ul>
+
+<h3>return 0;</h3>
+<p>Remember that <code>main</code> promised to hand back an <code>int</code>. This statement is where it does so. <code>return</code> ends the function and sends a value back; <code>0</code> is the value. By a convention older than C++, a program that returns 0 is saying "everything went fine", and any other number means "something went wrong". In a moment you will see the operating system receive this number.</p>
+
+<h3>Whitespace and indentation</h3>
+<p>The blank line after <code>#include</code>, the four spaces before <code>std::println</code>, the line breaks: none of these mean anything to the compiler. They are entirely for human readers. To prove it, here is the same program with the whitespace squashed out. It compiles and behaves identically.</p>
+
+<pre class="code" data-lang="cpp" data-file="hello_squashed.cpp" data-check="run"><code>#include &lt;print&gt;
+int main(){std::println("Hello, Life.");return 0;}
+</code></pre>
+<pre class="output" data-for="hello_squashed.cpp"><code>Hello, Life.
+</code></pre>
+
+<p>Please never write it like that. Indent the body of every pair of braces by four spaces, one statement per line. Your future self reading this code at midnight will thank you. The one place whitespace does matter is inside a string literal: <code>"Hello,  Life."</code> with two spaces prints two spaces.</p>
+
+<h3>Statements run top to bottom</h3>
+<p>The body of <code>main</code> can hold as many statements as you like. The CPU performs them in order, first to last, exactly like the cook working down the recipe.</p>
+
+<pre class="code" data-lang="cpp" data-file="two_lines.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int main() {
+    std::println("First this line is printed.");
+    std::println("Then this one.");
+    std::println("The cook never skips a step and never reorders them.");
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="two_lines.cpp"><code>First this line is printed.
+Then this one.
+The cook never skips a step and never reorders them.
+</code></pre>
+
+<div class="callout try"><span class="label">Try it</span><p>Before you go on, add a fourth <code>std::println</code> line to <code>two_lines.cpp</code>, somewhere between the existing three. Write down, on paper, exactly what the four lines of output will be and in what order. Then run it (the next section shows you how) and compare. Being able to predict the output before running is the skill this whole book trains; start now, while the programs are small enough that you will always be right.</p></div>
+
+<h2>Compile and run</h2>
+<p>You already have the first program saved as <code>scratch/hello.cpp</code> from chapter 0. The <code>.cpp</code> ending is the convention for C++ source files. In chapter 0 you ran it through <code>tools/run.sh</code>; this time you will do by hand what the script did for you, so that you see each step. Open a terminal at the repo root, move into the <code>scratch</code> folder, and type the two commands.</p>
+
+<pre class="shell"><code>$ cd scratch
+$ clang++ -std=c++23 -Wall -Wextra hello.cpp -o hello
+$ ./hello
+Hello, Life.
+</code></pre>
+
+<p>The first command is the compiler. Each part of it means one thing.</p>
+<ul>
+<li><code>clang++</code>: the C++ compiler itself (and, behind the scenes, the linker).</li>
+<li><code>-std=c++23</code>: speak the 2023 edition of C++. Without it you may get an older edition that lacks <code>&lt;print&gt;</code>.</li>
+<li><code>-Wall</code>: turn on all the common <strong>warnings</strong>. A warning is the compiler saying "this is legal, but it looks like a mistake". Treat every warning as a bug to fix.</li>
+<li><code>-Wextra</code>: turn on a second set of warnings that <code>-Wall</code> leaves out (for example, a function input that is never used, which you will care about from <a href="04-functions.html">chapter 4</a>). The two flags together are the Week 1 standard; type both every time.</li>
+<li><code>hello.cpp</code>: the source file to translate.</li>
+<li><code>-o hello</code>: name the output file <code>hello</code>. Without it you get a file called <code>a.out</code>.</li>
+</ul>
+
+<p>If the compiler is happy it prints nothing at all. Silence is good news. You now have a new file in the folder, <code>hello</code>, and it is a real executable. Ask the system what it is, using two small shell tools: <code>wc -c</code> counts the bytes in a file (<code>wc</code> is "word count", and <code>-c</code> asks for characters, which for these files means bytes), and <code>file</code> looks inside a file and reports what kind of thing it is.</p>
+
+<pre class="shell"><code>$ wc -c hello.cpp
+      81 hello.cpp
+$ file hello
+hello: Mach-O 64-bit executable arm64
+$ wc -c hello
+  301992 hello
+</code></pre>
+
+<p>Your 81 bytes of text became 301,992 bytes of machine code. <code>Mach-O</code> is the name of the file layout macOS uses for executables, and <code>arm64</code> is the CPU family that Apple Silicon belongs to, so the file is machine code for exactly the kind of CPU in your Mac; it would not run on an Intel machine. The exact byte count depends on your version of the command line tools, so yours may differ a little. Most of those bytes are the printing machinery from the standard library that the linker glued in. That is the compiler and linker doing their job: text in, executable out.</p>
+
+<p>The second command, <code>./hello</code>, runs it. The <code>./</code> means "in this folder". The shell does not look in the current folder for programs unless you tell it to, so plain <code>hello</code> would say "command not found" even though the file is right there.</p>
+
+<div class="callout trap"><span class="label">Trap</span><p>Editing <code>hello.cpp</code> does nothing to <code>hello</code>. The executable is a separate file, made from the source at the moment you compiled. If you change the source and run <code>./hello</code> again without recompiling, you get the old behaviour and wonder why your change "did not work". Always edit, then compile, then run, in that order.</p></div>
+
+<div class="callout note"><span class="label">Where does the text go?</span><p>When you run a program from the terminal, the text that <code>std::println</code> produces is sent to a channel called <strong>standard output</strong>, and the terminal displays whatever arrives there. The program does not know it is talking to a terminal; it only writes bytes. You can prove that right now: the shell can send standard output into a file instead, without changing one line of the program. The <code>&gt;</code> after a command tells the shell "put this command's standard output into the named file instead of on the screen".</p>
+<pre class="shell"><code>$ ./hello > out.txt
+$ cat out.txt
+Hello, Life.
+</code></pre>
+<p>Nothing appeared on screen after the first command, because the bytes went into <code>out.txt</code>; <code>cat</code> shows the file's contents. Delete <code>out.txt</code> afterwards if you like; it is only a demonstration.</p></div>
+
+<h3>The exit code: where return 0 goes</h3>
+<p>The <code>0</code> that <code>main</code> returned did not vanish. The operating system received it and passed it to the shell, which remembers it under the special name <code>$?</code>. This number is the <strong>exit code</strong> (also called the exit status) of the last command. The shell command <code>echo</code> prints whatever you write after it, so <code>echo $?</code> prints the exit code:</p>
+
+<pre class="shell"><code>$ ./hello
+Hello, Life.
+$ echo $?
+0
+</code></pre>
+
+<p>Now change the program so that <code>main</code> returns 3 instead:</p>
+
+<pre class="code" data-lang="cpp" data-file="return3.cpp" data-check="compile"><code>#include &lt;print&gt;
+
+int main() {
+    std::println("I am about to report a problem to the shell.");
+    return 3;
+}
+</code></pre>
+
+<pre class="shell"><code>$ clang++ -std=c++23 -Wall -Wextra return3.cpp -o return3
+$ ./return3
+I am about to report a problem to the shell.
+$ echo $?
+3
+</code></pre>
+
+<p>The program printed its line as before, and then the shell reports 3. Nothing on screen looked different, but the number travelled from your <code>return</code> statement, through the operating system, to the shell. Scripts and build tools read this number to decide whether a step succeeded, so it matters: tests, for example, exit with 0 when they all pass and with something else when one fails. In this book every program returns 0 unless it has a reason not to.</p>
+
+<div class="callout note"><span class="label">A detail you can ignore for now</span><p>C++ makes one exception for <code>main</code>: if you leave the <code>return</code> out entirely, the compiler behaves as if you had written <code>return 0;</code>. You will see other people's code rely on this. This book always writes it, because being explicit costs one line and removes a question.</p></div>
+
+<h3>The shortcut: tools/run.sh</h3>
+<p>Typing the full compiler command every time gets old. The repository has a small script, <code>tools/run.sh</code>, that compiles one file with the Week 1 flags and runs it in one step. It expects to be run from the repository root, so first step back up out of <code>scratch</code> (<code>cd ..</code> means "go to the folder above this one"):</p>
+
+<pre class="shell"><code>$ cd ..
+$ tools/run.sh scratch/hello.cpp
+Hello, Life.
+</code></pre>
+
+<p>Two things to know about it. First, it adds flags you have not met yet, the <strong>sanitizers</strong>, which make certain memory mistakes announce themselves loudly instead of corrupting things silently; <a href="02-values-and-types.html">chapter 2</a> shows the first one speaking and <a href="11-cmake.html">chapter 11</a> explains the flags. Second, it puts the executable in a temporary folder and deletes it afterwards, so your source folders stay clean. Keep your experiments in <code>scratch/</code> at the repository root; it is ignored by git. From here on, the book shows the full <code>clang++</code> command when the flags matter and <code>tools/run.sh</code> when they do not.</p>
+
+<h2>Placeholders: putting values into a sentence</h2>
+<p>Printing fixed text is only half of printing. Most of the time you want to print a value: a count, a result, a size. <code>std::println</code> handles this with <strong>placeholders</strong>. Inside the string you write a pair of braces <code>{}</code> wherever a value should appear, and after the string you list the values as further arguments, separated by commas. The first value fills the first <code>{}</code>, the second fills the second, and so on. These are the same two characters as the braces around the body of <code>main</code>, but inside a string literal they have nothing to do with grouping; <code>println</code> looks for them and treats each pair as "a value goes here".</p>
+
+<pre class="code" data-lang="cpp" data-file="placeholders.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int main() {
+    std::println("{} plus {} is {}", 2, 3, 5);
+    std::println("A byte has {} switches and {} patterns.", 8, 256);
+    std::println("Words work too: {} and {}.", "left", "right");
+    std::println("{} {} {}", 1, 2.5, "three");
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="placeholders.cpp"><code>2 plus 3 is 5
+A byte has 8 switches and 256 patterns.
+Words work too: left and right.
+1 2.5 three
+</code></pre>
+
+<p>Look closely at the first line of output. The program did <em>not</em> add 2 and 3. You typed the 5. The placeholders only insert what you give them. In <a href="02-values-and-types.html">chapter 2</a> you will let the program do the arithmetic itself. Notice also that the values can be whole numbers, numbers with a decimal point, or text; <code>println</code> turns each into characters in the sensible way. Chapter 2 names these kinds of value properly.</p>
+
+<p>What if you want an actual brace to appear in the output? Double it: <code>{{</code> prints <code>{</code> and <code>}}</code> prints <code>}</code>.</p>
+
+<pre class="code" data-lang="cpp" data-file="braces.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int main() {
+    std::println("A placeholder looks like {{}} in the source.");
+    std::println("Braces that print as braces: {{ and }}");
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="braces.cpp"><code>A placeholder looks like {} in the source.
+Braces that print as braces: { and }
+</code></pre>
+
+<div class="callout try"><span class="label">Try it</span><p>Go back to the memory figure at the top of the chapter. Write a program that prints the first three boxes as sentences, one per line, using two placeholders in each: <code>Address 0 holds 72.</code>, <code>Address 1 holds 101.</code>, <code>Address 2 holds 108.</code> Use one string with two <code>{}</code> and change only the values. Predict the output before you run it.</p></div>
+
+<details class="answer"><summary>Show the answer</summary>
+<pre class="code" data-lang="cpp" data-file="bytes.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int main() {
+    std::println("Address {} holds {}.", 0, 72);
+    std::println("Address {} holds {}.", 1, 101);
+    std::println("Address {} holds {}.", 2, 108);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="bytes.cpp"><code>Address 0 holds 72.
+Address 1 holds 101.
+Address 2 holds 108.
+</code></pre>
+</details>
+
+<div class="callout trap"><span class="label">Trap</span><p>The number of <code>{}</code> in the string must match the number of values after it. Three placeholders and two values is an error. Two moments matter here, and they get names now because you will use them all week: <strong>compile time</strong> is while <code>clang++</code> is translating your text, and <strong>run time</strong> is later, while the finished executable is running. <code>std::println</code> checks the string at compile time, so you find out about the mismatch from the compiler, before the program ever runs. That is the good kind of error: it cannot reach a user. The message is long and ugly; you will meet it a few pages from here and learn how to read it.</p></div>
+
+<h2>The edit-compile-run loop</h2>
+<p>Programming has a rhythm, and you have already done it several times in this chapter without naming it. You <strong>edit</strong> a source file. You <strong>compile</strong> it. Either the compiler complains, and you go back to editing, or it stays silent and you <strong>run</strong> the result. Then you look at the output, decide what to change, and go around again. Professionals go around this loop hundreds of times a day. Getting fast and calm at it is most of what "being good at programming" feels like from the inside.</p>
+
+<pre class="grid-figure">   +--------+      +-----------+  errors?  yes
+   |  edit  | ---> |  compile  | -------------> back to edit
+   +--------+      +-----------+
+       ^                 | no
+       |                 v
+       |           +-----------+
+       +---------- |    run    |   look at the output, decide, repeat
+                   +-----------+
+</pre>
+
+<p>The compile step is where beginners get stuck, because the compiler's complaints look frightening. They are not. They are the most helpful text you will read all day, once you know their shape. Now deliberately break the hello program four different ways and read what clang says each time. Every message below is the real output from Apple clang 21; nothing is paraphrased. You can check which version you have; the first line is the one that matters, and the <code>arm64</code> on the second line is the same CPU family that <code>file</code> reported earlier.</p>
+
+<pre class="shell"><code>$ clang++ --version
+Apple clang version 21.0.0 (clang-2100.1.1.101)
+Target: arm64-apple-darwin25.6.0
+Thread model: posix
+InstalledDir: /Library/Developer/CommandLineTools/usr/bin
+</code></pre>
+
+<p>If your version is newer, a message may differ in a word or two. The shape, which is what you are learning to read, does not change.</p>
+
+<h3>Error one: the missing semicolon</h3>
+<p>Delete the semicolon after the <code>println</code> call.</p>
+
+<pre class="code" data-lang="cpp" data-file="missing_semicolon.cpp" data-check="error"><code>#include &lt;print&gt;
+
+int main() {
+    std::println("Hello, Life.")
+    return 0;
+}
+</code></pre>
+<pre class="output"><code>missing_semicolon.cpp:4:33: error: expected ';' after expression
+    4 |     std::println("Hello, Life.")
+      |                                 ^
+      |                                 ;
+1 error generated.
+</code></pre>
+
+<p>Read the first line left to right. <code>missing_semicolon.cpp</code> is the file. <code>4</code> is the line number. <code>33</code> is the column, counting characters from the left. Then comes the word <code>error:</code>, and then a sentence saying what is wrong: it expected a <code>;</code> after the expression. An <strong>expression</strong> is any piece of code that works out to a value or does one thing; the whole call <code>std::println("Hello, Life.")</code> is one expression, and a statement is usually an expression followed by a semicolon. Below that, clang shows you the offending line, puts a <code>^</code> under the exact spot, and here even suggests the fix by printing a <code>;</code> where one should go. Finally it counts: <code>1 error generated.</code> No executable was produced; if an old <code>hello</code> is lying around it is unchanged.</p>
+
+<p>The format <code>file:line:column</code> is universal. Every compiler, and every editor, understands it. In most editors (Zed included) you can hold the command key and click a <code>file:line:column</code> to jump straight to the spot.</p>
+
+<h3>Error two: a misspelled name</h3>
+<p>Put the semicolon back and misspell <code>println</code> as <code>printn</code>.</p>
+
+<pre class="code" data-lang="cpp" data-file="typo.cpp" data-check="error"><code>#include &lt;print&gt;
+
+int main() {
+    std::printn("Hello, Life.");
+    return 0;
+}
+</code></pre>
+<pre class="output"><code>typo.cpp:4:10: error: no member named 'printn' in namespace 'std'
+    4 |     std::printn("Hello, Life.");
+      |          ^~~~~~
+1 error generated.
+</code></pre>
+
+<p>Same shape: file, line 4, column 10, <code>error:</code>, then the sentence. "No member named <code>printn</code> in namespace <code>std</code>" is clang telling you that it looked inside the <code>std</code> drawer and found nothing by that name. (A <strong>member</strong> of a namespace is simply a name that lives inside it; <code>println</code> is a member of <code>std</code>, <code>printn</code> is not.) The <code>^~~~~~</code> underlines the whole misspelt word. The compiler does not guess what you meant; it reports precisely what it could not find and leaves the fix to you. Remember the literal cook.</p>
+
+<h3>Error three: the missing #include</h3>
+<p>Fix the spelling and remove the <code>#include</code> line entirely.</p>
+
+<pre class="code" data-lang="cpp" data-file="no_include.cpp" data-check="error"><code>int main() {
+    std::println("Hello, Life.");
+    return 0;
+}
+</code></pre>
+<pre class="output"><code>no_include.cpp:2:5: error: use of undeclared identifier 'std'
+    2 |     std::println("Hello, Life.");
+      |     ^
+1 error generated.
+</code></pre>
+
+<p>This one is instructive because the message does not mention <code>#include</code> at all. It says it has never heard of <code>std</code>. An <strong>identifier</strong> is any name in a program: <code>main</code>, <code>std</code>, <code>println</code>, and later the names you invent yourself. "Undeclared" means no line before this one has introduced that name to the compiler. That is exactly true here: the <code>std</code> namespace and everything in it only come into existence in your file when you include a standard library header. Without the include, the very first mention of <code>std</code> is a mystery word. When you see "undeclared identifier" for a name you are sure exists, the first question to ask is: did I include the header that provides it? The usual culprits are <code>&lt;print&gt;</code> for printing, <code>&lt;vector&gt;</code> from <a href="06-vector.html">chapter 6</a> on, and <code>&lt;string&gt;</code> from <a href="08-strings-and-args.html">chapter 8</a> on.</p>
+
+<h3>Error four: a wall of text</h3>
+<p>Now the ugly one, so that it does not frighten you when it happens by accident. Give <code>println</code> three placeholders but only two values.</p>
+
+<pre class="code" data-lang="cpp" data-file="too_few.cpp" data-check="error"><code>#include &lt;print&gt;
+
+int main() {
+    std::println("{} plus {} is {}", 2, 3);
+    return 0;
+}
+</code></pre>
+<pre class="output"><code>too_few.cpp:4:18: error: call to consteval function 'std::basic_format_string&lt;char, int, int&gt;::basic_format_string&lt;char[17]&gt;' is not a constant expression
+    4 |     std::println("{} plus {} is {}", 2, 3);
+      |                  ^
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__format/format_parse_context.h:64:7: note: non-constexpr function '__throw_format_error' cannot be used in a constant expression
+   64 |       std::__throw_format_error("Argument index outside the valid range");
+      |       ^
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__format/format_string.h:67:20: note: in call to '__parse_ctx.next_arg_id()'
+   67 |   size_t __value = __parse_ctx.next_arg_id();
+      |                    ^~~~~~~~~~~~~~~~~~~~~~~~~
+    (… four more notes, thirteen lines in all, each pointing into the standard library …)
+too_few.cpp:4:18: note: in call to 'basic_format_string&lt;char[17]&gt;("{} plus {} is {}")'
+    4 |     std::println("{} plus {} is {}", 2, 3);
+      |                  ^~~~~~~~~~~~~~~~~~
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__format/format_error.h:38:48: note: declared here
+   38 | [[noreturn]] inline _LIBCPP_HIDE_FROM_ABI void __throw_format_error(const char* __s) {
+      |                                                ^
+1 error generated.
+</code></pre>
+
+<p>Thirty lines, most of them pointing into files you have never opened, deep inside the standard library. Here is how to read it, and this method works for every long compiler message you will ever see.</p>
+<ol>
+<li><strong>Find the lines that say <code>error:</code>.</strong> There is exactly one here, at the top, and it points at <em>your</em> file, line 4, column 18, the start of the string. The lines that say <code>note:</code> are not separate problems. A note is the compiler explaining the error in more detail, usually by showing the chain of calls that led there. You can skip every note that points into <code>/Library/Developer/...</code>; that is library code and it is not where the mistake is.</li>
+<li><strong>Look for a plain-English clue in the first note or two.</strong> Here the first note contains the words <code>"Argument index outside the valid range"</code>: the string asked for a third argument and there was none. Once you have seen this message once, you will recognise it instantly. The <code>error:</code> line itself is full of words you do not know (<code>consteval</code>, <code>constant expression</code>, <code>basic_format_string</code>). You do not need them. They are the compiler's way of saying "I tried to check this string while compiling and the check failed"; the <em>reason</em> it failed is in the note.</li>
+<li><strong>Fix the first error first, then recompile.</strong> Never try to fix the second, third and fourth error before re-running the compiler. Errors cascade: one missing semicolon can confuse the compiler about everything that follows, producing twenty messages that all vanish when the one real mistake is fixed. Fix the top one, compile again, read again.</li>
+</ol>
+
+<p>The counting line at the bottom, <code>1 error generated.</code>, confirms that all that text was about one mistake.</p>
+
+<div class="callout principle"><span class="label">First principle</span><p>A compiler message is a precise report of the first point at which the text stopped making sense to a very literal reader. It names the file, the line and the column. Go there, look at that spot and a line or two before it, fix one thing, and compile again.</p></div>
+
+<div class="callout note"><span class="label">Errors versus warnings</span><p>A line beginning <code>error:</code> means no executable will be produced; you must fix it. A line beginning <code>warning:</code> means the compiler produced an executable but noticed something suspicious. With <code>-Wall -Wextra</code> you will see warnings about, for example, a value you computed and never used. You will see your first real one, with its text, in the next section. In this book, and in the Week 1 project, a warning counts as a bug: fix it before moving on.</p></div>
+
+<h2>Comments</h2>
+<p>Source code is read by two audiences: the compiler and people. A <strong>comment</strong> is text in a source file that the compiler ignores entirely and that exists only for people. C++ has two kinds.</p>
+<ul>
+<li>A <strong>line comment</strong> starts with <code>//</code> and runs to the end of that line.</li>
+<li>A <strong>block comment</strong> starts with <code>/*</code> and ends with <code>*/</code>, and can span many lines.</li>
+</ul>
+
+<pre class="code" data-lang="cpp" data-file="comments.cpp" data-check="run"><code>// comments.cpp — shows the two kinds of comment.
+// A line comment runs from the two slashes to the end of the line.
+
+#include &lt;print&gt;
+
+/* A block comment starts with slash-star and ends with star-slash.
+   It can span several lines. The compiler skips everything in between. */
+
+int main() {
+    // Greet first, because the greeting must appear before any numbers.
+    std::println("Hello, Life.");
+
+    std::println("Count: {}", 42);  // a comment can share a line with code
+
+    /* std::println("This line is switched off."); */
+
+    return 0;  // 0 tells the shell: no problems
+}
+</code></pre>
+<pre class="output" data-for="comments.cpp"><code>Hello, Life.
+Count: 42
+</code></pre>
+
+<p>Notice that the line wrapped in <code>/* */</code> did not print. Wrapping code in a comment to switch it off temporarily is called <strong>commenting out</strong>, and you will do it constantly while experimenting. Line comments are the everyday kind; block comments are handy for commenting out several lines at once.</p>
+
+<div class="callout trap"><span class="label">Trap</span><p>Block comments do not nest. The compiler does not count how many <code>/*</code> it has seen; it ends the comment at the very first <code>*/</code>. So if you wrap a block comment around code that already contains one, the inner <code>*/</code> closes your outer comment early, and the lines after it are suddenly live code again, followed by a stray <code>*/</code>. Here it is happening.</p></div>
+
+<pre class="code" data-lang="cpp" data-file="nested_comment.cpp" data-check="error"><code>#include &lt;print&gt;
+
+int main() {
+    /* Switched off while experimenting:
+       std::println("one");
+       /* an inner block comment: this is the mistake */
+       std::println("two");
+    */
+    std::println("Hello, Life.");
+    return 0;
+}
+</code></pre>
+<pre class="output"><code>nested_comment.cpp:6:8: warning: '/*' within block comment [-Wcomment]
+    6 |        /* an inner block comment: this is the mistake */
+      |        ^
+nested_comment.cpp:8:6: error: expected expression
+    8 |     */
+      |      ^
+1 warning and 1 error generated.
+</code></pre>
+
+<p>This is your first real <code>warning:</code> line, and it shows how warnings and errors work together. Trace it with the rule above. The outer comment starts on line 4. The <code>*/</code> at the end of line 6 ends it, because it is the first one. Line 7, <code>std::println("two");</code>, is therefore ordinary code and compiles fine. Line 8 is a bare <code>*/</code>, which is not C++ at all, so the compiler reports <code>expected expression</code> there. The warning on line 6 is clang being helpful: with <code>-Wall</code> it noticed the inner <code>/*</code>, guessed what you meant, and pointed at the cause rather than the symptom. The last line counts both: <code>1 warning and 1 error generated.</code> When you need to switch off a block that already contains a block comment, use line comments on each line instead; <code>//</code> has no closing mark, so nothing can end it early.</p>
+
+<h3>Comment the why, not the what</h3>
+<p>A comment that repeats what the code plainly says is noise: <code>return 0; // return zero</code> tells a reader nothing. The code already says <em>what</em> happens. A comment earns its place when it says <em>why</em>: a decision, a constraint, a reason that is not visible in the code itself. Look at the Week 1 contract in <code>phase1-terminal/01-life/src/life.hpp</code>. Its comments do not describe the C++; they describe the rule each function must obey (<code>wrap(-1, 10) == 9</code>, "like the hands of a clock") and the one layout idea the week is built on. That is what good comments look like. The file is also the first real C++ header you will read, and after this chapter you can already recognise its <code>//</code> comments, its <code>#include</code> lines and its semicolons; the rest arrives over the next few chapters.</p>
+
+<h2>A grid of dots</h2>
+<p>You can now print any fixed text you like. That is already enough for a first taste of what the week is heading towards. Game of Life is played on a grid of cells, and the simplest way to show a grid in a terminal is one line of characters per row: a dot for a dead cell, a <code>#</code> for a live one. Here is an empty 5×5 grid, printed the only way you currently can: five statements, one per row.</p>
+
+<pre class="code" data-lang="cpp" data-file="grid.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int main() {
+    std::println(".....");
+    std::println(".....");
+    std::println(".....");
+    std::println(".....");
+    std::println(".....");
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="grid.cpp"><code>.....
+.....
+.....
+.....
+.....
+</code></pre>
+
+<p>And here is the same grid with three live cells in a vertical line down the middle. In Life this shape is called a <strong>blinker</strong>; one of the tests in <code>phase1-terminal/01-life/tests/life_test.cpp</code> checks that your <code>step</code> function turns it into a horizontal line and back again.</p>
+
+<pre class="code" data-lang="cpp" data-file="grid_hash.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int main() {
+    std::println(".....");
+    std::println("..#..");
+    std::println("..#..");
+    std::println("..#..");
+    std::println(".....");
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="grid_hash.cpp"><code>.....
+..#..
+..#..
+..#..
+.....
+</code></pre>
+
+<p>Five near-identical lines is obviously the wrong way to do this. If the grid were 80 by 24 you would need 24 lines of source, and if its size could change while the program runs, no fixed list of statements could cope at all. <a href="03-control-flow.html">Chapter 3</a> gives you loops, which let you say "do this five times" once; <a href="06-vector.html">chapter 6</a> gives you a way to hold the cells themselves in memory instead of in the text of the program; <a href="07-flat-grid.html">chapter 7</a> shows how a 2D grid lives in the one-dimensional row of bytes you met at the top of this chapter. The <code>render</code> function in <code>life.hpp</code>, which you will write this week, produces exactly this kind of text: one line per row, dots and hashes, a line break after every row.</p>
+
+<div class="callout twin"><span class="label">Inference twin</span><p>llama.cpp, the program that runs large language models on ordinary computers, is also a program in the sense of this chapter, and nothing more than that. It has a <code>main</code>. The operating system loads its instructions into memory and the CPU walks through them. It reads bytes from a file on disk (the model's weights: billions of numbers, stored a few bytes each), does an enormous amount of arithmetic on them, and writes bytes to standard output (the text you see appear). There is no step in that description that is not "read bytes, do arithmetic, write bytes". The arithmetic is cleverer and there is vastly more of it, but your five-line grid and a running language model are the same kind of object: a list of instructions that a literal machine performs in order.</p></div>
+
+<h2>Try it</h2>
+<div class="callout try"><span class="label">Try it</span>
+<ol>
+<li>Change the text in <code>hello.cpp</code> to something else, recompile, run. Then change it again <em>without</em> recompiling and run; confirm for yourself that the output does not change until you compile.</li>
+<li>Write a program that prints your name on one line and the city you are in on the next, using a placeholder for each.</li>
+<li>Make a program whose <code>main</code> returns 7. Run it and check <code>echo $?</code> prints 7. Then run <code>./hello</code> and check <code>echo $?</code> again.</li>
+<li>Break a program each of the four ways shown above, but in a file of your own, and read each message before you fix it. Then make up a fifth mistake (a missing closing brace is a good one) and read that message too.</li>
+<li>Change <code>grid_hash.cpp</code> so the three live cells lie in a horizontal line across the middle row instead.</li>
+</ol>
+</div>
+
+<details class="hint"><summary>Hint for 2: where do the values go?</summary><p>The string comes first, with one <code>{}</code> for each thing you want inserted; the values come after it, separated by commas, in the same order. A name is text, so it goes in double quotes, just like <code>"left"</code> did.</p></details>
+
+<details class="hint"><summary>Hint for 4: what the missing closing brace looks like</summary><p>Delete the final <code>}</code> of <code>hello.cpp</code> and compile. You get an error <em>and</em> a note, and this time the note is useful: it points back at the <code>{</code> that was never closed.</p>
+<pre class="output"><code>no_brace.cpp:5:14: error: expected '}'
+    5 |     return 0;
+      |              ^
+no_brace.cpp:3:12: note: to match this '{'
+    3 | int main() {
+      |            ^
+1 error generated.
+</code></pre>
+<p>Notice the error points at the end of line 5, the last place the compiler could still hope to find a <code>}</code>, not at the missing character itself, because a missing character has no position. Reading "a line or two before" the reported spot is normal.</p></details>
+
+<details class="hint"><summary>Hint for 3: why does the second echo show 0?</summary><p><code>$?</code> always holds the exit code of the <em>most recent</em> command. After <code>./hello</code> runs and returns 0, the 7 from your other program is gone. Even the <code>echo</code> itself sets <code>$?</code> to 0, so typing <code>echo $?</code> twice in a row prints the real status and then 0.</p></details>
+
+<h2>Check yourself</h2>
+<div class="quiz">
+<div class="q"><p>How many different values can one byte hold, and why that number?</p><details class="answer"><summary>Answer</summary><p>256. A byte is eight switches, each off or on, so there are 2 × 2 × 2 × 2 × 2 × 2 × 2 × 2 = 2<sup>8</sup> = 256 possible patterns.</p></details></div>
+
+<div class="q"><p>In <code>std::println</code>, what does <code>std</code> name, and what does <code>::</code> mean?</p><details class="answer"><summary>Answer</summary><p><code>std</code> is the namespace that holds the whole standard library; <code>::</code> means "look inside". So <code>std::println</code> is "the <code>println</code> inside <code>std</code>".</p></details></div>
+
+<div class="q"><p>What happens if you delete the line <code>#include &lt;print&gt;</code> and compile?</p><details class="answer"><summary>Answer</summary><p>Compilation fails with <code>error: use of undeclared identifier 'std'</code>. The <code>std</code> namespace and <code>println</code> only become known to your file through the header, so without the include the compiler has never heard of either.</p></details></div>
+
+<div class="q"><p>A program ends with <code>return 3;</code>. What prints if you run it and then type <code>echo $?</code>?</p><details class="answer"><summary>Answer</summary><p><code>3</code>. The value returned from <code>main</code> becomes the program's exit code, which the shell stores in <code>$?</code>. By convention 0 means success and anything else means a problem.</p></details></div>
+
+<div class="q"><p>The compiler prints one <code>error:</code> line followed by twelve <code>note:</code> lines. How many mistakes do you need to fix?</p><details class="answer"><summary>Answer</summary><p>One. Notes are extra detail about the error above them, not separate problems. Find the <code>error:</code> line, go to its <code>file:line:column</code>, fix that, and recompile before reading anything else.</p></details></div>
+
+<div class="q"><p>What does <code>std::println("{} and {}", 1, 2, 3);</code> do?</p><details class="answer"><summary>Answer</summary><p>Two placeholders with three values is a mismatch. The <code>3</code> has no placeholder. Apple clang's standard library (it is called libc++) accepts this particular direction: extra values are ignored, and it prints <code>1 and 2</code>. The other direction, more placeholders than values, is a compile error. Keep them equal and the question never arises.</p></details></div>
+
+<div class="q"><p>You edit <code>hello.cpp</code>, run <code>./hello</code>, and see the old text. What did you forget?</p><details class="answer"><summary>Answer</summary><p>To compile. <code>hello</code> is a separate file made from the source at the moment you last ran <code>clang++</code>; editing the source does not touch it.</p></details></div>
+
+<div class="q"><p>Which of these is a good comment: <code>return 0; // return zero</code> or <code>return 0; // 0 tells the shell: no problems</code>?</p><details class="answer"><summary>Answer</summary><p>The second. The first repeats what the code already says (the what). The second adds something the code does not show: why 0 is the right value to return.</p></details></div>
+</div>
+
+<h2>What you can do now</h2>
+<ul>
+<li>Explain, in plain words, what a CPU, a byte, an address and a program are, and what happens when a program runs.</li>
+<li>Say what a compiler and a linker do, and that clang is the one you use.</li>
+<li>Write a complete C++ program from memory: <code>#include &lt;print&gt;</code>, <code>int main()</code>, braces, <code>std::println</code>, <code>return 0;</code>.</li>
+<li>Compile with <code>clang++ -std=c++23 -Wall -Wextra file.cpp -o file</code>, run with <code>./file</code>, and check the exit code with <code>echo $?</code>.</li>
+<li>Use <code>tools/run.sh</code> to do the same in one step.</li>
+<li>Print numbers and words inside a sentence with <code>{}</code> placeholders, and print literal braces with <code>{{</code> and <code>}}</code>.</li>
+<li>Read a clang error message: file, line, column, <code>error:</code> versus <code>note:</code> versus <code>warning:</code>, and fix the first error first.</li>
+<li>Say what compile time and run time are, and why an error the compiler catches is better than one a running program produces.</li>
+<li>Write line and block comments, comment code out, and explain why a comment should say why rather than what.</li>
+<li>Print a fixed grid of dots and hashes, and say why loops (chapter 3) are the right tool for a grid whose size can change.</li>
+</ul>
+</main>
+</body>
+</html>

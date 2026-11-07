@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>C++ from zero to Life</title>
+<link rel="stylesheet" href="assets/book.css?v=9">
+<link rel="stylesheet" href="assets/tutor.css?v=9">
+<script src="assets/theme.js?v=9"></script>
+<script defer src="assets/book.js?v=9"></script>
+<script defer src="assets/tutor.js?v=9"></script>
+</head>
+<body>
+<nav class="sidebar" aria-label="Chapters"></nav>
+<main>
+<p class="chapter-kicker">Week 1 · Inference from games</p>
+<h1>C++ from zero to Life</h1>
+<p class="lede">Sixteen chapters that take you from "what is a program" to a Game of Life that you wrote yourself, tested, and timed, in one week.</p>
+
+<h2>What this book is</h2>
+<p>This is the Week 1 book of a 30-week curriculum (see <a href="../../../goal.md">goal.md</a>) that ends with a quantised inference engine for a small Llama-architecture language model (SmolLM2-135M) in C++ and your own CUDA kernels. Week 1 looks nothing like that: it is a grid of <code>#</code> and <code>.</code> characters flickering in your terminal. Conway's Game of Life on a wrapping grid, with a configurable size and seed, a test suite that goes from red to green, and a first benchmark number.</p>
+<p>It is written for one reader: you, a smart adult who is comfortable with a Mac and a terminal but has never written C++ and may never have programmed at all. Nothing is assumed. Every program is complete and was compiled and run on the machine described in <a href="../../setup.md">docs/setup.md</a>.</p>
+<p>Budget: about five hours a day for seven days. Chapters 1 to 13 are reading with small experiments; chapter 14 is the challenge, which you hand-code one milestone at a time. The book teaches every mechanism on problems one step away from Life and never shows you the Life functions themselves. That part is yours.</p>
+
+<h2>How to read it</h2>
+<p>Read in order; each chapter uses only what came before it. Type every example into <code>scratch/</code> and run it with <code>tools/run.sh</code>, rather than copying it. When a program's output is shown, compare it with yours character by character. Tick the box at the bottom of a chapter when you have worked through it; progress is saved in this browser.</p>
+<p>The coloured boxes mean:</p>
+<div class="callout principle"><span class="label">First principle</span><p>What the machine is really doing underneath the syntax. These are the ideas the rest of the curriculum is built on.</p></div>
+<div class="callout analogy"><span class="label">Analogy</span><p>A picture from everyday life, followed by where the picture breaks down.</p></div>
+<div class="callout twin"><span class="label">Inference twin</span><p>How the thing you just learned appears, unchanged, inside an LLM inference engine.</p></div>
+<div class="callout trap"><span class="label">Trap</span><p>A mistake that beginners make and that the compiler will not catch for you.</p></div>
+<div class="callout try"><span class="label">Try it</span><p>Stop reading and type something. Each one takes a few minutes.</p></div>
+<div class="callout note"><span class="label">Note</span><p>Anything else: a detail, a deferral ("classes: week 4"), a pointer to the appendix.</p></div>
+<p>Hidden text looks like this:</p>
+<details class="hint"><summary>Stuck? First nudge</summary><p>Hints come in rungs. Open one, try again, open the next only if you must.</p></details>
+<details class="answer"><summary>Show the answer</summary><p>Answers to check-yourself questions. Write your own answer first.</p></details>
+
+<h2>Contents</h2>
+<div class="progress"></div>
+<div class="toc-cards" data-auto
+  data-blurb0="What you will build, your machine as found, how to run things, how to read this book."
+  data-blurb1="CPU, memory, bytes. Source to machine code. Your first program, line by line, and how to read errors."
+  data-blurb2="Bytes have no meaning; types give them one. int, double, bool, char, size_t, uint8_t, const, auto."
+  data-blurb3="if, while, for. Nested loops draw a grid. The game loop in words."
+  data-blurb4="Named recipes with inputs and one output. Scope, the call stack, reading a signature."
+  data-blurb5="Another name for the same box. Pass by value vs by reference, and the const promise."
+  data-blurb6="Many values in a row, contiguous in memory. Indexing, bounds, range-for, the vector&lt;bool&gt; trap."
+  data-blurb7="y*width+x. Row-major, strides, wrapping edges, a 1D automaton with two buffers. The tensor idea."
+  data-blurb8="std::string, argc/argv, parsing --flags, and seeded randomness you can reproduce."
+  data-blurb9="stdout, escape codes, redrawing in place, sleeping between frames, restoring the cursor."
+  data-blurb10="Declarations in headers, definitions in sources, and what the linker does with them."
+  data-blurb11="Every line of the Life CMakeLists.txt. Configure, build, Debug vs Release, sanitizers."
+  data-blurb12="TEST_CASE and CHECK. The 13 Life tests explained. Red to green, one function at a time."
+  data-blurb13="steady_clock, warm-up, variance, ms per step and ns per cell. Writing BENCH.md."
+  data-blurb14="The seven milestones, hint ladders, common bugs, the review ritual and the write-up."
+  data-blurb15="Error decoder, glossary, syntax and command cheat sheets, further reading."
+  data-blurb16="Write-from-scratch drills for chapters 1 to 13: empty file in, known output out, solution hidden until you compare."></div>
+<p class="book-sub">The cards above are rendered by <code>assets/book.js</code> from the <code>data-blurb</code> attributes; the chapter list itself lives in that file.</p>
+
+<h2>Around the book</h2>
+<ul>
+<li><a href="../../setup.md">docs/setup.md</a>: what is on your machine, what is missing, and a five-minute verification checklist. Do this before chapter 1.</li>
+<li><a href="../../../phase1-terminal/01-life/README.md">The challenge README</a>: the frozen spec for Game of Life, the six-function contract, the seven milestones and the acceptance tests.</li>
+<li><a href="../../../goal.md">goal.md</a>: the whole 30-week plan and why Week 1 looks the way it does.</li>
+<li><a href="../../tutor.md">docs/tutor.md</a>: the AI tutor in these pages (press <kbd>A</kbd>, or select any text). How to set it up with an API key, what it costs, and how it is kept from writing your Life for you.</li>
+<li><a href="../../../CLAUDE.md">CLAUDE.md</a>: the rules your AI tutor follows here. It explains and reviews; it does not write your Life.</li>
+</ul>
+
+<h2>Serving the book locally</h2>
+<p>The book is plain HTML with no build step and no network access. You can open <code>index.html</code> directly in a browser, or serve the folder so that the address bar shows clean URLs:</p>
+<pre class="shell"><code>$ python3 tools/serve-book.py
+Serving the book at http://localhost:8765  (Ctrl-C to stop)
+</code></pre>
+<p>Then visit <code>http://localhost:8765</code>. The script is the built-in Python web server with one change: it tells the browser to re-check each page, so when the book is updated a normal reload shows the new version. Press <kbd>Ctrl-C</kbd> in that terminal to stop the server. Progress ticks are stored per browser and per origin, so stick to one way of opening the book if you want them to persist.</p>
+<p>To check that every example in the book still compiles and prints what it claims:</p>
+<pre class="shell"><code>$ python3 tools/book-check.py
+</code></pre>
+</main>
+</body>
+</html>

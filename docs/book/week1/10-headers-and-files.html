@@ -1,0 +1,689 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>10 · Headers and multiple files — C++ from zero to Life</title>
+<link rel="stylesheet" href="assets/book.css?v=9">
+<link rel="stylesheet" href="assets/tutor.css?v=9">
+<script src="assets/theme.js?v=9"></script>
+<script defer src="assets/book.js?v=9"></script>
+<script defer src="assets/tutor.js?v=9"></script>
+</head>
+<body>
+<nav class="sidebar" aria-label="Chapters"></nav>
+<main>
+<p class="chapter-kicker">Chapter 10</p>
+<h1>Headers and multiple files</h1>
+<p class="lede">By the end of this chapter you will be able to split a program into a header file and several source files, build it with one command or with separate compile and link steps, and read the two linker errors that every C++ programmer meets in their first week. You will also know exactly why the Life challenge is laid out as <code>src/</code>, <code>tests/</code> and <code>bench/</code>, and why <code>main.cpp</code> must stay thin.</p>
+
+<div class="callout note"><span class="label">In this chapter</span>
+<ul>
+<li>Why one file stops being enough: four programs that need the same six functions.</li>
+<li>What <code>#include</code> literally does (paste), seen with your own eyes using <code>clang++ -E</code>.</li>
+<li>Declarations in a header, definitions in a source file: the promise and the work, now in separate files.</li>
+<li><code>"quotes"</code> versus <code>&lt;angle brackets&gt;</code>, and <code>#pragma once</code> with the error it prevents.</li>
+<li>A three-file project built two ways: in one go, and as object files plus a link step. What the linker does.</li>
+<li>Reading "Undefined symbols" and "duplicate symbol" errors, with the real text, and a symptom-to-fix table.</li>
+<li>The one definition rule, the Life project file by file, and the rules for what goes in a header.</li>
+</ul>
+</div>
+
+<h2>The problem: four programs, one set of functions</h2>
+<p>Every program you have written so far was one file. It had a <code>main</code>, some functions above it, and you compiled it with one command. For a program that fits on two screens that is exactly right. Week 1's challenge does not fit that shape, and it is worth seeing precisely why before learning the tools that fix it.</p>
+
+<p>Look at the challenge folder, <code>phase1-terminal/01-life/</code>. Near the bottom of its <code>CMakeLists.txt</code> are three lines (chapter 11 explains the whole file; for now read only these three, which name the programs and the files each one is made from):</p>
+
+<pre class="code" data-lang="cmake" data-file="CMakeLists.txt"><code>add_executable(life       src/main.cpp        src/life.cpp)
+add_executable(life_tests tests/life_test.cpp src/life.cpp)
+add_executable(life_bench bench/bench_life.cpp src/life.cpp)
+</code></pre>
+
+<p>Three programs are built from this one folder: <code>life</code>, the game you watch; <code>life_tests</code>, which checks your six functions against 13 test cases; and <code>life_bench</code>, which times <code>step</code> on a 1000 by 1000 grid. All three need the same functions: <code>index_of</code>, <code>wrap</code>, <code>count_neighbours</code>, <code>step</code>, <code>random_cells</code>, <code>render</code>. If each program were a single file, those six functions would exist in three copies, and you already know from <a href="04-functions.html">chapter 4</a> what three copies do: a fix in one copy is a bug kept in the other two. The tests would be testing a different <code>step</code> from the one the game runs.</p>
+
+<p>There is a second problem. Each of the three programs has its own <code>main</code>: the game's <code>main</code> runs the animation, the test program's <code>main</code> runs the tests, the benchmark's <code>main</code> runs the stopwatch. A program may have exactly one <code>main</code>. So the test program cannot simply swallow the game's file whole; it needs the six functions <em>without</em> the game's <code>main</code>. The functions and the <code>main</code> have to live in different files.</p>
+
+<p>And a third, quieter problem. Compiling is not free. Here are real timings from this machine for the small two-file project you will build later in this chapter. The shell's <code>time</code> command runs whatever follows it and then prints how long it took; the number to read is the last one, <code>total</code>, in seconds. The <code>-c</code> flag and the <code>.o</code> files are explained in the section on object files below; for now, each command compiles one file.</p>
+
+<pre class="shell"><code>$ time clang++ -std=c++23 -Wall -Wextra -c main.cpp -o main.o
+clang++ -std=c++23 -Wall -Wextra -c main.cpp -o main.o  0.23s user 0.02s system 98% cpu 0.255 total
+$ time clang++ -std=c++23 -Wall -Wextra -c shapes.cpp -o shapes.o
+clang++ -std=c++23 -Wall -Wextra -c shapes.cpp -o shapes.o  0.01s user 0.01s system 85% cpu 0.017 total
+</code></pre>
+
+<p>A quarter of a second for a nine-line <code>main.cpp</code>, against two hundredths of a second for <code>shapes.cpp</code>. The difference is that <code>main.cpp</code> pulls in <code>&lt;print&gt;</code>, which is enormous (you will measure it in a moment), and <code>shapes.cpp</code> does not. Real projects have hundreds of files and take minutes to compile from scratch. If you change one line in one file, you want to recompile <em>that file</em> and nothing else. That is only possible if the program is split into pieces that are compiled separately and joined afterwards.</p>
+
+<p>So the shape you need is: the six functions in one file, compiled once; three different <code>main</code> files; and a way for each <code>main</code> to call functions that live in a file it cannot see. The rest of this chapter is that machinery.</p>
+
+<h2>What #include really does</h2>
+<p>You have typed <code>#include &lt;print&gt;</code> at the top of every program since <a href="01-what-a-program-is.html">chapter 1</a>, on trust. Time to cash the trust in. Make a folder for this chapter's experiments, <code>scratch/ch10</code>, and put two files in it. First a <strong>header file</strong>, <code>greet.hpp</code>: a file meant to be included by other files, never compiled on its own. It holds one declaration of the kind you wrote in chapter 4. Take its first line, <code>#pragma once</code>, on trust until the section with that name below; every header starts with it.</p>
+
+<pre class="code" data-lang="cpp" data-file="greet.hpp" data-check="fragment"><code>#pragma once
+// greet.hpp — one declaration.
+
+int twice(int x);
+</code></pre>
+
+<p>Then <code>main.cpp</code>, which includes it with quotes instead of angle brackets (the difference is explained shortly). Its <code>main</code> returns <code>twice(2)</code> instead of <code>0</code> only so that the file contains a call to look at; nobody is going to run it.</p>
+
+<pre class="code" data-lang="cpp" data-file="main.cpp" data-check="fragment"><code>#include "greet.hpp"
+
+int main() {
+    return twice(2);
+}
+</code></pre>
+
+<p>Do not build it. There is no body for <code>twice</code> anywhere, so building would fail with an error you meet later in this chapter. Instead, ask the compiler to stop early and show you what it <em>would</em> compile. The flag <code>-E</code> runs only the first stage of compilation and prints the result. Without <code>-P</code> that result begins with a dozen lines like <code># 1 "main.cpp"</code>, markers that record which file each line came from; <code>-P</code> leaves them out so the result is readable:</p>
+
+<pre class="shell"><code>$ clang++ -std=c++23 -E -P main.cpp
+int twice(int x);
+
+int main() {
+    return twice(2);
+}
+</code></pre>
+
+<p>The line <code>#include "greet.hpp"</code> is gone, and in its place is the text of <code>greet.hpp</code> (minus its comments, which are thrown away at this stage, and minus the <code>#pragma once</code> line, which has done its job). That is the whole truth about <code>#include</code>: it is <strong>copy and paste</strong>. The compiler has a first stage called the <strong>preprocessor</strong>, which reads your file top to bottom and, every time it meets <code>#include</code>, opens the named file and pastes its contents right there. Lines that start with <code>#</code> are instructions to this first stage, not C++ at all. The C++ compiler proper never sees <code>#include</code>; it only ever sees one long pasted-together text.</p>
+
+<p>That long text has a name: a <strong>translation unit</strong>. It is one <code>.cpp</code> file plus everything it includes, after pasting, and it is the thing the compiler actually compiles. One <code>.cpp</code> file in, one translation unit out.</p>
+
+<p>Now see how big the paste can get. Copy the six-line hello program from chapter 1 into <code>scratch/ch10/hello.cpp</code>, run the same command on it, and count the lines. <code>wc -l</code> counts the lines it is given; the <code>|</code> hands the compiler's output to it instead of printing it on screen.</p>
+
+<pre class="shell"><code>$ clang++ -std=c++23 -E hello.cpp | wc -l
+   44451
+$ clang++ -std=c++23 -fsyntax-only -H hello.cpp 2>&amp;1 | grep -c '^\.'
+728
+</code></pre>
+
+<p>Your six-line program became 44,451 lines. The second command counts files instead of lines: <code>-H</code> makes the preprocessor print the name of every file it opens, one per line, each starting with a dot; <code>-fsyntax-only</code> says "check the code but do not produce a program"; <code>grep -c '^\.'</code> counts the lines that start with a dot. (The <code>2>&amp;1</code> is shell plumbing: the compiler prints that list on its error channel, and this sends the error channel to the same place as normal output so that <code>grep</code> can read it. Take it on trust.) The answer: the single <code>#include &lt;print&gt;</code> opened 728 files. That is where the quarter of a second goes, and that is why compiling <code>shapes.cpp</code>, which includes only a short header of its own, takes almost no time. Every <code>.cpp</code> file pays for its own includes.</p>
+
+<div class="callout principle"><span class="label">First principle</span><p>A header is not a separate thing the compiler "knows about". It is text that gets pasted into every file that includes it. Anything you can conclude about pasting, you can conclude about headers: paste the same text twice and you get it twice; paste it into five files and each of the five contains it; change the header and every file that includes it has changed, so every one of them must be recompiled.</p></div>
+
+<h2>Declaration and definition, now across files</h2>
+<p>In chapter 4 you learned the difference between a <strong>declaration</strong> and a <strong>definition</strong>. A declaration, <code>int twice(int x);</code>, tells the compiler the function exists and what its signature is (the return type, the name, and the parameter types). A definition, <code>int twice(int x) { return 2 * x; }</code>, also supplies the body. The rule was: the compiler reads top to bottom, and a call must come after a declaration. You used that to put <code>main</code> first and the definitions below it.</p>
+
+<p>Now notice what the compiler needs to compile the call <code>twice(2)</code> in <code>main</code>. It needs to know that <code>twice</code> takes one <code>int</code> and returns an <code>int</code>, so it can check the argument and the result. That is all. It does <em>not</em> need the body. It translates the call into machine code that says "put 2 in the usual place, jump to wherever <code>twice</code> is, use whatever comes back", and leaves a note: "the address of <code>twice</code> goes here, to be filled in later".</p>
+
+<p>That is the trick that lets a program live in several files. The declaration is enough to <em>compile</em> a call. The definition is only needed to <em>run</em> it, and it can sit in a different translation unit, compiled separately, as long as somebody eventually fills in the note. The somebody is the <strong>linker</strong>, and you will watch it work in a few pages.</p>
+
+<p>So a C++ project splits each piece of functionality into two files with two jobs:</p>
+<ul>
+<li>A <strong>header file</strong>, ending in <code>.hpp</code>, holds the declarations and the comments that say what each function promises. It is pasted into every file that wants to call those functions. It is the <em>promise</em>.</li>
+<li>A <strong>source file</strong>, ending in <code>.cpp</code>, holds the definitions: the bodies. It is compiled exactly once. It is the <em>work</em>.</li>
+</ul>
+
+<div class="callout analogy"><span class="label">Analogy</span><p>A header is a restaurant menu; the source file is the kitchen. Any number of customers can read the menu, and a customer can order "<code>twice</code> of 2" without ever seeing how it is cooked. There is one kitchen, and if the recipe changes the menu does not have to. The analogy breaks in one place: a menu is read by people who can cope with a missing dish, but the compiler is not forgiving. If a function is on the menu (declared), somebody orders it (calls it), and no kitchen (definition) exists anywhere, the program cannot be built at all, and the error comes from the linker, not the compiler, with a message you will learn to read below.</p></div>
+
+<p>The file ending is a convention, not a rule the compiler enforces. You will see <code>.h</code> for headers in C and older C++ (ggml uses <code>ggml.h</code>), and <code>.cc</code> or <code>.cxx</code> for sources. This book uses <code>.hpp</code> and <code>.cpp</code>, like the Life project. What matters is the job: a header is included, a source is compiled.</p>
+
+<h2>Quotes versus angle brackets</h2>
+<p>You have now seen both <code>#include &lt;print&gt;</code> and <code>#include "greet.hpp"</code>. The two spellings tell the preprocessor <em>where to look</em> for the file.</p>
+<ul>
+<li><code>#include "name"</code>: look first in the folder of the file doing the including. If it is not there, look in any folders given on the command line with <code>-I</code> (you will meet that flag below), and finally in the system folders. Use this for <em>your</em> files.</li>
+<li><code>#include &lt;name&gt;</code>: skip the including file's folder and go straight to the <code>-I</code> folders and the system folders where the toolchain keeps the standard library. Use this for the <em>toolchain's</em> files: <code>&lt;print&gt;</code>, <code>&lt;vector&gt;</code>, <code>&lt;string&gt;</code>, <code>&lt;chrono&gt;</code>.</li>
+</ul>
+
+<p>The convention is simple to remember: quotes for headers you wrote, angle brackets for headers you installed. The compiler will tell you if you get it backwards. Copy <code>main.cpp</code> to <code>angle.cpp</code> in the same folder and change its first line to <code>#include &lt;greet.hpp&gt;</code>, so that it asks for a header sitting right next to it with the wrong brackets:</p>
+
+<pre class="shell"><code>$ clang++ -std=c++23 -Wall -Wextra angle.cpp -o angle
+angle.cpp:1:10: error: 'greet.hpp' file not found with &lt;angled&gt; include; use "quotes" instead
+    1 | #include &lt;greet.hpp&gt;
+      |          ^~~~~~~~~~~
+      |          "greet.hpp"
+1 error generated.
+</code></pre>
+
+<p>The compiler found the file after all, in the including file's folder, and tells you exactly which spelling would have found it: the last line of the message, <code>"greet.hpp"</code>, is the suggested replacement. Now the plain typo. Copy <code>main.cpp</code> to <code>typo.cpp</code> and misspell the header as <code>"gret.hpp"</code>:</p>
+
+<pre class="shell"><code>$ clang++ -std=c++23 -Wall -Wextra typo.cpp -o typo
+typo.cpp:1:10: fatal error: 'gret.hpp' file not found
+    1 | #include "gret.hpp"
+      |          ^~~~~~~~~~
+1 error generated.
+</code></pre>
+
+<p>Note the word <em>fatal</em>, which the first message did not have. The first time, the preprocessor knew what you meant and carried on. This time no such file exists anywhere, the paste cannot happen, and the preprocessor stops on the spot. A fatal error is therefore always the first and only error you see, no matter what else is wrong in the file; fix it, compile again, and only then will you learn about anything else.</p>
+
+<h2>#pragma once</h2>
+<p>Pasting has a consequence that bites every beginner once. Headers include other headers: <code>main.cpp</code> includes <code>a.hpp</code> and <code>b.hpp</code>, and <code>b.hpp</code> itself includes <code>a.hpp</code> because it needs something from it. Pasting is literal, so <code>a.hpp</code> lands twice in the same translation unit. Whether that matters depends on what is in <code>a.hpp</code>. Build the case where it matters, in a new folder <code>scratch/ch10/banner</code>.</p>
+
+<p>A header holding two named constants (chapter 2's <code>const int</code>), deliberately without the <code>#pragma once</code> line that would protect it:</p>
+
+<pre class="code" data-lang="cpp" data-file="grid_size.hpp" data-check="fragment"><code>// grid_size.hpp — the default grid size, shared by several files.
+// (No #pragma once yet. Watch what happens.)
+
+const int default_width = 60;
+const int default_height = 20;
+</code></pre>
+
+<p>A second header that needs those constants, and so includes the first:</p>
+
+<pre class="code" data-lang="cpp" data-file="banner.hpp" data-check="fragment"><code>// banner.hpp — needs the grid size, so it includes grid_size.hpp itself.
+#include "grid_size.hpp"
+
+// Print a line like "grid: 60 x 20".
+void print_banner(int width, int height);
+</code></pre>
+
+<p>And a <code>main.cpp</code> that, quite reasonably, includes both: it uses the constants directly <em>and</em> calls <code>print_banner</code>. (To keep this experiment to one translation unit, the definition of <code>print_banner</code> is here too.)</p>
+
+<pre class="code" data-lang="cpp" data-file="main.cpp" data-check="fragment"><code>#include "grid_size.hpp"
+#include "banner.hpp"
+#include &lt;print&gt;
+
+void print_banner(int width, int height) {
+    std::println("grid: {} x {}", width, height);
+}
+
+int main() {
+    print_banner(default_width, default_height);
+    return 0;
+}
+</code></pre>
+
+<pre class="shell"><code>$ clang++ -std=c++23 -Wall -Wextra main.cpp -o main
+In file included from main.cpp:2:
+In file included from ./banner.hpp:2:
+./grid_size.hpp:4:11: error: redefinition of 'default_width'
+    4 | const int default_width = 60;
+      |           ^
+main.cpp:1:10: note: './grid_size.hpp' included multiple times, additional include site here
+    1 | #include "grid_size.hpp"
+      |          ^
+./banner.hpp:2:10: note: './grid_size.hpp' included multiple times, additional include site here
+    2 | #include "grid_size.hpp"
+      |          ^
+./grid_size.hpp:4:11: note: unguarded header; consider using #ifdef guards or #pragma once
+    4 | const int default_width = 60;
+      |           ^
+</code></pre>
+
+<p>(The same four messages repeat for <code>default_height</code>; they are cut here.) "In file included from main.cpp:2, in file included from banner.hpp:2" is the paste trail: <code>main.cpp</code> line 2 pasted <code>banner.hpp</code>, whose line 2 pasted <code>grid_size.hpp</code>. Then the error: <code>default_width</code> is being defined a second time. Then two notes pointing at both include sites, and a final note that names the fix.</p>
+
+<p>To see why the compiler complains, look at what it saw. Run <code>-E -P</code> on this <code>main.cpp</code>, this time writing the result to a file with <code>-o</code>, and look at the first few lines:</p>
+
+<pre class="shell"><code>$ clang++ -std=c++23 -E -P main.cpp -o pasted.cpp
+$ head -6 pasted.cpp
+const int default_width = 60;
+const int default_height = 20;
+
+const int default_width = 60;
+const int default_height = 20;
+void print_banner(int width, int height);
+$ wc -l pasted.cpp
+   30364 pasted.cpp
+</code></pre>
+
+<p>(Why a file and not <code>| head</code>? Because <code>&lt;print&gt;</code> makes the pasted text thirty thousand lines long, and if <code>head</code> closes the pipe after three of them, <code>clang++</code> stops with a "Broken pipe" complaint and a long crash report. Writing to a file avoids the noise.) There they are: the two constants, twice. Put the rest of <code>main.cpp</code> under them and you have this complete single-file program, which fails the same way:</p>
+
+<pre class="code" data-lang="cpp" data-file="twice_defined.cpp" data-check="error"><code>#include &lt;print&gt;
+
+// What the compiler saw after pasting grid_size.hpp twice:
+const int default_width = 60;
+const int default_height = 20;
+const int default_width = 60;
+const int default_height = 20;
+
+int main() {
+    std::println("grid: {} x {}", default_width, default_height);
+    return 0;
+}
+</code></pre>
+<pre class="output"><code>twice_defined.cpp:6:11: error: redefinition of 'default_width'
+    6 | const int default_width = 60;
+      |           ^
+twice_defined.cpp:4:11: note: previous definition is here
+    4 | const int default_width = 60;
+      |           ^
+twice_defined.cpp:7:11: error: redefinition of 'default_height'
+    7 | const int default_height = 20;
+      |           ^
+twice_defined.cpp:5:11: note: previous definition is here
+    5 | const int default_height = 20;
+      |           ^
+2 errors generated.
+</code></pre>
+
+<p>Nothing mysterious: two lines each create a constant called <code>default_width</code>, and a name can only be created once. The header did nothing wrong on its own; it was pasted twice, and that is what the compiler received.</p>
+
+<p>The fix is one line at the top of the header:</p>
+
+<pre class="code" data-lang="cpp" data-file="grid_size.hpp" data-check="fragment"><code>#pragma once
+// grid_size.hpp — the default grid size, shared by several files.
+
+const int default_width = 60;
+const int default_height = 20;
+</code></pre>
+
+<p><code>#pragma once</code> is an instruction to the preprocessor: "if you have already pasted this file into the current translation unit, skip it this time." The second <code>#include</code> of the same file does nothing. Confirm it the same way you found the problem:</p>
+
+<pre class="shell"><code>$ clang++ -std=c++23 -E -P main.cpp -o pasted.cpp
+$ head -3 pasted.cpp
+const int default_width = 60;
+const int default_height = 20;
+void print_banner(int width, int height);
+$ clang++ -std=c++23 -Wall -Wextra main.cpp -o main
+$ ./main
+grid: 60 x 20
+</code></pre>
+
+<p>One pair of constants, one declaration, and the program compiles and runs. The rule is absolute: <strong>every header file starts with <code>#pragma once</code> as its first line</strong>. Not "headers that need it"; every header, always. It costs nothing and you never have to work out whether a particular header happens to be safe.</p>
+
+<p>Why "happens to be safe"? Because some repetition is legal. A declaration may be repeated as often as you like; chapter 4 said so, and this complete program proves it:</p>
+
+<pre class="code" data-lang="cpp" data-file="twice_declared.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int area(int w, int h);
+int area(int w, int h);
+int area(int w, int h);
+
+int area(int w, int h) {
+    return w * h;
+}
+
+int main() {
+    std::println("{}", area(3, 3));
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="twice_declared.cpp"><code>9
+</code></pre>
+
+<p>So a header that holds <em>only</em> function declarations survives being pasted twice by luck. The moment anything in it is a definition, a constant like <code>default_width</code>, or in week 3 a <code>struct</code>, the luck runs out. <code>#pragma once</code> means you never depend on luck.</p>
+
+<div class="callout try"><span class="label">Try it</span><p>Prove both halves of that claim in <code>scratch/ch10/banner</code>. First, take the <code>#pragma once</code> line out of <code>grid_size.hpp</code> again and replace its two constants with a single declaration, <code>int default_width();</code>. Change the call in <code>main.cpp</code> to <code>print_banner(60, 20);</code> so that it no longer needs the constants. Then run <code>clang++ -std=c++23 -E -P main.cpp -o pasted.cpp</code> and look at <code>head -5 pasted.cpp</code>: the declaration appears twice. Does <code>clang++ -std=c++23 -fsyntax-only main.cpp</code> (check the code, build nothing) accept it? Now add <code>const int default_height = 20;</code> under the declaration and check again. Finally put <code>#pragma once</code> back, because that is how the file should have been from the start.</p></div>
+<details class="answer"><summary>Show the answer</summary><p>With only the declaration, <code>-fsyntax-only</code> prints nothing at all: a repeated declaration is legal, exactly like <code>twice_declared.cpp</code>. With the constant added, you get <code>error: redefinition of 'default_height'</code>, with the same "included multiple times" notes as before. The header went from "fine" to "broken" by one ordinary-looking line; that is why the rule is "every header, always" and not "headers that need it".</p></details>
+
+<div class="callout note"><span class="label">The older spelling</span><p>Open <code>third_party/doctest/doctest.h</code> and the first real line is <code>#ifndef DOCTEST_LIBRARY_INCLUDED</code>. That is the pre-<code>#pragma once</code> way to do the same thing, called an <strong>include guard</strong>: "if the name DOCTEST_LIBRARY_INCLUDED is not yet defined, define it and read the rest; otherwise skip to the matching <code>#endif</code> at the bottom." The lines <code>#ifndef</code>, <code>#define</code> and <code>#endif</code> are three more instructions to the preprocessor; you do not need to be able to write them this week, only to recognise the pattern. It works everywhere and does exactly what <code>#pragma once</code> does, at the cost of three lines and a name you must keep unique. Every compiler you will use understands <code>#pragma once</code>, so write that in your own headers and simply recognise the guard when you meet it in other people's code.</p></div>
+
+<h2>A three-file project</h2>
+<p>Now the real thing: a small program split the way Life is split. It is deliberately not Life. Make a folder <code>scratch/ch10/shapes</code> with three files.</p>
+
+<p>The header. Declarations and comments only, and <code>#pragma once</code> first:</p>
+
+<pre class="code" data-lang="cpp" data-file="shapes.hpp" data-check="fragment"><code>#pragma once
+// shapes.hpp — what the shape functions promise. No bodies here.
+
+// The area of a w-by-h rectangle, in cells.
+int area(int w, int h);
+
+// The distance around a w-by-h rectangle.
+int perimeter(int w, int h);
+</code></pre>
+
+<p>The source file with the definitions. Its first include is its own header, for a reason explained at the end of the chapter:</p>
+
+<pre class="code" data-lang="cpp" data-file="shapes.cpp" data-check="fragment"><code>// shapes.cpp — how the shape functions keep their promise.
+#include "shapes.hpp"
+
+int area(int w, int h) {
+    return w * h;
+}
+
+int perimeter(int w, int h) {
+    return 2 * (w + h);
+}
+</code></pre>
+
+<p>And the program. It includes the header, so it knows the promises, and it never sees the bodies:</p>
+
+<pre class="code" data-lang="cpp" data-file="main.cpp" data-check="fragment"><code>// main.cpp — the program. It only needs the promises.
+#include "shapes.hpp"
+#include &lt;print&gt;
+
+int main() {
+    std::println("a 4 by 3 rectangle: area {}, perimeter {}", area(4, 3), perimeter(4, 3));
+    std::println("a 10 by 10 square:  area {}, perimeter {}", area(10, 10), perimeter(10, 10));
+    return 0;
+}
+</code></pre>
+
+<h3>Building in one go</h3>
+<p>Give <code>clang++</code> both source files. Not the header: headers are never on the command line, because they get pasted into the sources that include them.</p>
+
+<pre class="shell"><code>$ clang++ -std=c++23 -Wall -Wextra main.cpp shapes.cpp -o shapes
+$ ./shapes
+a 4 by 3 rectangle: area 12, perimeter 14
+a 10 by 10 square:  area 100, perimeter 40
+</code></pre>
+
+<p>From the outside it looks like chapter 1's compile with one more filename. Inside, <code>clang++</code> did three jobs: compiled <code>main.cpp</code> into machine code with "fill in later" notes for <code>area</code> and <code>perimeter</code>; compiled <code>shapes.cpp</code> into machine code containing those two functions; and joined the two, filling in the notes. The joining is the link step. The next section does it by hand so it stops being hidden.</p>
+
+<h3>Building in two steps: object files, then link</h3>
+<p>The flag <code>-c</code> means "compile this one file to machine code and stop; do not try to make a program". The result is an <strong>object file</strong>, ending in <code>.o</code>: the machine code for one translation unit, plus a list of the names it defines and the names it still needs. These are the two commands you saw timed at the start of the chapter. Two more shell tools follow them: <code>wc -c</code> counts the bytes in each file, and <code>file</code> says what kind of file something is.</p>
+
+<pre class="shell"><code>$ clang++ -std=c++23 -Wall -Wextra -c main.cpp -o main.o
+$ clang++ -std=c++23 -Wall -Wextra -c shapes.cpp -o shapes.o
+$ wc -c main.o shapes.o
+  337856 main.o
+     648 shapes.o
+$ file shapes.o
+shapes.o: Mach-O 64-bit object arm64
+</code></pre>
+
+<p>Look at the sizes. <code>shapes.o</code> is 648 bytes: two tiny functions. <code>main.o</code> is 337,856 bytes, because the formatting code behind <code>std::println</code> was pasted in from <code>&lt;print&gt;</code> and compiled along with your nine lines. Neither is a program yet; <code>file</code> says "object", not "executable", and if you try <code>./shapes.o</code> the shell refuses to run it.</p>
+
+<p>Now you can look inside. The tool <code>nm</code> lists the names, called <strong>symbols</strong>, that an object file defines or needs. A symbol is a name the linker can look up: every function you define becomes one. The <code>-C</code> flag prints them in C++ spelling:</p>
+
+<pre class="shell"><code>$ nm -C shapes.o
+0000000000000000 T area(int, int)
+0000000000000020 T perimeter(int, int)
+0000000000000000 t ltmp0
+0000000000000048 s ltmp1
+$ nm -C main.o | grep -E 'area|perimeter|_main'
+                 U area(int, int)
+                 U perimeter(int, int)
+0000000000000000 T _main
+</code></pre>
+
+<p>Two letters carry the whole story. <code>T</code> means "defined here, in this file's machine code": the number in front is how many bytes from the start of that code the function begins. <code>shapes.o</code> defines <code>area(int, int)</code> at byte 0 and <code>perimeter(int, int)</code> at byte 32. (The number is printed in base 16, where <code>20</code> means 2×16+0=32; take that on trust, nothing in Week 1 needs it.) <code>U</code> means <strong>undefined</strong>: "I call this, but I do not have it; somebody else must". <code>main.o</code> defines <code>_main</code> and needs <code>area</code> and <code>perimeter</code>. Those <code>U</code> lines are the "fill in later" notes made real. (The two lowercase lines, <code>ltmp0</code> and <code>ltmp1</code>, are internal labels the compiler made for itself; ignore them.)</p>
+
+<p>Notice that the symbol is <code>area(int, int)</code>, with the parameter types, not just <code>area</code>. The compiler bakes the types into the name, a step called <strong>name mangling</strong>. Run <code>nm shapes.o</code> without <code>-C</code> and you see the mangled form, <code>__Z4areaii</code>: <code>4area</code> is the four-letter name and <code>ii</code> is the two <code>int</code>s. That is why the declaration and the definition must agree exactly on parameter types: a definition of <code>area(long, long)</code> produces a different symbol, <code>__Z4areall</code>, and a call compiled against <code>area(int, int)</code> will never find it.</p>
+
+<p>The last step joins them:</p>
+
+<pre class="shell"><code>$ clang++ main.o shapes.o -o shapes
+$ ./shapes
+a 4 by 3 rectangle: area 12, perimeter 14
+a 10 by 10 square:  area 100, perimeter 40
+</code></pre>
+
+<p>No <code>-std</code>, no <code>-Wall</code>: there is no C++ left to compile. Given <code>.o</code> files, <code>clang++</code> only runs the linker. The <strong>linker</strong> (on the Mac the program is called <code>ld</code>, and you will see that name in its error messages) does five things, in order:</p>
+<ol>
+<li>Collect every object file named on the command line.</li>
+<li>Make one list of every <code>T</code> symbol across all of them: every name that somebody defines.</li>
+<li>For every <code>U</code> symbol in any file, find the matching <code>T</code> and write its final address into the machine code where the "fill in later" note was.</li>
+<li>Add the standard library's own object code, such as the machinery behind <code>std::println</code>, and fill in those notes too.</li>
+<li>Write out one executable file.</li>
+</ol>
+<p>Step 3 can fail in two ways. If a <code>U</code> has no <code>T</code> anywhere, or if one name has two <code>T</code>s, the linker stops with an error. Those two errors are the next section.</p>
+
+<div class="callout principle"><span class="label">First principle</span><p>Compiling and linking are different jobs with different knowledge. The compiler sees one translation unit at a time and knows types, signatures and bodies, but nothing about other files. The linker sees every object file at once and knows names and addresses, but nothing about types or bodies. An error message tells you which one is speaking: a compiler error names a file, a line and a column (<code>main.cpp:4:24:</code>); a linker error talks about symbols and architectures and has a line that begins with <code>ld:</code>, followed by <code>clang++: error: linker command failed</code>.</p></div>
+
+<h3>Compile only what changed</h3>
+<p>Here is the payoff for the two-step way. Change the body of <code>perimeter</code> in <code>shapes.cpp</code> (say, to <code>return w + h + w + h;</code>). <code>main.cpp</code> has not changed and <code>main.o</code> is still correct, so recompile only the file you touched and link again:</p>
+
+<pre class="shell"><code>$ clang++ -std=c++23 -Wall -Wextra -c shapes.cpp -o shapes.o
+$ clang++ main.o shapes.o -o shapes
+$ ./shapes
+a 4 by 3 rectangle: area 12, perimeter 14
+a 10 by 10 square:  area 100, perimeter 40
+</code></pre>
+
+<p>Two hundredths of a second instead of a quarter, and in a project with four hundred files the saving is minutes. A rule comes with it: if you change a <em>header</em>, every source file that includes it has changed, because the header is pasted into each of them, so all of those must be recompiled. Tracking which <code>.o</code> is out of date, and which headers each <code>.cpp</code> pulls in, is tedious bookkeeping you will not do by hand. It is exactly what CMake and Ninja do in chapter 11: Ninja remembers the dependencies and recompiles precisely the object files whose inputs changed. Now you know what it is doing.</p>
+
+<div class="callout try"><span class="label">Try it</span><p>Add a third function to the shapes project, <code>int diagonal_cells(int w, int h)</code>, that returns the number of cells on the diagonal of a <code>w</code> by <code>h</code> rectangle (the smaller of the two). Which files must change? Which object files must be rebuilt? Run <code>nm -C</code> on each <code>.o</code> before linking and find your new symbol with its <code>T</code> and its <code>U</code>.</p></div>
+<details class="hint"><summary>Stuck? First nudge</summary><p>The declaration goes in <code>shapes.hpp</code>, the body in <code>shapes.cpp</code>, and a call in <code>main.cpp</code>. All three files change, so both object files must be rebuilt. If you only call it from <code>main.cpp</code> and forget the body, the compiler is perfectly happy and the linker is not; the next section shows you what it says.</p></details>
+
+<h2>Reading linker errors</h2>
+<p>There are two, and you will meet both this week. The text below is real output from this machine; learn its shape so that you recognise it in a hurry.</p>
+
+<h3>Undefined symbols: you forgot a source file</h3>
+<p>Compile the shapes program but leave <code>shapes.cpp</code> off the command line:</p>
+
+<pre class="shell"><code>$ clang++ -std=c++23 -Wall -Wextra main.cpp -o shapes
+Undefined symbols for architecture arm64:
+  "area(int, int)", referenced from:
+      _main in main-9d6099.o
+      _main in main-9d6099.o
+  "perimeter(int, int)", referenced from:
+      _main in main-9d6099.o
+      _main in main-9d6099.o
+ld: symbol(s) not found for architecture arm64
+clang++: error: linker command failed with exit code 1 (use -v to see invocation)
+</code></pre>
+
+<p>Line by line: "Undefined symbols" is the <code>U</code> from <code>nm</code> that never found its <code>T</code>. "for architecture arm64" is just the CPU family; it is not the problem. Then each missing symbol with its full signature, <code>area(int, int)</code>, and who wanted it: <code>_main</code>, twice, because <code>main</code> calls <code>area</code> twice. The object file has a random suffix, <code>main-9d6099.o</code> (yours will differ), because in a one-go build <code>clang++</code> writes temporary object files with made-up names; in the two-step build it would simply say <code>main.o</code>. Finally <code>ld:</code> summarises and <code>clang++</code> reports that the linker, not the compiler, failed.</p>
+
+<p>Notice what did <em>not</em> happen: <code>main.cpp</code> compiled without complaint. The compiler had the declarations from <code>shapes.hpp</code>, which is all it needs; only the linker noticed the bodies were nowhere. The fix is to add the file that defines the symbol, <code>shapes.cpp</code>, to the command. The same message with a different name means the same thing: find which <code>.cpp</code> defines that name and make sure it is on the command line, or that you actually wrote the definition. (Declared in the header, called from <code>main</code>, body never written: exactly this message.)</p>
+
+<h3>Duplicate symbol: a body in a header</h3>
+<p>The opposite mistake. Suppose someone puts a function <em>body</em> in a header, thinking it saves a file:</p>
+
+<pre class="code" data-lang="cpp" data-file="shapes.hpp" data-check="fragment"><code>#pragma once
+// shapes.hpp — WRONG: a function body in a header.
+
+int area(int w, int h) {
+    return w * h;
+}
+</code></pre>
+
+<p>A second header uses it, and a source file defines the function the second header declares. Put the four files in <code>scratch/ch10/report</code>:</p>
+
+<pre class="code" data-lang="cpp" data-file="report.hpp" data-check="fragment"><code>#pragma once
+#include "shapes.hpp"
+
+void print_area(int w, int h);
+</code></pre>
+
+<pre class="code" data-lang="cpp" data-file="report.cpp" data-check="fragment"><code>#include "report.hpp"
+#include &lt;print&gt;
+
+void print_area(int w, int h) {
+    std::println("area {}", area(w, h));
+}
+</code></pre>
+
+<pre class="code" data-lang="cpp" data-file="main.cpp" data-check="fragment"><code>#include "report.hpp"
+
+int main() {
+    print_area(4, 3);
+    return 0;
+}
+</code></pre>
+
+<p><code>#pragma once</code> is present everywhere, so inside each translation unit <code>shapes.hpp</code> is pasted once, and each file compiles on its own without a word of complaint. But there are <em>two</em> translation units, and the body of <code>area</code> got pasted into both:</p>
+
+<pre class="shell"><code>$ clang++ -std=c++23 -Wall -Wextra -c main.cpp -o main.o
+$ clang++ -std=c++23 -Wall -Wextra -c report.cpp -o report.o
+$ nm -C main.o | grep area
+0000000000000000 T area(int, int)
+$ nm -C report.o | grep area
+0000000000000000 T area(int, int)
+$ clang++ main.o report.o -o report
+duplicate symbol 'area(int, int)' in:
+    /Users/dan/Desktop/projects/cpp-101/scratch/ch10/report/main.o
+    /Users/dan/Desktop/projects/cpp-101/scratch/ch10/report/report.o
+ld: 1 duplicate symbols
+clang++: error: linker command failed with exit code 1 (use -v to see invocation)
+</code></pre>
+
+<p>Two <code>T</code>s for one name. The linker cannot know they are the same code and refuses to guess. The message names the symbol and the two object files that define it (the linker prints their full paths; yours will start with your own folder); that is all you need. The fix is the discipline this chapter is about: the body moves to <code>shapes.cpp</code>, the header keeps only <code>int area(int w, int h);</code>, and <code>shapes.cpp</code> joins the command line.</p>
+
+<p><code>#pragma once</code> did not help here, and it is important to see why: it stops a header being pasted twice into <em>one</em> translation unit. It cannot stop a header being pasted into <em>two different</em> translation units; that is the whole purpose of a header. Only the rule "no bodies in headers" prevents this error.</p>
+
+<h3>Duplicate symbol '_main': two programs in one</h3>
+<p>The same error has a second face you will see the moment you build tests. Make a folder <code>scratch/ch10/layout</code> and lay the shapes project out like Life: the correct <code>shapes.hpp</code>, <code>shapes.cpp</code> and <code>main.cpp</code> from the three-file project go in <code>layout/src/</code>, and a new file goes in <code>layout/tests/</code>. It includes <code>shapes.hpp</code>, checks one fact about <code>area</code>, and has a <code>main</code> of its own. (Chapter 12's doctest will write a test <code>main</code> for you; this hand-written one uses only chapter 3's <code>if</code> and shows the same error.)</p>
+
+<pre class="code" data-lang="cpp" data-file="shapes_test.cpp" data-check="fragment"><code>// tests/shapes_test.cpp — a hand-written test with its own main.
+#include "shapes.hpp"
+#include &lt;print&gt;
+
+int main() {
+    if (area(2, 3) == 6) {
+        std::println("area(2, 3) == 6: pass");
+        return 0;
+    }
+    std::println("area(2, 3) == 6: FAIL, got {}", area(2, 3));
+    return 1;
+}
+</code></pre>
+
+<p>From inside <code>layout/</code>, first try to build the test the obvious way, naming it together with <code>shapes.cpp</code>:</p>
+
+<pre class="shell"><code>$ clang++ -std=c++23 -Wall -Wextra tests/shapes_test.cpp src/shapes.cpp -o shapes_test
+tests/shapes_test.cpp:2:10: fatal error: 'shapes.hpp' file not found
+    2 | #include "shapes.hpp"
+      |          ^~~~~~~~~~~~
+1 error generated.
+</code></pre>
+
+<p>The fatal error from earlier, for a new reason: <code>shapes.hpp</code> is spelt right but lives in <code>src/</code>, and quoted includes look in the including file's own folder, <code>tests/</code>, where it is not. The flag <code>-I</code> followed by a folder name (no space: <code>-Isrc</code>) adds that folder to the list of places the preprocessor searches. This is the flag the quotes-versus-brackets section promised. Now add it, and at the same time make the mistake this section is about: give the linker <code>src/main.cpp</code> as well, so that two files each define <code>main</code>:</p>
+
+<pre class="shell"><code>$ clang++ -std=c++23 -Wall -Wextra -Isrc tests/shapes_test.cpp src/main.cpp src/shapes.cpp -o shapes_test
+duplicate symbol '_main' in:
+    /private/var/folders/nb/6p990kd50v1gk55h9g11s6pc0000gn/T/main-659a98.o
+    /private/var/folders/nb/6p990kd50v1gk55h9g11s6pc0000gn/T/shapes_test-ab6fa5.o
+ld: 1 duplicate symbols
+clang++: error: linker command failed with exit code 1 (use -v to see invocation)
+</code></pre>
+
+<p>(The long <code>/private/var/folders/...</code> paths are the temporary folder where a one-go build keeps its object files; yours will differ.) Leave <code>src/main.cpp</code> out and the test program builds and runs:</p>
+
+<pre class="shell"><code>$ clang++ -std=c++23 -Wall -Wextra -Isrc tests/shapes_test.cpp src/shapes.cpp -o shapes_test
+$ ./shapes_test
+area(2, 3) == 6: pass
+</code></pre>
+
+<p>This is the reason the test program must not be built from <code>main.cpp</code>: the tests have their own <code>main</code>, and a program may have only one. It is also the reason <code>CMakeLists.txt</code> lists <code>src/life.cpp</code> in all three programs but <code>src/main.cpp</code> in only one.</p>
+
+<h3>Compiler error or linker error?</h3>
+<p>For contrast, here is the <em>compiler</em> refusing. This complete program calls <code>area</code> without including any header that declares it:</p>
+
+<pre class="code" data-lang="cpp" data-file="noinc.cpp" data-check="error"><code>#include &lt;print&gt;
+
+int main() {
+    std::println("{}", area(4, 3));
+    return 0;
+}
+</code></pre>
+<pre class="output"><code>noinc.cpp:4:24: error: use of undeclared identifier 'area'
+    4 |     std::println("{}", area(4, 3));
+      |                        ^~~~
+1 error generated.
+</code></pre>
+
+<p>File, line 4, column 24, a caret under the offending name: the compiler is speaking, and it never got as far as the linker. Adding <code>shapes.cpp</code> to the command line would not help; the compiler cannot see other files. The fix is <code>#include "shapes.hpp"</code>. Here is the whole family in one table.</p>
+
+<table>
+<thead><tr><th>Symptom (what the message says)</th><th>Who says it</th><th>Cause</th><th>Fix</th></tr></thead>
+<tbody>
+<tr><td><code>fatal error: 'x.hpp' file not found</code></td><td>preprocessor</td><td>Misspelt name, wrong folder, or the folder is not given with <code>-I</code></td><td>Check the spelling and the path; add <code>-Ifolder</code> if the header lives elsewhere</td></tr>
+<tr><td><code>file not found with &lt;angled&gt; include; use "quotes" instead</code></td><td>preprocessor</td><td>Your own header included with <code>&lt;&gt;</code></td><td>Use <code>"x.hpp"</code> for your files</td></tr>
+<tr><td><code>error: use of undeclared identifier 'f'</code></td><td>compiler</td><td>No declaration of <code>f</code> was seen before the call</td><td>Include the header that declares it (or, in a one-file program, write the declaration above the call as in chapter 4)</td></tr>
+<tr><td><code>error: redefinition of 'x'</code> with "included multiple times"</td><td>compiler</td><td>A header with a definition in it was pasted twice into one translation unit</td><td>Put <code>#pragma once</code> at the top of the header</td></tr>
+<tr><td><code>Undefined symbols for architecture arm64: "f(int, int)"</code></td><td>linker</td><td>Declared and called, but no object file defines <code>f</code> with that exact signature</td><td>Add the <code>.cpp</code> that defines it to the build; write the body; make the definition's parameter types match the declaration</td></tr>
+<tr><td><code>duplicate symbol 'f(int, int)'</code></td><td>linker</td><td>A function body in a header, pasted into two <code>.cpp</code> files</td><td>Move the body to one <code>.cpp</code>; leave only the declaration in the header</td></tr>
+<tr><td><code>duplicate symbol '_main'</code></td><td>linker</td><td>Two source files with <code>main</code> were linked into one program</td><td>Build the tests without <code>main.cpp</code>; one <code>main</code> per program</td></tr>
+</tbody>
+</table>
+
+<div class="callout trap"><span class="label">Trap</span><p>The parameter types in the definition must match the declaration exactly. If <code>shapes.hpp</code> says <code>int area(int w, int h);</code> and <code>shapes.cpp</code> writes <code>int area(long w, long h) { ... }</code>, both files compile cleanly, each one sensible on its own, and the linker then reports <code>Undefined symbols: "area(int, int)"</code>. The message names the signature the <em>caller</em> wanted. When you see an undefined symbol for a function you are sure you wrote, compare the two signatures character by character. This is also why the Life tests insist you keep <code>life.hpp</code>'s signatures unchanged.</p></div>
+
+<div class="callout try"><span class="label">Try it</span><p>Make the trap happen on purpose, so that you recognise it later. In <code>scratch/ch10/shapes</code>, change the first line of the <code>area</code> definition in <code>shapes.cpp</code> to <code>int area(long w, long h) {</code> and leave the header alone. Compile <code>shapes.cpp</code> with <code>-c</code>: does it complain? Run <code>nm -C shapes.o</code>: what symbol does it define now? Then build the whole program in one go and read the error. Put <code>int</code> back afterwards.</p></div>
+<details class="answer"><summary>Show the answer</summary><p>The compile is clean; the file is perfectly sensible on its own. <code>nm -C shapes.o</code> now shows <code>T area(long, long)</code>. The one-go build ends with <code>Undefined symbols for architecture arm64: "area(int, int)", referenced from: _main</code>: the caller wants <code>area(int, int)</code>, nobody defines that exact name, and the <code>area(long, long)</code> that does exist is a stranger to the linker. The message does not mention <code>long</code> at all, which is what makes this one hard to spot without <code>nm</code>.</p></details>
+
+<h2>The one definition rule</h2>
+<p>Everything above is one rule seen from different angles. C++ calls it the <strong>one definition rule</strong>, and in words it is:</p>
+<ul>
+<li>A function may be <strong>declared</strong> as many times as you like, in as many files as you like. Every translation unit that calls it must see a declaration first, and they must all agree on the signature.</li>
+<li>A function must be <strong>defined</strong> exactly once in the whole program: exactly one body, in exactly one translation unit, in exactly one object file. Zero definitions is "undefined symbol". Two is "duplicate symbol".</li>
+</ul>
+
+<p>Headers are the mechanism for the first half: because a header holds declarations and is pasted into every file that includes it, every file gets the same declaration, and a repeated declaration is harmless. Source files are the mechanism for the second half: a body written in one <code>.cpp</code> is compiled into exactly one object file. Keep bodies out of headers and the rule keeps itself. (Chapter 11's <code>CMakeLists.txt</code> keeps the other half of the rule for you: each <code>add_executable</code> line lists every <code>.cpp</code> that program needs, once.)</p>
+
+<p>Later you will meet two legitimate exceptions whose bodies do live in headers and for which the compiler and linker have special arrangements: functions marked <code>inline</code> (week 4) and templates (week 8). Until then, treat the rule as having no exceptions.</p>
+
+<h2>The Life project, file by file</h2>
+<p>You can now read the whole challenge folder and know why every file is where it is.</p>
+
+<pre class="grid-figure">phase1-terminal/01-life/
+  CMakeLists.txt         the build recipe: which .cpp files make which program
+  README.md              the spec
+  BENCH.md               your benchmark numbers (week-end)
+  src/
+    life.hpp             the contract: six declarations with comments. Included everywhere.
+    life.cpp             your six definitions. Compiled once, linked into all three programs.
+    main.cpp             the game's main: arguments, the ANSI loop. Linked into `life` only.
+  tests/
+    life_test.cpp        13 doctest cases and their own main. Linked into `life_tests` only.
+  bench/
+    bench_life.cpp       the stopwatch and its own main. Linked into `life_bench` only.
+</pre>
+
+<p><strong><code>src/life.hpp</code></strong> is the header you read in chapter 4. First line: <code>#pragma once</code>. Then three includes it needs for its own declarations, <code>&lt;cstdint&gt;</code> for <code>std::uint8_t</code>, <code>&lt;vector&gt;</code>, <code>&lt;string&gt;</code>. Then <code>using Cells = std::vector&lt;std::uint8_t&gt;;</code>, the alias from <a href="07-flat-grid.html">chapter 7</a>, which belongs in the header precisely because every file that calls these functions needs to spell the type. Then six declarations with comments that say what each promises. No bodies. You never edit this file; it is the contract the tests are written against.</p>
+
+<p><strong><code>src/life.cpp</code></strong> is where the week's work happens. Its first line of code, after the comment block, is <code>#include "life.hpp"</code>, so the compiler can check that every body you write matches its declaration. Then six definitions, currently stubs that return the wrong answer. It is compiled into one object file, and that object file is linked into all three programs, so the game, the tests and the benchmark all run the <em>same</em> <code>step</code>. That is the first problem from the start of this chapter, solved.</p>
+
+<p><strong><code>src/main.cpp</code></strong> is the game. It will parse the arguments (<a href="08-strings-and-args.html">chapter 8</a>), make two <code>Cells</code>, and run the clear-print-step-swap-sleep loop (<a href="09-terminal.html">chapter 9</a>). It calls the six functions through <code>life.hpp</code>. It is linked into <code>life</code> and nowhere else.</p>
+
+<p><strong><code>tests/life_test.cpp</code></strong> has its own <code>main</code> (doctest supplies it; chapter 12). It includes <code>life.hpp</code> and is linked with <code>life.cpp</code>, never with <code>main.cpp</code>: that is the <code>duplicate symbol '_main'</code> error from the last section, avoided by design. One detail: the file says <code>#include "life.hpp"</code>, yet <code>life.hpp</code> is not in <code>tests/</code>; it is in <code>src/</code>. This is the same situation as <code>shapes_test.cpp</code> above, and the same <code>-Isrc</code> solves it. <code>CMakeLists.txt</code> has the line <code>include_directories(src ...)</code>, which becomes a <code>-Isrc</code> flag on every compiler command line it runs. Building by hand, you supply the flag yourself.</p>
+
+<p><strong><code>bench/bench_life.cpp</code></strong> has its own <code>main</code> too. It calls only <code>random_cells</code> and <code>step</code>, and is linked with <code>life.cpp</code>. Same pattern as the tests. Chapter 13 reads it line by line.</p>
+
+<p>You can build all of this without CMake, right now, with what this chapter taught. From inside <code>phase1-terminal/01-life</code> (the <code>| tail -3</code> keeps only the last three lines of the test output, which is the summary):</p>
+
+<pre class="shell"><code>$ clang++ -std=c++23 -Wall -Wextra -Isrc src/main.cpp src/life.cpp -o life
+$ ./life --width 10
+life: not implemented yet (2 arguments given)
+$ clang++ -std=c++23 -Wall -Wextra -Isrc -I../../third_party/doctest tests/life_test.cpp src/life.cpp -o life_tests
+$ ./life_tests | tail -3
+[doctest] test cases:    13 |     1 passed | 12 failed | 0 skipped
+[doctest] assertions: 10061 | 10010 passed | 51 failed |
+[doctest] Status: FAILURE!
+</code></pre>
+
+<p>The game prints its stub message, and the tests build, run and fail: 12 of the 13 test cases are red, which is the correct state on day one. (The one that passes is "step: does not modify current", and it passes for a silly reason: a stub that does nothing cannot modify anything.) Two <code>-I</code> flags: <code>src</code> for <code>life.hpp</code>, and the vendored doctest folder for <code>doctest.h</code>. Chapter 11 replaces these two long commands with <code>cmake --build build</code>, but nothing it does is new to you any more.</p>
+
+<h3>Why main.cpp must stay thin</h3>
+<p>A rule for the whole week follows directly from the layout. <strong>Anything in <code>main.cpp</code> cannot be tested and cannot be benchmarked.</strong> The test program is not linked with <code>main.cpp</code> (it cannot be: two <code>main</code>s), so a function written in <code>main.cpp</code> is invisible to <code>life_tests</code> and <code>life_bench</code>. The moment you catch yourself writing a loop in <code>main.cpp</code> that computes something you might want to check, stop and ask: should this be a function in <code>life.cpp</code>, declared in <code>life.hpp</code>? For the six contract functions the answer is decided for you. Helpers you invent, such as one that reads a <code>--width 80</code> pair out of <code>argv</code>, may stay in <code>main.cpp</code> this week, but notice the cost: nothing checks them. From week 3 the habit is: <code>main.cpp</code> reads arguments, makes the vectors, runs the loop, and does no arithmetic of its own.</p>
+
+<h3>The common/ folder</h3>
+<p>At the repo root, <code>common/</code> holds nothing but a README. It will grow a few small headers that several weeks share: <code>terminal.hpp</code> (clear screen, cursor home, hide and show cursor, the escape codes from chapter 9), <code>timer.hpp</code> (a stopwatch and a frame limiter), and <code>grid.hpp</code>. The README states the rule: a header moves into <code>common/</code> only after <em>two</em> challenges have each needed their own copy. Week 1 writes its escape codes directly in <code>main.cpp</code>. When Snake needs them again in week 3, you lift them into <code>common/terminal.hpp</code>, <code>#pragma once</code> at the top, and both challenges include it. There are two ways to spell that include. One is <code>#include "../../../common/terminal.hpp"</code>, where each <code>..</code> is one folder up (three steps up from <code>src/</code>: to <code>01-life</code>, to <code>phase1-terminal</code>, to the repo root). The more readable way is <code>#include "terminal.hpp"</code> plus a <code>-I</code> flag pointing at <code>common/</code>. Everything you need for that is in this chapter.</p>
+
+<h2>Where to put what</h2>
+<p>The rules for a header, this week and for the rest of Phase 1. A header:</p>
+<ul>
+<li>Starts with <code>#pragma once</code>. Always, first line.</li>
+<li>Includes what <em>it</em> needs. <code>life.hpp</code> mentions <code>std::vector</code>, <code>std::string</code> and <code>std::uint8_t</code> in its declarations, so it includes <code>&lt;vector&gt;</code>, <code>&lt;string&gt;</code> and <code>&lt;cstdint&gt;</code> itself. A header must never rely on whoever includes it having included something first; pasting order is not a contract.</li>
+<li>Holds declarations with comments, <code>using</code> aliases, and named constants (<code>const int</code>). Each declaration's comment says what the function promises, in words a caller can rely on.</li>
+<li>Never holds a function body. (Until week 4's <code>inline</code> and week 8's templates, no exceptions.)</li>
+<li>Never contains <code>using namespace std;</code>. You have not used that line in this book and you will not; in a header it is especially harmful because it is pasted into every file that includes the header, silently changing what names mean there.</li>
+<li>Never defines a variable that is not <code>const</code>. A plain <code>int counter = 0;</code> in a header is a definition pasted into every translation unit: duplicate symbol. (Why is <code>const int default_width = 60;</code> allowed, then? Because C++ treats a <code>const</code> at file level as private to its own translation unit, so the copies never meet at link time; a non-<code>const</code> one is shared by name across the whole program, so two copies collide. Take the why on trust; the rule is what matters this week.)</li>
+</ul>
+
+<p>And a source file:</p>
+<ul>
+<li>Includes its own header <em>first</em>, before <code>&lt;print&gt;</code> or anything else. This is a free test: if <code>shapes.hpp</code> forgot an include it needs, compiling <code>shapes.cpp</code> fails immediately instead of working by accident because some other include happened to come earlier. <code>life.cpp</code> follows this rule.</li>
+<li>Then includes the standard headers it needs for its bodies. <code>life.cpp</code> will need <code>&lt;random&gt;</code> for <code>random_cells</code> once you write it; that include belongs in <code>life.cpp</code>, not in <code>life.hpp</code>, because the <em>declaration</em> of <code>random_cells</code> does not mention anything from <code>&lt;random&gt;</code>. Callers should not pay to paste in a library only the body uses.</li>
+<li>Holds the definitions, each matching its declaration exactly.</li>
+<li>Contains exactly one <code>main</code> if it is a program's entry file, and none otherwise.</li>
+<li>May mark a helper that only this file uses as <code>static</code>, which keeps its name private to this translation unit, so no other file can call it and no other file's helper of the same name can collide with it. The test file does this with its <code>grid_with</code> helper (<a href="12-testing.html">chapter 12</a>); linkage, the rule behind it, is week 4 material.</li>
+</ul>
+
+<div class="callout twin"><span class="label">Inference twin</span><p>Open the ggml repository and the first two files you should look at are <code>ggml.h</code> and <code>ggml.c</code>. <code>ggml.h</code> is the header the whole world includes: a few thousand lines of declarations and comments, the tensor functions, the graph functions, every operation, each one a promise with no body. <code>ggml.c</code> is the definitions. llama.cpp itself is <code>llama.h</code> and <code>llama.cpp</code>, and around them a few hundred such pairs: <code>ggml-quants.h</code> and <code>.c</code>, <code>ggml-backend.h</code> and <code>.cpp</code>, and so on. When you read llama.cpp in weeks 27 and 28 you will open the <code>.h</code> to learn what a part promises and only open the <code>.c</code> or <code>.cpp</code> when you need to know how. That reading strategy is exactly the one you used on <code>life.hpp</code>, and it works because of the one definition rule you learned today: the header is the complete list of what exists, and every body is in exactly one place.</p></div>
+
+<h2>Check yourself</h2>
+<div class="quiz">
+<div class="q"><p>What does the line <code>#include "shapes.hpp"</code> do, mechanically, and which part of the toolchain does it?</p><details class="answer"><summary>Answer</summary><p>The preprocessor, the first stage of compilation, replaces the line with the full text of <code>shapes.hpp</code>, copy-and-paste style, before the C++ compiler proper sees anything. The compiler then compiles one long text, the translation unit, and never knows a header was involved. You can see the pasted result with <code>clang++ -E -P file.cpp</code>.</p></details></div>
+
+<div class="q"><p>Why do you write <code>#include &lt;print&gt;</code> with angle brackets but <code>#include "life.hpp"</code> with quotes?</p><details class="answer"><summary>Answer</summary><p>Quotes search the including file's own folder first, then <code>-I</code> folders, then the system folders; angle brackets skip the file's own folder. So quotes are for your headers and angle brackets for the toolchain's. Writing <code>&lt;life.hpp&gt;</code> fails with "file not found with &lt;angled&gt; include; use "quotes" instead".</p></details></div>
+
+<div class="q"><p>A header contains only <code>int wrap(int v, int n);</code> and is included twice into one <code>.cpp</code> file, with no <code>#pragma once</code>. Does it compile? Now the header contains <code>const int default_width = 60;</code>. Does it compile?</p><details class="answer"><summary>Answer</summary><p>The first compiles: a declaration may be repeated. The second fails with "redefinition of 'default_width'" because a constant is a definition and pasting it twice defines it twice. The lesson is that only some headers survive double inclusion by luck, so every header gets <code>#pragma once</code> regardless.</p></details></div>
+
+<div class="q"><p>You compile with <code>clang++ -std=c++23 -Wall -Wextra main.cpp -o game</code> and get <code>Undefined symbols for architecture arm64: "step(...)"</code>. Who is complaining, what went wrong, and what is the fix?</p><details class="answer"><summary>Answer</summary><p>The linker (<code>ld</code>). <code>main.cpp</code> compiled fine because it saw the declaration of <code>step</code> in <code>life.hpp</code>, but no object file on the command line defines <code>step</code>. Add <code>src/life.cpp</code> to the command. If it is already there, check that you wrote the body and that its parameter types match the declaration exactly.</p></details></div>
+
+<div class="q"><p>Someone writes the body of <code>wrap</code> directly in <code>life.hpp</code>, with <code>#pragma once</code> at the top. <code>life.cpp</code> and <code>main.cpp</code> both compile cleanly. What happens at link time, and why did <code>#pragma once</code> not prevent it?</p><details class="answer"><summary>Answer</summary><p><code>duplicate symbol 'wrap(int, int)'</code>: the body was pasted into two translation units, so two object files each define it. <code>#pragma once</code> only stops a header being pasted twice into the <em>same</em> translation unit; it cannot and should not stop a header being included from two different <code>.cpp</code> files. Only the rule "no function bodies in headers" prevents this.</p></details></div>
+
+<div class="q"><p>Why does <code>CMakeLists.txt</code> list <code>src/life.cpp</code> in all three <code>add_executable</code> lines but <code>src/main.cpp</code> in only one?</p><details class="answer"><summary>Answer</summary><p><code>life.cpp</code> defines the six functions that all three programs call, so each program needs it linked in (one definition per program). <code>main.cpp</code> defines the game's <code>main</code>; the tests and the benchmark each have their own <code>main</code>, and linking two would give <code>duplicate symbol '_main'</code>.</p></details></div>
+
+<div class="q"><p>State the one definition rule in your own words, and name the error you get for breaking each half.</p><details class="answer"><summary>Answer</summary><p>Declare as often as you like, define exactly once per program. Zero definitions: the linker says "Undefined symbols". Two definitions: the linker says "duplicate symbol". Inside one translation unit, two definitions are caught earlier by the compiler as "redefinition".</p></details></div>
+
+<div class="q"><p>You write a helper function in <code>main.cpp</code> that converts an <code>argv</code> string to an <code>int</code> with a sensible default. Why can <code>life_tests</code> not test it, and what would you have to do to make it testable?</p><details class="answer"><summary>Answer</summary><p><code>life_tests</code> is linked with <code>life.cpp</code>, not <code>main.cpp</code> (two <code>main</code>s), so nothing in <code>main.cpp</code> is visible to it. To test the helper, move its body into a <code>.cpp</code> that is linked into both programs (<code>life.cpp</code>, or a new <code>args.cpp</code> added to both <code>add_executable</code> lines) and put its declaration in a header both include.</p></details></div>
+</div>
+
+<h2>What you can do now</h2>
+<ul>
+<li>Explain <code>#include</code> as copy-and-paste by the preprocessor, show the pasted result with <code>clang++ -E -P</code>, and say what a translation unit is.</li>
+<li>Split a program into a header of declarations and a source file of definitions, and say which file is the promise and which is the work.</li>
+<li>Choose <code>"quotes"</code> or <code>&lt;angle brackets&gt;</code> correctly and recognise the error for getting it wrong.</li>
+<li>Start every header with <code>#pragma once</code>, explain the "redefinition" error it prevents, and explain why it does not prevent "duplicate symbol".</li>
+<li>Build a multi-file program in one command, or as <code>-c</code> object files followed by a link step; use <code>-I</code> to point at a header folder; read <code>nm -C</code> output and say what <code>T</code> and <code>U</code> mean.</li>
+<li>Say in plain words what the linker does, and tell a compiler error from a linker error by its shape.</li>
+<li>Read "Undefined symbols" and "duplicate symbol" messages and go straight to the fix.</li>
+<li>State the one definition rule and apply it: bodies in exactly one <code>.cpp</code>, declarations in a header, one <code>main</code> per program.</li>
+<li>Explain every file in <code>phase1-terminal/01-life/</code>, build the game and the tests by hand with <code>clang++</code>, and say why <code>main.cpp</code> must stay thin.</li>
+</ul>
+</main>
+</body>
+</html>

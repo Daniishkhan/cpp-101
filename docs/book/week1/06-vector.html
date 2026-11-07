@@ -1,0 +1,825 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>06 · std::vector: many values in a row — C++ from zero to Life</title>
+<link rel="stylesheet" href="assets/book.css?v=9">
+<link rel="stylesheet" href="assets/tutor.css?v=9">
+<script src="assets/theme.js?v=9"></script>
+<script defer src="assets/book.js?v=9"></script>
+<script defer src="assets/tutor.js?v=9"></script>
+</head>
+<body>
+<nav class="sidebar" aria-label="Chapters"></nav>
+<main>
+<p class="chapter-kicker">Chapter 06</p>
+<h1>std::vector: many values in a row</h1>
+<p class="lede">At the end of this chapter you can hold a million numbers in one variable, read and write any of them by position, walk over all of them with a loop, hand them to a function without copying, and read the error report the sanitizers (the safety checks <code>tools/run.sh</code> builds in, from <a href="00-start-here.html">chapter 0</a>) print when you reach past the end.</p>
+
+<div class="callout note"><span class="label">In this chapter</span>
+<ul>
+<li>Why one variable per value stops working, and what a <code>std::vector</code> is in memory.</li>
+<li>Creating vectors: a size and a fill value, a list, or empty and grown with <code>push_back</code>; <code>size</code>, <code>resize</code>, <code>clear</code>, <code>empty</code>.</li>
+<li>Reading and writing with <code>[]</code>; what <code>.at()</code> does differently; what undefined behaviour looks like in an AddressSanitizer report.</li>
+<li>Four loop shapes over a vector (index loop, range-for by value, by reference, by <code>const auto&amp;</code>) and when to use each.</li>
+<li>Passing vectors to functions by <code>const&amp;</code>, by <code>&amp;</code>, and returning them by value.</li>
+<li>Worked examples: sum, max, count, fill, reverse.</li>
+<li><code>std::vector&lt;std::uint8_t&gt;</code> as the storage for Life cells; comparing two vectors with <code>==</code>; the <code>vector&lt;bool&gt;</code> trap.</li>
+<li>Who owns the elements, and the <code>int</code> versus <code>std::size_t</code> warning.</li>
+</ul>
+</div>
+
+<h2>The problem: a million cells</h2>
+<p>Everything you have written so far holds a handful of values. One <code>int</code> for a count, one <code>double</code> for a price, one <code>bool</code> for a flag. Each value has its own name.</p>
+<p>The Week 1 benchmark asks for a Game of Life grid of 1,000 by 1,000 cells. That is 1,000,000 cells, and every cell is a value: alive or dead. Try to imagine writing that with what you know: <code>std::uint8_t cell0 = 0;</code>, <code>std::uint8_t cell1 = 0;</code>, and so on for a million lines. Even if you typed it, you could not write a loop over it, because a loop needs to say "the <em>i</em>-th cell" and a variable name is fixed when you write the program. Names do not take a number.</p>
+<p>You need a different kind of thing: one variable that holds <strong>many values of the same type</strong>, where each value is reached by a <strong>number</strong> rather than by a name. In C++ that thing is <code>std::vector</code>. Here is the smallest program that makes one vector holding a million values.</p>
+
+<pre class="code" data-lang="cpp" data-file="one_million.cpp" data-check="run"><code>#include &lt;print&gt;
+#include &lt;vector&gt;
+
+int main() {
+    std::vector&lt;int&gt; cells(1000000, 0);   // one million boxes, every one holding 0
+    std::println("number of boxes: {}", cells.size());
+    std::println("the first box holds {}", cells[0]);
+    std::println("the last box holds {}", cells[999999]);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="one_million.cpp"><code>number of boxes: 1000000
+the first box holds 0
+the last box holds 0
+</code></pre>
+
+<p>Read the one new line slowly. <code>#include &lt;vector&gt;</code> brings in the definition, just as <code>#include &lt;print&gt;</code> brings in <code>std::println</code>. <code>std::vector&lt;int&gt;</code> is the type: "a vector whose elements are <code>int</code>". The angle brackets name the <strong>element type</strong>; you could equally write <code>std::vector&lt;double&gt;</code>. <code>cells</code> is the variable name, as always. The parentheses <code>(1000000, 0)</code> say how many elements to make and what value to put in each one.</p>
+<p>Then <code>cells.size()</code> asks the vector how many elements it holds. The dot means "ask the vector itself". <code>size</code> is a <strong>member function</strong>: a function that belongs to the vector and is called on it with a dot, as <code>cells.size()</code> rather than <code>size(cells)</code>. Every operation on a vector in this chapter (<code>size</code>, <code>push_back</code>, <code>resize</code>, <code>at</code>, …) is a member function, and all of them are written <code>vector.name(arguments)</code>. Why functions live inside types is week 4's topic (classes); for now, take the dot on trust.</p>
+<p>Next, <code>cells[0]</code> and <code>cells[999999]</code> read the first and last element. The square brackets are the "by number" part: you give a position, you get the value stored there. The last of a million boxes is number 999,999, not 1,000,000, because the numbering starts at 0. The section <a href="#reading-and-writing-elements">Reading and writing elements</a> explains why.</p>
+<p>A <strong><code>std::vector</code></strong>, then, is a numbered row of boxes, all of the same type, created with a size and addressed by position. The rest of this chapter is about what that sentence hides.</p>
+
+<h2>What a vector is in memory</h2>
+<p>In <a href="02-values-and-types.html">chapter 2</a> you saw that a variable is a few bytes of memory with a name, and that <code>sizeof(int)</code> prints 4. A vector's elements are also bytes in memory. The important fact is <em>how they are arranged</em>: all the elements sit <strong>contiguously</strong>, meaning next to each other with no gaps, in the order of their positions. Element 0 comes first, element 1 starts exactly where element 0 ends, and so on down the row.</p>
+
+<pre class="grid-figure">
+std::vector&lt;int&gt; v(10, 0);     each int is 4 bytes
+
+byte offset:  0    4    8   12   16   20   24   28   32   36   40
+              |    |    |    |    |    |    |    |    |    |    |
+              +----+----+----+----+----+----+----+----+----+----+
+element:      | 0  | 1  | 2  | 3  | 4  | 5  | 6  | 7  | 8  | 9  |
+              +----+----+----+----+----+----+----+----+----+----+
+              ^                                  ^
+              start                              start + 7 * 4 = element 7
+</pre>
+
+<p>Because the elements are packed like this and all have the same size, the machine can find any element with a single calculation. Every byte of memory has an <strong>address</strong>, its position counted in bytes from the beginning of memory (<a href="02-values-and-types.html">chapter 2</a> called a variable "the four bytes at that address"). The address of element <em>i</em> is <strong>start + i × sizeof(element)</strong>, where <em>start</em> is the address of element 0. For a vector of <code>int</code>, element 7 begins 28 bytes after the start. No searching, no counting along the row. One multiplication, one addition, and the CPU is reading the right bytes.</p>
+<p>You cannot print addresses yet (pointers are a week 7 topic), but you can print the distances, and they come straight from the formula.</p>
+
+<pre class="code" data-lang="cpp" data-file="distance.cpp" data-check="run"><code>#include &lt;print&gt;
+#include &lt;vector&gt;
+
+int main() {
+    std::vector&lt;int&gt; v(10, 0);
+    std::println("one int is {} bytes", sizeof(int));
+    std::println("element 0 starts {} bytes after the start", 0 * sizeof(int));
+    std::println("element 1 starts {} bytes after the start", 1 * sizeof(int));
+    std::println("element 7 starts {} bytes after the start", 7 * sizeof(int));
+    std::println("element 9 starts {} bytes after the start", 9 * sizeof(int));
+    std::println("the whole row is {} bytes", v.size() * sizeof(int));
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="distance.cpp"><code>one int is 4 bytes
+element 0 starts 0 bytes after the start
+element 1 starts 4 bytes after the start
+element 7 starts 28 bytes after the start
+element 9 starts 36 bytes after the start
+the whole row is 40 bytes
+</code></pre>
+
+<div class="callout principle"><span class="label">First principle</span><p>Reaching element <em>i</em> of a vector costs the same whether the vector has 10 elements or 10 million: one multiplication and one addition to compute the address, then one memory read. Programmers call this <strong>constant time</strong>. It is the reason vectors are the default container in C++, and the reason the Life grid, and later every tensor you touch, will be stored as one flat vector.</p></div>
+
+<div class="callout analogy"><span class="label">Analogy</span><p>A vector is like a row of numbered lockers in a corridor. They are the same size, they are bolted together, and the numbers run 0, 1, 2, … from the left. If you know the corridor starts at a certain point and every locker is 40 centimetres wide, locker 7 is at 280 centimetres: you walk straight to it. <em>Where the analogy breaks:</em> you cannot add a locker to a real corridor without building work. A vector can grow, as you will see next, but when it does it may quietly move the whole row to a bigger space. The row stays contiguous; it just does not stay in the same place.</p></div>
+
+<h2>Creating a vector</h2>
+<p>There are three ways you will use in Week 1. The one you choose depends on whether you know the size, the values, or neither.</p>
+
+<pre class="code" data-lang="cpp" data-file="three_ways.cpp" data-check="run"><code>#include &lt;print&gt;
+#include &lt;vector&gt;
+
+int main() {
+    // Way 1: a size and a value to put in every box.
+    std::vector&lt;int&gt; zeros(10, 0);
+    std::println("zeros has {} elements, the first is {}", zeros.size(), zeros[0]);
+
+    // Way 2: list the elements yourself.
+    std::vector&lt;int&gt; primes = {2, 3, 5, 7, 11};
+    std::println("primes has {} elements, the first is {}", primes.size(), primes[0]);
+
+    // Way 3: start empty, grow one element at a time.
+    std::vector&lt;int&gt; grown;
+    std::println("grown starts with {} elements", grown.size());
+    grown.push_back(100);
+    grown.push_back(200);
+    grown.push_back(300);
+    std::println("grown now has {} elements, the last is {}", grown.size(), grown[2]);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="three_ways.cpp"><code>zeros has 10 elements, the first is 0
+primes has 5 elements, the first is 2
+grown starts with 0 elements
+grown now has 3 elements, the last is 300
+</code></pre>
+
+<p><strong>Way 1</strong>, <code>std::vector&lt;int&gt; zeros(10, 0)</code>, is the one you will use for the grid: you know how many cells there are (width times height) and you want them all to start dead. Note the round brackets: the first number is the count, the second is the value copied into every element. If you leave out the second, elements of number types are set to zero anyway; writing the 0 makes the intention visible, so this book always writes it.</p>
+<p><strong>Way 2</strong>, <code>= {2, 3, 5, 7, 11}</code>, uses curly brackets and lists the elements in order. The size is simply how many you listed. This is handy in tests, where you want a small vector with known contents.</p>
+<p><strong>Way 3</strong> starts with nothing, <code>std::vector&lt;int&gt; grown;</code>, and appends with <code>push_back</code>. <strong><code>push_back</code></strong> adds one element at the end and makes the vector one longer. After three calls the elements are 100, 200, 300 at positions 0, 1, 2, which is why <code>grown[2]</code> is the last one. It is the right tool when you do not know in advance how many elements there will be, for example when reading numbers until some condition is met.</p>
+
+<div class="callout try"><span class="label">Try it</span><p>Make a <code>std::vector&lt;double&gt;</code> of 4 elements, each 1.5, with Way 1. Print its size and its last element. Then <code>push_back(2.5)</code> and print both again. Write down what you expect before you run it (size 4 and 1.5, then size 5 and 2.5). Finally, change the round brackets to curly ones, <code>{4, 1.5}</code>, run again, and explain the new size to yourself.</p></div>
+
+<div class="callout trap"><span class="label">Trap</span><p>Round brackets and curly brackets mean different things here. <code>std::vector&lt;int&gt; a(3, 7);</code> is three elements, each 7: <code>7 7 7</code>. <code>std::vector&lt;int&gt; b = {3, 7};</code> is two elements, 3 and 7. If a vector has a surprising size, check which bracket you used.</p></div>
+
+<p><code>size()</code> deserves one more sentence. It does not return an <code>int</code>. It returns a <strong><code>std::size_t</code></strong>, the unsigned type from <a href="02-values-and-types.html">chapter 2</a> that C++ uses for every "how many bytes" or "how many elements" count. It is 8 bytes on your Mac and can never be negative. That choice has a consequence for loops, which gets its own section near the end of this chapter.</p>
+
+<h3>Growing, shrinking, emptying</h3>
+<p>A vector's size is not fixed. Besides <code>push_back</code>, three member functions change or inspect it: <code>resize</code>, <code>clear</code> and <code>empty</code>. Watch <code>v.size()</code> after each one.</p>
+
+<pre class="code" data-lang="cpp" data-file="resize_clear.cpp" data-check="run"><code>#include &lt;print&gt;
+#include &lt;vector&gt;
+
+int main() {
+    std::vector&lt;int&gt; v = {5, 6, 7};
+    std::println("size {}  empty? {}", v.size(), v.empty());
+
+    v.resize(5);               // grow: the two new boxes hold 0
+    std::println("after resize(5):   size {}  v[3] = {}  v[4] = {}", v.size(), v[3], v[4]);
+
+    v.resize(2);               // shrink: the last three boxes are thrown away
+    std::println("after resize(2):   size {}  v[1] = {}", v.size(), v[1]);
+
+    v.resize(4, 9);            // grow with a chosen value
+    std::println("after resize(4,9): size {}  v[2] = {}  v[3] = {}", v.size(), v[2], v[3]);
+
+    v.clear();                 // throw everything away
+    std::println("after clear():     size {}  empty? {}", v.size(), v.empty());
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="resize_clear.cpp"><code>size 3  empty? false
+after resize(5):   size 5  v[3] = 0  v[4] = 0
+after resize(2):   size 2  v[1] = 6
+after resize(4,9): size 4  v[2] = 9  v[3] = 9
+after clear():     size 0  empty? true
+</code></pre>
+
+<p><strong><code>resize(n)</code></strong> makes the size exactly <code>n</code>. If that is bigger than before, new zero elements appear at the end (or copies of the second argument, if you give one). If it is smaller, elements at the end are discarded; the ones at the front keep their values, which is why <code>v[1]</code> is still 6 after shrinking. <strong><code>clear()</code></strong> is <code>resize(0)</code> with a clearer name. <strong><code>empty()</code></strong> returns <code>true</code> when the size is zero; it reads better than <code>v.size() == 0</code> and means the same thing.</p>
+
+<div class="callout note"><span class="label">What happens when a vector grows</span><p>The elements must stay contiguous, so when you <code>push_back</code> into a vector with no spare room, it asks for a bigger block of memory, copies every existing element over, and lets the old block go. It grows in jumps: on your Mac the room doubles each time it runs out (1, 2, 4, 8, 16, 32, …), so a million appends cause 20 moves, not a million, because 2 to the power 20 is just over a million. For Week 1, create the grid at its final size with Way 1 and it never moves. In week 6 you will measure the cost of growth and meet <code>reserve</code>.</p></div>
+
+<h2>Reading and writing elements</h2>
+<p><code>v[i]</code> names element number <code>i</code>. It is not a copy of the element; it <em>is</em> the element, so you can read from it and assign to it, exactly like a variable.</p>
+
+<pre class="code" data-lang="cpp" data-file="read_write.cpp" data-check="run"><code>#include &lt;print&gt;
+#include &lt;vector&gt;
+
+int main() {
+    std::vector&lt;int&gt; v(5, 0);        // five boxes, numbered 0 to 4
+    v[0] = 10;                       // write into box 0
+    v[1] = 20;
+    v[4] = 50;                       // the last box is number size-1 = 4
+    v[2] = v[0] + v[1];              // read two boxes, write a third
+
+    std::println("v[0] = {}", v[0]);
+    std::println("v[2] = {}", v[2]);
+    std::println("v[3] = {} (never written, still 0)", v[3]);
+    std::println("last element, v[v.size() - 1] = {}", v[v.size() - 1]);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="read_write.cpp"><code>v[0] = 10
+v[2] = 30
+v[3] = 0 (never written, still 0)
+last element, v[v.size() - 1] = 50
+</code></pre>
+
+<p>Two facts about positions, both of which will bite you at least once. <strong>Positions start at 0.</strong> A vector of five elements has positions 0, 1, 2, 3, 4. There is no position 5. <strong>The last element is at <code>v.size() - 1</code></strong>, not at <code>v.size()</code>. This is not an arbitrary convention: look back at the memory picture. Element <em>i</em> lives at <em>start + i × size</em>, and the first element lives <em>at</em> the start, so its offset is zero, so its number is zero. Counting from 1 would make every address calculation carry a "minus one". In the Life code you will constantly compute positions from <code>x</code>, <code>y</code> and a width; <a href="07-flat-grid.html">chapter 7</a> is entirely about that calculation. For now: first is 0, last is size minus one.</p>
+
+<h3>at() checks; [] trusts you</h3>
+<p>What if the position is wrong? There are two ways to ask for an element, and they answer that question differently.</p>
+<p><strong><code>v.at(i)</code></strong> checks first. If <code>i</code> is not a valid position it stops the program with a message. Here is a program that asks for position 10 in a vector that only has positions 0 to 9. It is marked <code>compile</code> rather than <code>run</code> in this book because it deliberately does not exit normally.</p>
+
+<pre class="code" data-lang="cpp" data-file="at_bad.cpp" data-check="compile"><code>#include &lt;print&gt;
+#include &lt;vector&gt;
+
+int main() {
+    std::vector&lt;int&gt; v(10, 0);       // boxes 0 to 9
+    std::println("v.at(9) is {}", v.at(9));
+    std::println("v.at(10) is {}", v.at(10));   // there is no box 10
+    std::println("this line is never reached");
+    return 0;
+}
+</code></pre>
+<pre class="shell"><code>$ clang++ -std=c++23 -Wall -Wextra at_bad.cpp -o at_bad
+$ ./at_bad
+v.at(9) is 0
+libc++abi: terminating due to uncaught exception of type std::out_of_range: vector
+zsh: abort      ./at_bad
+</code></pre>
+
+<p>Read the message from the right. <code>std::out_of_range</code> is the name of the complaint: a position was out of the valid range. <code>vector</code> says who complained. "terminating" means the program was stopped. The words "uncaught exception" refer to a C++ error-reporting mechanism this book does not use in Week 1; all you need now is that <code>at()</code> raised an alarm, nothing answered it, and the program ended on the spot. Your shell adds its own line, <code>zsh: abort</code>, to say the program did not exit normally. The third <code>println</code> never ran.</p>
+<p>That is a good outcome for a bug: loud, immediate, pointing at the right thing. The cost is one comparison ("is <code>i</code> smaller than the size?") on every access. Over a million cells, redrawn sixty times a second, that is sixty million extra comparisons a second, and in the inner loop of <code>step</code> they are measurable.</p>
+<p><strong><code>v[i]</code></strong> does not check. It computes <em>start + i × size</em> and reads whatever bytes are there. If <code>i</code> is valid, that is exactly what you want and it is as fast as memory access can be. If <code>i</code> is not valid, the bytes it reads belong to something else, or to nothing at all. The C++ standard (the document that defines the language, which every compiler follows) then says the behaviour of your program is <strong>undefined</strong>. It might print a wrong number. It might crash. It might appear to work today and fail tomorrow. Nothing in the language promises anything. You met <strong>undefined behaviour</strong>, often shortened to UB, in <a href="02-values-and-types.html">chapter 2</a> with an uninitialised variable; reaching outside a vector is the second, and by far the most common, way to cause it.</p>
+
+<h3>Undefined behaviour and the AddressSanitizer report</h3>
+<p>Undefined behaviour is dangerous precisely because it is silent. This is why the toolchain decision in <code>goal.md</code> says Debug builds (the build you develop in, as opposed to the fast Release build you benchmark with; <a href="11-cmake.html">chapter 11</a> explains the two) always have the sanitizers on, and why <code>tools/run.sh</code> compiles with <code>-fsanitize=address,undefined</code>. The <strong>AddressSanitizer</strong> (ASan) is the first of those two sanitizers. It adds extra checks around every memory access so that an invalid one is reported instead of ignored. Here is the same mistake with <code>[]</code>.</p>
+
+<pre class="code" data-lang="cpp" data-file="index_bad.cpp" data-check="compile"><code>#include &lt;print&gt;
+#include &lt;vector&gt;
+
+int main() {
+    std::vector&lt;int&gt; v(10, 0);       // boxes 0 to 9
+    int last = v[9];                 // fine
+    int beyond = v[10];              // there is no box 10: undefined behaviour
+    std::println("last = {}, beyond = {}", last, beyond);
+    return 0;
+}
+</code></pre>
+
+<p>Compiled plainly, this program prints <code>last = 0, beyond = 0</code> and exits with 0, as if nothing were wrong. That is the silent failure. The 0 it printed happens to be whatever bytes sat just past the end of the row; another day it could be any number. Now the same source through <code>tools/run.sh</code>, which turns the sanitizers on. The output below is real, with two cuts marked <code>...</code> where the book leaves out library internals. The long numbers starting with <code>0x</code> are memory addresses written in <strong>hexadecimal</strong> (base 16, digits 0 to 9 then a to f). They, and the <strong>process id</strong> (<code>67737</code>, the number macOS gave this particular run of the program), will differ on your machine.</p>
+
+<pre class="shell"><code>$ tools/run.sh scratch/index_bad.cpp
+</code></pre>
+<pre class="output"><code>=================================================================
+==67737==ERROR: AddressSanitizer: heap-buffer-overflow on address 0x604000000478 at pc 0x000104b28bfc bp 0x00016b2d5cf0 sp 0x00016b2d5ce8
+READ of size 4 at 0x604000000478 thread T0
+    #0 0x000104b28bf8 in main index_bad.cpp:7
+    #1 0x000186c214e0 in start+0x1b4c (dyld:arm64e+0x204e0)
+
+0x604000000478 is located 0 bytes after 40-byte region [0x604000000450,0x604000000478)
+allocated by thread T0 here:
+    #0 0x0001054b3f50 in _Znwm+0x74 (libclang_rt.asan_osx_dynamic.dylib:arm64e+0x4ff50)
+    #1 0x000104b2b3a4 in int* std::__1::__libcpp_allocate[abi:nqe210106]&lt;int&gt;(std::__1::__element_count, unsigned long) allocate.h:61
+    ...
+    #9 0x000104b28a90 in main index_bad.cpp:5
+    #10 0x000186c214e0 in start+0x1b4c (dyld:arm64e+0x204e0)
+
+SUMMARY: AddressSanitizer: heap-buffer-overflow index_bad.cpp:7 in main
+Shadow bytes around the buggy address:
+  ...
+==67737==ABORTING
+</code></pre>
+
+<p>The report is long, but almost everything you need is in the first three lines. Learn to read them in order.</p>
+<p><strong>Line 1</strong>: <code>ERROR: AddressSanitizer: heap-buffer-overflow</code>. This is the <em>kind</em> of mistake. "Buffer" is the general word for a block of memory such as a vector's row of elements; "overflow" means the access went past its end; "heap" says where the block lives (the section <a href="#who-owns-the-elements">Who owns the elements?</a> near the end of this chapter explains the heap). Other kinds you will meet this year are <code>stack-buffer-overflow</code> and <code>heap-use-after-free</code>. The kind tells you what to look for.</p>
+<p><strong>Line 2</strong>: <code>READ of size 4 at 0x604000000478</code>. This is <em>what</em> the program was doing: reading four bytes, which is one <code>int</code>, at that address. If it said WRITE, your bug would be corrupting someone else's memory rather than reading garbage, which is worse.</p>
+<p><strong>Line 3</strong>: <code>#0 ... in main index_bad.cpp:7</code>. This is <em>where</em>: the first entry of the <strong>stack trace</strong>, a list of the stack frames from <a href="04-functions.html">chapter 4</a>, one line per function that was running, innermost first. Entry <code>#0</code> is the function that did the bad access, with file name and line number; <code>#1</code>, <code>start</code>, is the system code that called <code>main</code>. Line 7 is <code>int beyond = v[10];</code>. Go to that line; the bug is there or in the calculation that fed it.</p>
+<p>Below those three lines comes the clue that usually solves it: <code>0 bytes after 40-byte region</code>. The row was 40 bytes (ten ints) and you read the byte immediately after it. "0 bytes after" is the signature of an off-by-one: <code>size()</code> used where <code>size() - 1</code> was meant, or a loop that runs one step too far. The <code>allocated by</code> section shows where the block was created: its entries <code>#1</code> to <code>#8</code> are inside the vector's own code (cut to <code>...</code> here), and entry <code>#9</code> is the first line of yours, line 5, which made the vector. The <code>SUMMARY</code> line repeats kind and location in one line. The <code>Shadow bytes</code> table under it is ASan's internal bookkeeping; you can ignore it all year.</p>
+
+<div class="callout trap"><span class="label">Trap</span><p>Without the sanitizers, reading one element past the end usually "works". That is not luck; it is the worst case, because the bug stays hidden until the day it corrupts the frame counter, or the cell next door, or your benchmark result. Run every Debug build with sanitizers. If the Life tests pass under ASan, you have a much stronger claim than "the tests pass".</p></div>
+
+<div class="callout try"><span class="label">Try it</span><p>Change line 7 to read <code>v[9]</code> and confirm the report disappears. Then change it to <code>v[1000]</code>: the kind is still <code>heap-buffer-overflow</code>, but the clue line now says <code>3960 bytes after 40-byte region</code>, which is 990 missing <code>int</code>s of 4 bytes each; ASan can still tell which block you meant. Then try <code>v[1000000]</code>: four megabytes past a 40-byte block is outside anything ASan is tracking, so the kind changes to <code>BUS on unknown address</code>, with no "bytes after" clue at all; only the <code>SUMMARY</code> line still points at <code>index_bad.cpp:7</code>. Finally try writing instead of reading: <code>v[10] = 1;</code>. Find the word WRITE in the new report.</p></div>
+
+<h2>Loops over vectors</h2>
+<p>A vector is only useful if you can do something to every element. You already know <code>for</code> from <a href="03-control-flow.html">chapter 3</a>; it works with a position counter. C++ also has a shorter form built for exactly this job. The program shows both, then a variant that matters. One new line at the top: <code>#include &lt;cstddef&gt;</code> is the header that <code>std::size_t</code> officially comes from (<a href="02-values-and-types.html">chapter 2</a>). <code>&lt;vector&gt;</code> and <code>&lt;string&gt;</code> bring it along too, so this book includes <code>&lt;cstddef&gt;</code> only when nothing else does; here it is named so that you know where the type lives.</p>
+
+<pre class="code" data-lang="cpp" data-file="loops.cpp" data-check="run"><code>#include &lt;cstddef&gt;
+#include &lt;print&gt;
+#include &lt;vector&gt;
+
+int main() {
+    std::vector&lt;int&gt; v = {3, 1, 4, 1, 5};
+
+    // 1. Index loop: you need the position i as well as the value.
+    for (std::size_t i = 0; i &lt; v.size(); ++i) {
+        std::println("v[{}] = {}", i, v[i]);
+    }
+
+    // 2. Range-for by value: x is a COPY of each element.
+    std::print("values:");
+    for (int x : v) {
+        std::print(" {}", x);
+    }
+    std::println("");
+
+    // 3. Range-for by reference: x IS each element, so writing x writes v.
+    for (int&amp; x : v) {
+        x = x * 10;
+    }
+    std::print("after x = x * 10:");
+    for (int x : v) {
+        std::print(" {}", x);
+    }
+    std::println("");
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="loops.cpp"><code>v[0] = 3
+v[1] = 1
+v[2] = 4
+v[3] = 1
+v[4] = 5
+values: 3 1 4 1 5
+after x = x * 10: 30 10 40 10 50
+</code></pre>
+
+<p><strong>Form 1, the index loop.</strong> <code>for (std::size_t i = 0; i &lt; v.size(); ++i)</code> is the loop you already know, with two details fixed. The counter is a <code>std::size_t</code> because that is what <code>size()</code> returns, and the condition is strictly <code>i &lt; v.size()</code>, never <code>&lt;=</code>, because the last valid position is <code>size() - 1</code>. Use this form whenever the position itself matters: printing it, using it in a formula, or reading from two vectors at the same position.</p>
+<p><strong>Form 2, range-for by value.</strong> <code>for (int x : v)</code> reads as "for each <code>int</code> <code>x</code> in <code>v</code>". The loop visits every element in order and, each time round, <em>copies</em> the element into the fresh variable <code>x</code>. There is no counter to get wrong and no way to run off the end. Use it whenever you only need the values and do not care about positions. This is the <strong>range-for</strong> loop, and it is the loop you should reach for first.</p>
+<p><strong>Form 3, range-for by reference.</strong> <code>for (int&amp; x : v)</code> is the same loop, but <code>x</code> is now a <em>reference</em> to each element, in the sense of <a href="05-references-and-const.html">chapter 5</a>: another name for the element itself, not a copy. Assigning to <code>x</code> changes the vector. The output shows every element multiplied by ten: 3 became 30, 1 became 10, and so on in order.</p>
+
+<div class="callout try"><span class="label">Try it</span><p>Starting from <code>std::vector&lt;int&gt; v = {3, 1, 4, 1, 5};</code>, write a loop that counts how many elements are greater than 2 (expect 3), then a loop that adds 1 to every element, then a loop that prints the result (expect <code>4 2 5 2 6</code>). Before writing each one, decide which of the three forms it needs and why. Then write a loop that prints only the elements whose <em>position</em> is 0, 2 or 4, which forces you back to form 1 (use <code>i % 2 == 0</code>, the remainder operator from <a href="02-values-and-types.html">chapter 2</a>).</p></div>
+
+<h3>The copy trap</h3>
+<p>The difference between forms 2 and 3 is one <code>&amp;</code>, and forgetting it produces a program that compiles, runs, and does nothing.</p>
+
+<pre class="code" data-lang="cpp" data-file="copy_trap.cpp" data-check="run"><code>#include &lt;print&gt;
+#include &lt;vector&gt;
+
+int main() {
+    std::vector&lt;int&gt; v = {1, 2, 3};
+
+    for (int x : v) {        // x is a copy
+        x = 0;               // this zeroes the copy, not the element
+        std::println("inside the loop x = {}", x);
+    }
+
+    std::print("v afterwards:");
+    for (int x : v) {
+        std::print(" {}", x);
+    }
+    std::println("");
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="copy_trap.cpp"><code>inside the loop x = 0
+inside the loop x = 0
+inside the loop x = 0
+v afterwards: 1 2 3
+</code></pre>
+
+<p>Inside the loop, <code>x</code> really is zero; the copy was changed. The vector was not touched. If your Life grid refuses to change no matter what you write, look for a range-for that is missing its <code>&amp;</code>.</p>
+
+<h3>const auto&amp; for big elements</h3>
+<p>Copying an <code>int</code> costs four bytes and is as fast as anything the CPU does, so form 2 is fine for vectors of numbers. But the element type can be anything, including another vector. Then each element may be thousands of bytes: an inner vector of 1,000 <code>int</code>s is 4,000 bytes, and copying it on every pass of the loop is 4,000 bytes of work per element for nothing. For reading big elements, write <code>for (const auto&amp; x : v)</code>: <code>auto</code> lets the compiler fill in the element type, <code>&amp;</code> avoids the copy, and <code>const</code> promises you will not modify it, exactly as a <code>const T&amp;</code> parameter does in <a href="05-references-and-const.html">chapter 5</a>.</p>
+
+<pre class="code" data-lang="cpp" data-file="big_elements.cpp" data-check="run"><code>#include &lt;print&gt;
+#include &lt;vector&gt;
+
+int main() {
+    // A vector whose elements are themselves vectors. Each element is "big":
+    // copying one means copying all of its numbers.
+    std::vector&lt;std::vector&lt;int&gt;&gt; rows = {
+        {1, 2, 3},
+        {10, 20, 30},
+        {100, 200, 300},
+    };
+
+    for (const auto&amp; row : rows) {       // look at each row without copying it
+        int total = 0;
+        for (int x : row) {              // ints are small: copying is fine
+            total += x;
+        }
+        std::println("row of {} elements, total {}", row.size(), total);
+    }
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="big_elements.cpp"><code>row of 3 elements, total 6
+row of 3 elements, total 60
+row of 3 elements, total 600
+</code></pre>
+
+<p>The nested curly brackets are Way 2 applied twice: the outer pair lists the three elements of <code>rows</code>, and each inner pair is itself a Way 2 list that builds one <code>std::vector&lt;int&gt;</code>. Note the two closing <code>&gt;&gt;</code> in the type, one for each vector. In the loop, <code>row</code> is a <code>const</code> reference to one inner vector, so <code>row.size()</code> and <code>for (int x : row)</code> work on it exactly as on any vector.</p>
+<p>A vector of vectors looks like the natural way to store a grid, one inner vector per row. It works, but the Life challenge uses one flat vector instead, because a vector of vectors is several separate rows scattered in memory, each with its own start, while a flat vector is one contiguous block. <a href="07-flat-grid.html">Chapter 7</a> shows how to put a 2D grid into one flat row, and <a href="13-timing-and-benchmark.html">chapter 13</a> is where you measure why it matters.</p>
+
+<div class="callout note"><span class="label">Rule of thumb for the loop variable</span><p>Need the position? Index loop with <code>std::size_t i</code>. Reading small elements (numbers)? <code>for (int x : v)</code>. Reading big elements? <code>for (const auto&amp; x : v)</code>. Modifying elements? <code>for (int&amp; x : v)</code> (or <code>auto&amp;</code>). Everything in Week 1 fits one of these four.</p></div>
+
+<h2>Passing vectors to functions</h2>
+<p>In <a href="05-references-and-const.html">chapter 5</a> you learned that a parameter declared <code>int n</code> receives a copy, while <code>int&amp; n</code> and <code>const int&amp; n</code> refer to the caller's variable. For an <code>int</code> the difference is four bytes either way, so it hardly matters. For a vector of a million <code>int</code>s it is the difference between copying four megabytes on every call and copying nothing. Three rules follow directly, one per function in the next program.</p>
+
+<pre class="code" data-lang="cpp" data-file="pass_vectors.cpp" data-check="run"><code>#include &lt;print&gt;
+#include &lt;vector&gt;
+
+// Reads only: take a const reference, nothing is copied.
+int sum(const std::vector&lt;int&gt;&amp; v) {
+    int total = 0;
+    for (int x : v) {
+        total += x;
+    }
+    return total;
+}
+
+// Modifies the caller's vector: take a plain reference.
+void add_to_all(std::vector&lt;int&gt;&amp; v, int amount) {
+    for (int&amp; x : v) {
+        x += amount;
+    }
+}
+
+// Makes a brand-new vector and hands it back by value.
+std::vector&lt;int&gt; squares(int n) {
+    std::vector&lt;int&gt; result;
+    for (int i = 0; i &lt; n; ++i) {
+        result.push_back(i * i);
+    }
+    return result;
+}
+
+void print_all(const std::vector&lt;int&gt;&amp; v) {
+    for (int x : v) {
+        std::print("{} ", x);
+    }
+    std::println("");
+}
+
+int main() {
+    std::vector&lt;int&gt; sq = squares(6);
+    std::print("squares(6):      ");
+    print_all(sq);
+    std::println("sum:             {}", sum(sq));
+
+    add_to_all(sq, 100);
+    std::print("after add 100:   ");
+    print_all(sq);
+    std::println("sum:             {}", sum(sq));
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="pass_vectors.cpp"><code>squares(6):      0 1 4 9 16 25
+sum:             55
+after add 100:   100 101 104 109 116 125
+sum:             655
+</code></pre>
+
+<p><strong>To read a vector, take <code>const std::vector&lt;int&gt;&amp;</code>.</strong> No copy is made, and the <code>const</code> means the compiler will refuse to let the function change it. <code>sum</code> and <code>print_all</code> do this. This is the shape of <code>count_neighbours</code> in <code>phase1-terminal/01-life/src/life.hpp</code>: it takes <code>const Cells&amp; cells</code> because it only looks.</p>
+<p><strong>To modify a vector, take <code>std::vector&lt;int&gt;&amp;</code>.</strong> The function works on the caller's vector directly; <code>add_to_all</code> changes <code>sq</code> and <code>main</code> sees the change. <code>step</code> in <code>life.hpp</code> takes <code>const Cells&amp; current, Cells&amp; next</code>: it reads one grid and writes the other, and the two parameter types say exactly which is which.</p>
+<p><strong>To create a vector, return it by value.</strong> <code>squares</code> builds a vector in a local variable and returns it. You might expect this to copy the whole thing on the way out; it does not. C++ guarantees that returning a local vector hands over the elements rather than duplicating them. Take the mechanism on trust until week 4, where it gets its name, <em>move</em>; the effect is that <code>std::vector&lt;int&gt; sq = squares(6);</code> copies no elements, however many there are. <code>random_cells</code> in <code>life.hpp</code> returns a <code>Cells</code> by value for this reason, and so should any function of yours that builds a vector.</p>
+
+<div class="callout trap"><span class="label">Trap</span><p>Declaring a parameter as plain <code>std::vector&lt;int&gt; v</code>, without <code>&amp;</code>, compiles and works, and copies every element on every call. For the Life grid that is a million bytes copied sixty times a second for no reason, and worse, any changes the function makes land in the copy and vanish when it returns. The compiler will not warn you. When you write a function that takes a vector, type the <code>&amp;</code> first and then decide whether to add <code>const</code>.</p></div>
+
+<h2>Worked examples</h2>
+<p>Here are five small functions that between them use everything above. Each is written the way you would write it on Monday morning: plainly, with a loop, without library tricks. Read each one, predict its output, then check.</p>
+
+<pre class="code" data-lang="cpp" data-file="worked.cpp" data-check="run"><code>#include &lt;cstddef&gt;
+#include &lt;print&gt;
+#include &lt;vector&gt;
+
+void print_all(const std::vector&lt;int&gt;&amp; v) {
+    for (int x : v) {
+        std::print("{} ", x);
+    }
+    std::println("");
+}
+
+int sum(const std::vector&lt;int&gt;&amp; v) {
+    int total = 0;
+    for (int x : v) {
+        total += x;
+    }
+    return total;
+}
+
+// Largest element. The caller promises the vector is not empty.
+int max_of(const std::vector&lt;int&gt;&amp; v) {
+    int best = v[0];
+    for (std::size_t i = 1; i &lt; v.size(); ++i) {
+        if (v[i] > best) {
+            best = v[i];
+        }
+    }
+    return best;
+}
+
+// How many elements are equal to wanted.
+int count_of(const std::vector&lt;int&gt;&amp; v, int wanted) {
+    int n = 0;
+    for (int x : v) {
+        if (x == wanted) {
+            ++n;
+        }
+    }
+    return n;
+}
+
+// Overwrite every element with the pattern 1, 0, 1, 0, ...
+void fill_alternating(std::vector&lt;int&gt;&amp; v) {
+    bool on = true;
+    for (int&amp; x : v) {
+        if (on) {
+            x = 1;
+        } else {
+            x = 0;
+        }
+        on = !on;
+    }
+}
+
+// Reverse in place by swapping the two ends and walking inwards.
+void reverse_in_place(std::vector&lt;int&gt;&amp; v) {
+    if (v.empty()) {
+        return;
+    }
+    std::size_t lo = 0;
+    std::size_t hi = v.size() - 1;
+    while (lo &lt; hi) {
+        int temp = v[lo];
+        v[lo] = v[hi];
+        v[hi] = temp;
+        ++lo;
+        --hi;
+    }
+}
+
+int main() {
+    std::vector&lt;int&gt; v = {4, 8, 15, 16, 23, 42, 8};
+    std::print("v:                ");
+    print_all(v);
+    std::println("sum:              {}", sum(v));
+    std::println("max:              {}", max_of(v));
+    std::println("count of 8:       {}", count_of(v, 8));
+    std::println("count of 7:       {}", count_of(v, 7));
+
+    reverse_in_place(v);
+    std::print("reversed:         ");
+    print_all(v);
+
+    fill_alternating(v);
+    std::print("alternating:      ");
+    print_all(v);
+    std::println("count of 1:       {}", count_of(v, 1));
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="worked.cpp"><code>v:                4 8 15 16 23 42 8
+sum:              116
+max:              42
+count of 8:       2
+count of 7:       0
+reversed:         8 42 23 16 15 8 4
+alternating:      1 0 1 0 1 0 1
+count of 1:       4
+</code></pre>
+
+<p><strong><code>sum</code></strong> is the accumulator pattern: start a total at zero, add each element, return the total. Every "count the live neighbours" and every "add up a row of a tensor" is this loop.</p>
+<p><strong><code>max_of</code></strong> has to start somewhere, and zero is wrong (what if every element is negative?). It starts with <code>v[0]</code> and compares from position 1 onwards, which is why it uses an index loop. That means it must never be called with an empty vector: <code>v[0]</code> would be undefined behaviour. The comment states that as a promise the caller makes. Writing the promise down is not a formality; it is the only thing standing between this function and an ASan report.</p>
+<p><strong><code>count_of</code></strong> is <code>sum</code> with a condition. Note it returns <code>int</code>, not <code>std::size_t</code>: a count of matching elements is a quantity you will do arithmetic on with other <code>int</code>s, such as the number of live neighbours compared with 2 and 3. Choosing <code>int</code> here avoids a conversion later.</p>
+<p><strong><code>fill_alternating</code></strong> is the first function here that <em>writes</em>, so its parameter is a non-const reference and its loop variable is <code>int&amp; x</code>. It flips a <code>bool</code> each step instead of asking whether the position is even: a range-for has no position to ask about, and a flipping flag reads better here than switching to an index loop just to write <code>i % 2 == 0</code>. Both are correct; pick the one that leaves less to get wrong.</p>
+<p><strong><code>reverse_in_place</code></strong> keeps two positions, <code>lo</code> walking up from the front and <code>hi</code> walking down from the back, and swaps the pair with a temporary variable until they meet. The <code>if (v.empty()) return;</code> at the top is not decoration: for an empty vector, <code>v.size() - 1</code> is not minus one, as the <a href="#int-or-std-size-t-the-sign-warning">sign section</a> below shows, and the loop would run into undefined behaviour.</p>
+
+<div class="callout try"><span class="label">Try it</span><p>Write <code>min_of</code> by changing one character in <code>max_of</code>. Write <code>int index_of_max(const std::vector&lt;int&gt;&amp; v)</code> that returns the <em>position</em> of the largest element instead of its value; you will need the index loop and a <code>static_cast</code> when you return. Write <code>void double_all(std::vector&lt;int&gt;&amp; v)</code>. Then write <code>bool contains(const std::vector&lt;int&gt;&amp; v, int wanted)</code> that stops looking as soon as it finds the value, using <code>return true;</code> inside the loop.</p></div>
+<details class="hint"><summary>Stuck on index_of_max? First nudge</summary><p>Keep two variables: <code>best_i</code> (a <code>std::size_t</code>, starting at 0) and compare <code>v[i] > v[best_i]</code>. At the end, <code>return static_cast&lt;int&gt;(best_i);</code> because the function promises an <code>int</code>.</p></details>
+<details class="hint"><summary>Stuck on contains? First nudge</summary><p>Range-for by value is enough: <code>for (int x : v)</code>. Inside, <code>if (x == wanted) { return true; }</code> leaves the function on the spot, loop and all. The line <em>after</em> the loop is reached only if no element matched, so it must be <code>return false;</code>. Test it on <code>{4, 8, 15}</code> with 8 (true) and with 7 (false), and on an empty vector (false, with no special case needed).</p></details>
+
+<h2>The cell storage: std::vector&lt;std::uint8_t&gt;</h2>
+<p>Open <code>phase1-terminal/01-life/src/life.hpp</code>. Near the top it says the grid is <code>std::vector&lt;std::uint8_t&gt;</code>, with 1 meaning alive and 0 meaning dead, and gives that type the short name <code>Cells</code>. (The <code>using</code> line that does the naming is explained in <a href="07-flat-grid.html">chapter 7</a>; until then this book writes the type out in full.) Why <code>std::uint8_t</code>, the one-byte unsigned integer from <a href="02-values-and-types.html">chapter 2</a>? Because a cell needs exactly one bit of information, and one byte is the smallest unit of memory you can address directly. A million cells become a million bytes: one megabyte, small enough to fit in the CPU's <strong>cache</strong>, the few megabytes of very fast memory on the chip itself that <a href="02-values-and-types.html">chapter 2</a> mentioned (<a href="13-timing-and-benchmark.html">chapter 13</a> measures what it is worth). With <code>int</code> the same grid would be four megabytes.</p>
+<p>Here is a one-dimensional row of cells, a count of the live ones, and the operation the tests lean on most: comparing two vectors with <code>==</code>.</p>
+
+<pre class="code" data-lang="cpp" data-file="cells.cpp" data-check="run"><code>#include &lt;cstddef&gt;
+#include &lt;cstdint&gt;
+#include &lt;print&gt;
+#include &lt;vector&gt;
+
+// How many cells hold 1.
+int count_live(const std::vector&lt;std::uint8_t&gt;&amp; cells) {
+    int live = 0;
+    for (std::uint8_t c : cells) {
+        live += c;       // adding 0 or 1 is the same as counting the 1s
+    }
+    return live;
+}
+
+void show(const std::vector&lt;std::uint8_t&gt;&amp; cells) {
+    for (std::uint8_t c : cells) {
+        if (c == 1) {
+            std::print("#");
+        } else {
+            std::print(".");
+        }
+    }
+    std::println("");
+}
+
+int main() {
+    std::vector&lt;std::uint8_t&gt; a(12, 0);     // twelve dead cells
+    a[1] = 1;
+    a[2] = 1;
+    a[7] = 1;
+    show(a);
+    std::println("live cells in a: {}", count_live(a));
+    std::println("one cell is {} byte; the row is {} bytes", sizeof(std::uint8_t), a.size() * sizeof(std::uint8_t));
+
+    // Build the same picture a different way.
+    std::vector&lt;std::uint8_t&gt; b = {0, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0};
+    std::println("a == b ? {}", a == b);
+
+    b[7] = 0;                               // change one cell
+    std::println("after b[7] = 0, a == b ? {}", a == b);
+    std::println("a != b ? {}", a != b);
+
+    std::vector&lt;std::uint8_t&gt; c(11, 0);     // a different length
+    std::println("a == c ? {} (different sizes are never equal)", a == c);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="cells.cpp"><code>.##....#....
+live cells in a: 3
+one cell is 1 byte; the row is 12 bytes
+a == b ? true
+after b[7] = 0, a == b ? false
+a != b ? true
+a == c ? false (different sizes are never equal)
+</code></pre>
+
+<p>Three things to take from this program.</p>
+<p>First, <code>count_live</code> adds the cell values instead of testing <code>if (c == 1)</code>. Since every cell is 0 or 1, the sum <em>is</em> the count. The test file <code>phase1-terminal/01-life/tests/life_test.cpp</code> counts live cells the same way, with <code>for (std::uint8_t c : dead) live += c;</code>. The <code>live</code> variable is an <code>int</code> even though the cells are <code>std::uint8_t</code>: a byte can only count to 255, and a grid has more cells than that, so the total must live in a wider type. C++ does the widening for you when it adds a <code>std::uint8_t</code> to an <code>int</code>.</p>
+<p>Second, <strong><code>a == b</code> compares every element.</strong> Two vectors are equal when they have the same size and every position holds the same value. The comparison does the loop for you, position by position, and stops at the first difference. <code>!=</code> is its opposite. This is how the tests judge your <code>step</code>: they build the grid they expect with <code>grid_with</code>, call your function, and compare, for example <code>CHECK(next == vertical)</code> in the blinker test. When such a test fails, your first move should be to print both vectors with something like <code>show</code> and look for the differing cell.</p>
+<p>Third, <code>show</code> is a tiny renderer: <code>#</code> for alive, <code>.</code> for dead. The challenge's <code>render</code> produces the same characters but builds a <code>std::string</code> (<a href="08-strings-and-args.html">chapter 8</a>) with a newline after every row instead of printing. This one-dimensional <code>show</code> is a warm-up for it.</p>
+
+<div class="callout note"><span class="label">What the tests build</span><p>In <code>life_test.cpp</code> you will see lines such as <code>Cells next(25, 1);</code> with the comment "deliberately dirty: step must overwrite every cell". That is Way 1 from this chapter: 25 cells, all set to 1, so that a <code>step</code> which forgets to write dead cells is caught. You will also see <code>Cells cells(static_cast&lt;std::size_t&gt;(width) * static_cast&lt;std::size_t&gt;(height), 0);</code>. The casts turn the two <code>int</code>s into the <code>std::size_t</code> the vector wants <em>before</em> multiplying, so the product is worked out in the 8-byte unsigned type and handed over with no silent conversion at the call. The <a href="#int-or-std-size-t-the-sign-warning">sign section</a> at the end of this chapter is about why <code>int</code> and <code>std::size_t</code> need this care.</p></div>
+
+<h3>The vector&lt;bool&gt; trap</h3>
+<p>A cell is alive or dead, so <code>std::vector&lt;bool&gt;</code> looks like the obvious type. Do not use it. <code>std::vector&lt;bool&gt;</code> is a special case in the standard library: instead of one byte per element it packs eight elements into each byte as individual bits. That saves memory, but it means <code>flags[i]</code> is no longer a real element you can refer to; it is a temporary stand-in that knows how to flip one bit. Several things that work for every other vector stop working, and the compiler tells you so in language that does not help a beginner.</p>
+
+<pre class="code" data-lang="cpp" data-file="bool_trap.cpp" data-check="error"><code>#include &lt;print&gt;
+#include &lt;vector&gt;
+
+int main() {
+    std::vector&lt;bool&gt; flags(4, false);
+    for (bool&amp; f : flags) {      // works for every other element type...
+        f = true;
+    }
+    std::println("{}", flags[0]);
+    return 0;
+}
+</code></pre>
+<pre class="output"><code>bool_trap.cpp:6:16: error: non-const lvalue reference to type 'bool' cannot bind to a temporary of type 'reference' (aka 'std::__bit_reference&lt;std::vector&lt;bool&gt;&gt;')
+    6 |     for (bool&amp; f : flags) {      // works for every other element type...
+      |                ^ ~
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__vector/vector_bool.h:252:64: note: selected 'begin' function with iterator type 'iterator' (aka '__bit_iterator&lt;vector&lt;bool, std::allocator&lt;bool&gt;&gt;, false&gt;')
+  252 |   _LIBCPP_HIDE_FROM_ABI _LIBCPP_CONSTEXPR_SINCE_CXX20 iterator begin() _NOEXCEPT { return __make_iter(0); }
+      |                                                                ^
+1 error generated.
+</code></pre>
+
+<p>Only the first line is for you; the <code>note:</code> that follows points into the library's own source (the path depends on where your command-line tools are installed) and you can ignore it. Decode the first line in pieces. "non-const lvalue reference to type 'bool'" is the compiler's full name for your <code>bool&amp; f</code>. "cannot bind to a temporary" means there is no lasting <code>bool</code> in memory for that reference to name, only a short-lived stand-in. The <code>(aka ...)</code> part shows the stand-in's real type, <code>__bit_reference</code>, whose name gives the game away: a reference to a <em>bit</em>. The modify-by-reference loop, which you just learned, does not compile for <code>std::vector&lt;bool&gt;</code>, because there is no <code>bool</code> in memory to refer to, only a bit inside a byte. Reading single bits is also slower than reading bytes, since the CPU has to shift and mask. For the Life grid, one byte per cell is the right trade: <code>std::vector&lt;std::uint8_t&gt;</code> behaves like every other vector, and that is why <code>life.hpp</code> chose it. If you ever need a vector of true/false values, use <code>std::uint8_t</code> or <code>char</code>.</p>
+
+<h2>Who owns the elements?</h2>
+<p>One last look at the memory picture, from a different angle. Here is a program with a tiny vector and a huge one.</p>
+
+<pre class="code" data-lang="cpp" data-file="sizeof_vector.cpp" data-check="run"><code>#include &lt;print&gt;
+#include &lt;vector&gt;
+
+int main() {
+    std::vector&lt;int&gt; tiny(3, 0);
+    std::vector&lt;int&gt; huge(1000000, 0);
+    std::println("sizeof(tiny) = {} bytes, holding {} elements", sizeof(tiny), tiny.size());
+    std::println("sizeof(huge) = {} bytes, holding {} elements", sizeof(huge), huge.size());
+    std::println("huge's elements take {} bytes somewhere else", huge.size() * sizeof(int));
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="sizeof_vector.cpp"><code>sizeof(tiny) = 24 bytes, holding 3 elements
+sizeof(huge) = 24 bytes, holding 1000000 elements
+huge's elements take 4000000 bytes somewhere else
+</code></pre>
+
+<p><code>sizeof</code> reports 24 bytes for both. The vector variable itself is small and fixed in size. It lives where every local variable lives, in the function's own patch of memory called its <strong>frame</strong>, which is created when the function starts and torn down when it returns (<a href="04-functions.html">chapter 4</a>). The four million bytes of elements are not in the frame. They live in a separate, much larger area of memory called the <strong>heap</strong>, which any part of the program can ask for pieces of. The 24-byte variable holds what it needs to find and manage its elements: where the row starts, how many elements are in use, and how much room there is. Three facts, 8 bytes each, is 24 bytes, whether the row holds three elements or a million. That is why ASan said "heap-buffer-overflow" earlier: the row you overran was on the heap.</p>
+<p>The vector asks the heap for its block when you create it or grow it, and <em>gives the block back automatically</em> when the vector variable dies, that is, when the function it lives in returns or its enclosing braces close. You never ask for memory and you never return it; the vector does both, every time, without fail. This pattern, where a small object acquires a resource when it is created and releases it when it is destroyed, is called <strong>RAII</strong>, and it is the most important idea in C++ memory management. In week 3 you will write your own RAII object (a terminal guard), and in weeks 7 and 10 you will see what the vector is doing under the covers, with pointers and <code>new</code>. For Week 1, let the vector do it. You cannot leak a vector's memory, and you cannot free it twice.</p>
+
+<div class="callout analogy"><span class="label">Analogy</span><p>The vector variable is a library card; the elements are the books. The card is small and sits in your wallet (the frame); the books sit in the library (the heap), and the card records which shelf they are on and how many there are. When the card expires (the vector dies), the books go back automatically. <em>Where it breaks:</em> copying a library card does not duplicate the books, but copying a vector <em>does</em> copy every element: <code>std::vector&lt;int&gt; w = v;</code> is a second, independent row. That is why passing by value is expensive.</p></div>
+
+<h2>int or std::size_t? The sign warning</h2>
+<p>You have been told twice that <code>size()</code> returns <code>std::size_t</code>. Here is what happens when you forget. This program is complete and correct in what it does, but it is marked as a fragment in this book because it compiles <em>with a warning</em>, and the book's rule is that every program compiles clean.</p>
+
+<pre class="code" data-lang="cpp" data-file="sign_warning.cpp" data-check="fragment"><code>#include &lt;print&gt;
+#include &lt;vector&gt;
+
+int main() {
+    std::vector&lt;int&gt; v = {10, 20, 30};
+    for (int i = 0; i &lt; v.size(); ++i) {
+        std::println("v[{}] = {}", i, v[i]);
+    }
+    return 0;
+}
+</code></pre>
+<pre class="shell"><code>$ clang++ -std=c++23 -Wall -Wextra sign_warning.cpp -o sign_warning
+</code></pre>
+<pre class="output"><code>sign_warning.cpp:6:23: warning: comparison of integers of different signs: 'int' and 'size_type' (aka 'unsigned long') [-Wsign-compare]
+    6 |     for (int i = 0; i &lt; v.size(); ++i) {
+      |                     ~ ^ ~~~~~~~~
+1 warning generated.
+</code></pre>
+
+<p>The compiler is pointing at <code>i &lt; v.size()</code> and saying: the left side is a signed <code>int</code>, the right side is an unsigned <code>size_type</code> (another name for <code>std::size_t</code>, printed here as <code>unsigned long</code>, its underlying type on your Mac). To compare them, C++ converts the <code>int</code> to unsigned first. For <code>i = 0, 1, 2</code> nothing goes wrong, which is why the program still runs correctly. But if <code>i</code> were ever negative, say <code>-1</code>, converting it to unsigned gives an enormous number (the next program shows exactly which one). Then <code>i &lt; v.size()</code> would be false when you expected true, and the loop body would be skipped. The warning exists because this exact conversion has caused real bugs, and the compiler cannot tell your harmless case from the harmful one.</p>
+<p>There are two honest fixes. Pick the one that matches what the <code>int</code> is for.</p>
+
+<pre class="code" data-lang="cpp" data-file="sign_fixed.cpp" data-check="run"><code>#include &lt;cstddef&gt;
+#include &lt;print&gt;
+#include &lt;vector&gt;
+
+int main() {
+    std::vector&lt;int&gt; v = {10, 20, 30};
+
+    // Fix 1: use the index type the vector uses.
+    for (std::size_t i = 0; i &lt; v.size(); ++i) {
+        std::println("v[{}] = {}", i, v[i]);
+    }
+
+    // Fix 2: keep an int (because the maths needs one) and convert on purpose.
+    int from = 2;
+    int to = 0;
+    for (int i = from; i >= to; --i) {
+        std::println("backwards: v[{}] = {}", i, v[static_cast&lt;std::size_t&gt;(i)]);
+    }
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="sign_fixed.cpp"><code>v[0] = 10
+v[1] = 20
+v[2] = 30
+backwards: v[2] = 30
+backwards: v[1] = 20
+backwards: v[0] = 10
+</code></pre>
+
+<p><strong>Fix 1</strong>: if the variable is only ever a position in a vector, make it a <code>std::size_t</code>. Then the comparison has two unsigned sides and the warning is gone. This is the right answer for most loops.</p>
+<p><strong>Fix 2</strong>: sometimes the number has to be an <code>int</code>, because it is a coordinate that legitimately goes negative in a calculation, or because it counts down and must pass below zero to stop. In the backwards loop <code>i</code> ends at <code>-1</code>, which a <code>std::size_t</code> cannot hold. Keep the <code>int</code>, do the arithmetic in <code>int</code>, and at the exact moment you index the vector write <code>static_cast&lt;std::size_t&gt;(i)</code>: "I know this is an <code>int</code>, I know it is not negative right here, convert it". This is the pattern Life needs: <code>x</code>, <code>y</code> and <code>width</code> are <code>int</code>s in <code>life.hpp</code>, your neighbour arithmetic will produce negative values that you wrap back into range (<a href="07-flat-grid.html">chapter 7</a>), and only the final, non-negative index is cast for the <code>[]</code>.</p>
+
+<p>And here is the reason unsigned arithmetic needs respect, in one program.</p>
+
+<pre class="code" data-lang="cpp" data-file="size_minus_one.cpp" data-check="run"><code>#include &lt;cstddef&gt;
+#include &lt;print&gt;
+#include &lt;vector&gt;
+
+int main() {
+    std::vector&lt;int&gt; empty;
+    std::size_t n = empty.size();
+    std::println("size:     {}", n);
+    std::println("size - 1: {}", n - 1);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="size_minus_one.cpp"><code>size:     0
+size - 1: 18446744073709551615
+</code></pre>
+
+<div class="callout trap"><span class="label">Trap</span><p><code>v.size() - 1</code> on an empty vector is not <code>-1</code>. It is 18,446,744,073,709,551,615, the largest value a <code>std::size_t</code> can hold, because unsigned subtraction wraps around like a clock going from 0 back to 59. Any code that computes <code>size() - 1</code> must either know the vector is not empty or check <code>empty()</code> first, as <code>reverse_in_place</code> did. A loop written as <code>for (std::size_t i = v.size() - 1; i >= 0; --i)</code> has no way to stop, because an unsigned <code>i</code> is <em>always</em> <code>>= 0</code>: after the step for <code>i = 0</code>, <code>--i</code> wraps to that huge number and the next <code>v[i]</code> reads outside the row. With <code>-Wall -Wextra</code> clang says nothing about it (the warning exists, <code>-Wtautological-unsigned-zero-compare</code>, but is not switched on by those flags); under <code>tools/run.sh</code> the sanitizers report the first wrapped step: first a <code>runtime error: addition of unsigned offset ... overflowed</code> from the second sanitizer (UBSan), then ASan's <code>heap-buffer-overflow</code>. Count down with an <code>int</code>, as Fix 2 above does.</p></div>
+
+<h2>Inference twin: a tensor is a vector</h2>
+<p>Everything in this chapter was about one row of boxes. It may seem a long way from the matrices inside a language model. It is not. A <strong>tensor</strong>, the multi-dimensional array that holds a model's weights and activations, is stored in every serious inference engine as exactly one contiguous <code>std::vector&lt;float&gt;</code> (or a block of bytes that behaves like one), plus a few integers describing its shape. A 768 by 768 weight matrix from GPT-2 is a vector of 589,824 floats, start to end, with no gaps; a 576 by 576 one from SmolLM2-135M is 331,776 floats, laid out the same way.</p>
+
+<pre class="code" data-lang="cpp" data-file="tensor_twin.cpp" data-check="run"><code>#include &lt;print&gt;
+#include &lt;vector&gt;
+
+int main() {
+    const int rows = 768;
+    const int cols = 768;
+    std::vector&lt;float&gt; weights(rows * cols, 0.0f);
+    std::println("elements: {}", weights.size());
+    std::println("bytes:    {}", weights.size() * sizeof(float));
+    std::println("megabytes: {:.2f}", weights.size() * sizeof(float) / 1048576.0);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="tensor_twin.cpp"><code>elements: 589824
+bytes:    2359296
+megabytes: 2.25
+</code></pre>
+
+<p>Everything in this program is from this chapter or <a href="02-values-and-types.html">chapter 2</a>: <code>float</code> is the 4-byte floating-point type, <code>0.0f</code> is a <code>float</code> zero, and <code>{:.2f}</code> prints two digits after the point. The divisor 1,048,576 is 1024 × 1024, the number of bytes in a megabyte as programmers count it. 768 × 768 = 589,824 elements, times 4 bytes, is 2,359,296 bytes, which the last line shows as 2.25 megabytes.</p>
+
+<div class="callout twin"><span class="label">Inference twin</span><p>Contiguous storage is not a convenience; it is the reason fast numerical code is possible at all. A CPU's SIMD instructions (single instruction, multiple data: one instruction that works on several numbers at once, week 12) load 4, 8 or 16 neighbouring floats in one go and multiply them in one go, which only works if the floats are neighbours in memory. A GPU goes further: thousands of threads each read one element, and the hardware merges those reads into a few wide memory transactions only when the elements are packed side by side. Your Life grid as one <code>std::vector&lt;std::uint8_t&gt;</code> has the same property, which is why the week 22 port of this exact program to CUDA keeps the grid as it is and changes only who runs the loop. Week 15's tensor library is this chapter's vector plus the shape arithmetic of <a href="07-flat-grid.html">chapter 7</a>.</p></div>
+
+<h2>Check yourself</h2>
+<div class="quiz">
+<div class="q"><p>A <code>std::vector&lt;double&gt;</code> has 1,000 elements. <code>sizeof(double)</code> is 8. How many bytes from the start of the row does element 250 begin, and how many steps does the machine take to find it compared with element 2?</p><details class="answer"><summary>Answer</summary><p>250 × 8 = 2,000 bytes. The same number of steps: one multiplication and one addition, whatever the position. That is constant-time access, and it follows from the elements being contiguous and all the same size.</p></details></div>
+
+<div class="q"><p>What are the sizes and contents of <code>std::vector&lt;int&gt; a(4, 2);</code> and <code>std::vector&lt;int&gt; b = {4, 2};</code>?</p><details class="answer"><summary>Answer</summary><p><code>a</code> has 4 elements, all 2: <code>2 2 2 2</code>. <code>b</code> has 2 elements: <code>4 2</code>. Round brackets mean count and fill value; curly brackets list the elements.</p></details></div>
+
+<div class="q"><p>A vector has 10 elements. Which of these is a valid access: <code>v[0]</code>, <code>v[9]</code>, <code>v[10]</code>, <code>v[v.size()]</code>, <code>v[v.size() - 1]</code>?</p><details class="answer"><summary>Answer</summary><p><code>v[0]</code>, <code>v[9]</code> and <code>v[v.size() - 1]</code> (which is <code>v[9]</code>) are valid. <code>v[10]</code> and <code>v[v.size()]</code> are the same thing and are one past the end: undefined behaviour with <code>[]</code>, an <code>std::out_of_range</code> stop with <code>at()</code>, and a <code>heap-buffer-overflow</code> READ or WRITE "0 bytes after" the region under ASan.</p></details></div>
+
+<div class="q"><p>The ASan report begins <code>ERROR: AddressSanitizer: heap-buffer-overflow</code>, then <code>WRITE of size 1 at 0x...</code>, then <code>#0 ... in step life.cpp:41</code>. What do you know before reading further?</p><details class="answer"><summary>Answer</summary><p>Kind: you went past the end (or before the start) of a heap block, which for you means a vector's elements. What: a write of one byte, so a <code>std::uint8_t</code> cell was being assigned, and memory outside the grid was corrupted. Where: line 41 of <code>life.cpp</code>, inside <code>step</code>. Go to that line and inspect the index expression; then look a few lines below in the report for "N bytes after" to see how far past the end it went.</p></details></div>
+
+<div class="q"><p>This loop is meant to double every element, but the vector is unchanged afterwards. Why? <code>for (int x : v) { x = x * 2; }</code></p><details class="answer"><summary>Answer</summary><p><code>x</code> is a copy of each element, so the doubling happens to the copy and is lost. Write <code>for (int&amp; x : v)</code> so that <code>x</code> is a reference to the element itself.</p></details></div>
+
+<div class="q"><p>You are writing <code>int live_count(... grid)</code>, which only reads the grid, and <code>void clear_grid(... grid)</code>, which sets every cell to 0. Fill in the two parameter types.</p><details class="answer"><summary>Answer</summary><p><code>int live_count(const std::vector&lt;std::uint8_t&gt;&amp; grid)</code>: a const reference, because it reads and must not copy. <code>void clear_grid(std::vector&lt;std::uint8_t&gt;&amp; grid)</code>: a non-const reference, because it modifies the caller's vector. Neither should take the vector by value.</p></details></div>
+
+<div class="q"><p>Why does <code>life.hpp</code> use <code>std::vector&lt;std::uint8_t&gt;</code> for cells rather than <code>std::vector&lt;bool&gt;</code>, and rather than <code>std::vector&lt;int&gt;</code>?</p><details class="answer"><summary>Answer</summary><p>Not <code>bool</code>: <code>std::vector&lt;bool&gt;</code> packs bits, so its elements are not real bytes you can refer to; <code>for (bool&amp; b : v)</code> does not compile, and bit access is slower. Not <code>int</code>: it would use four bytes per cell for one bit of information, making a million-cell grid four megabytes instead of one. <code>std::uint8_t</code> is the smallest addressable unit and behaves like every other vector element.</p></details></div>
+
+<div class="q"><p><code>sizeof</code> of a vector holding a million <code>int</code>s printed 24. Where are the four million bytes of elements, and who gives that memory back?</p><details class="answer"><summary>Answer</summary><p>On the heap, a separate large area of memory the vector asked for. The 24-byte variable in the function's frame holds the information needed to find and manage them. The vector itself returns the heap memory automatically when the variable dies (the function returns or the enclosing braces close). This is RAII; you never free anything by hand.</p></details></div>
+</div>
+
+<h2>What you can do now</h2>
+<ul>
+<li>Create a vector of any element type in the three ways: a size and a fill value, a brace list, or empty and grown with <code>push_back</code>; change its size with <code>resize</code> and <code>clear</code>; test it with <code>empty</code>.</li>
+<li>Explain why element <em>i</em> is found with one multiplication and one addition, and why positions start at 0 and end at <code>size() - 1</code>.</li>
+<li>Read and write elements with <code>[]</code>, know when <code>at()</code> is worth its cost, and recognise undefined behaviour as the silent failure that sanitizers make loud.</li>
+<li>Read the first three lines of an AddressSanitizer report (kind, READ or WRITE and size, file and line) and use "N bytes after" to diagnose an off-by-one.</li>
+<li>Choose between an index loop with <code>std::size_t</code>, range-for by value, by <code>int&amp;</code>, and by <code>const auto&amp;</code>.</li>
+<li>Pass a vector to a function by <code>const&amp;</code> to read, by <code>&amp;</code> to modify, and return a new one by value, matching the signatures in <code>life.hpp</code>.</li>
+<li>Write sum, max, count, fill and reverse over a vector from scratch, with the empty-vector check where it is needed.</li>
+<li>Store cells as <code>std::vector&lt;std::uint8_t&gt;</code>, count the live ones, compare two grids with <code>==</code>, and explain why <code>std::vector&lt;bool&gt;</code> is avoided.</li>
+<li>Silence the <code>-Wsign-compare</code> warning the right way: a <code>std::size_t</code> counter when the number is only a position, a <code>static_cast&lt;std::size_t&gt;</code> at the point of indexing when the maths needs an <code>int</code>.</li>
+</ul>
+</main>
+</body>
+</html>

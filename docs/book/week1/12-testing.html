@@ -1,0 +1,892 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>12 · Testing with doctest — C++ from zero to Life</title>
+<link rel="stylesheet" href="assets/book.css?v=9">
+<link rel="stylesheet" href="assets/tutor.css?v=9">
+<script src="assets/theme.js?v=9"></script>
+<script defer src="assets/book.js?v=9"></script>
+<script defer src="assets/tutor.js?v=9"></script>
+</head>
+<body>
+<nav class="sidebar" aria-label="Chapters"></nav>
+<main>
+<p class="chapter-kicker">Chapter 12</p>
+<h1>Testing with doctest</h1>
+<p class="lede">By the end of this chapter you will be able to write a test for any function in one line, read a failing test the way you read a sentence, and run the thirteen Life tests one at a time. You will also understand what every one of those thirteen tests is claiming about your code, and why.</p>
+
+<div class="callout note"><span class="label">In this chapter</span>
+<ul>
+<li>Why you want tests at all: the specification written as code, and the freedom to change things.</li>
+<li>What a test is: a program that calls your function and compares. You already wrote one in chapter 4.</li>
+<li>doctest: one header file, one <code>#define</code>, <code>TEST_CASE</code>, <code>CHECK</code>, <code>REQUIRE</code>, <code>SUBCASE</code>.</li>
+<li>A complete test program with one deliberate failure, and every line of its output explained.</li>
+<li>Running the tests: all of them, one of them, listing them, seeing the passing ones, and through <code>ctest</code>.</li>
+<li>The thirteen test cases in <code>phase1-terminal/01-life/tests/life_test.cpp</code>, one by one.</li>
+<li>The red-to-green rhythm for the rest of the week, and how to write a test for an edge you worry about.</li>
+</ul>
+</div>
+
+<h2>Why you want tests</h2>
+<p>Once the thirteen tests are green you will want a smaller number. In <a href="13-timing-and-benchmark.html">chapter 13</a> you time one call of <code>step()</code> on a 1000 by 1000 grid and write the number down; then you will try things: a different loop order, fewer calls to <code>wrap</code>, a different way of counting neighbours. Every one of those changes could break the rules of Life in a way that looks fine on screen. A blinker (three cells in a row that flip to a column and back, from <a href="00-start-here.html">chapter 0</a>) that oscillates slightly wrong still looks like a blinker at ten frames per second. A grid where the left edge does not quite see the right edge still looks like a grid.</p>
+
+<p>A <strong>test</strong> is a program that answers the question "does it still work?" in about one second, every time, without you looking at anything. You change <code>step()</code>, you type one command, you read one word: <code>SUCCESS</code> or <code>FAILURE</code>. That is what makes change cheap. Without tests, every improvement is a gamble and you end up not improving anything because you are afraid to.</p>
+
+<p>There is a second reason, and for this week it matters more. A test is the <strong>specification written as code</strong>. The file <code>phase1-terminal/01-life/src/life.hpp</code> says in a comment that <code>wrap(-1, 10)</code> must be 9. A comment can be misread. The test file says <code>CHECK(wrap(-1, 10) == 9)</code>, and the computer reads that for you, and tells you whether your function agrees. When you are not sure what a function is supposed to do, read its tests. They are the most precise description you will get.</p>
+
+<p>The third reason is about how you work. With tests you can work in <strong>small steps</strong>: pick one failing test, make it pass, run the tests again, move to the next one. Each step is small enough to hold in your head. Each step ends with a visible result. This rhythm has a name, <strong>red to green</strong>: a failing test is red, a passing one is green, and your job is to turn one red thing green at a time. Twelve of the thirteen Life tests start red on purpose (you will see below which one does not, and why). Chapter 14 is you turning them green.</p>
+
+<div class="callout principle"><span class="label">First principle</span><p>A test does nothing clever. It is an ordinary program that calls your function with an input whose correct answer you already know, and compares the function's answer with yours. The whole value lies in two facts: the computer does the comparing (so it never gets bored or sloppy), and the comparison is written down (so it runs again tomorrow, unchanged, after you have forgotten why it mattered).</p></div>
+
+<h2>You have already written a test</h2>
+<p>At the end of <a href="04-functions.html">chapter 4</a> you tested <code>clamp</code> by hand: a function <code>check_clamp</code> that called <code>clamp</code>, compared the result with the expected value, and printed <code>PASS</code> or <code>FAIL</code>. Here is a slightly more general version of the same idea. It counts failures instead of only printing them, so that at the end there is one number to look at.</p>
+
+<pre class="code" data-lang="cpp" data-file="hand_test.cpp" data-check="run"><code>// hand_test.cpp — a hand-made checker: it compares for you, but says little.
+#include &lt;print&gt;
+
+// Keep v inside [lo, hi]: too small becomes lo, too big becomes hi.
+int clamp(int v, int lo, int hi) {
+    if (v &lt; lo) {
+        return lo;
+    }
+    if (v > hi) {
+        return hi;
+    }
+    return v;
+}
+
+// Prints PASS or FAIL for one comparison and returns the new failure count.
+int check_equal(int got, int want, int failures_so_far) {
+    if (got == want) {
+        std::println("PASS");
+        return failures_so_far;
+    }
+    std::println("FAIL: got {}, wanted {}", got, want);
+    return failures_so_far + 1;
+}
+
+int main() {
+    int failures = 0;
+    failures = check_equal(clamp(5, 0, 10), 5, failures);
+    failures = check_equal(clamp(-3, 0, 10), 0, failures);
+    failures = check_equal(clamp(42, 0, 10), 9, failures);   // wrong expectation on purpose
+    std::println("{} failure(s)", failures);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="hand_test.cpp"><code>PASS
+PASS
+FAIL: got 10, wanted 9
+1 failure(s)
+</code></pre>
+
+<p>This works, and you should feel free to test this way whenever you have a single file and five minutes. But look at what is missing:</p>
+<ul>
+<li>The failure says <code>got 10, wanted 9</code>. It does not say <em>which</em> check failed. You have to count lines. With fifty checks that is hopeless.</li>
+<li><code>check_equal</code> only compares two <code>int</code>s. For a <code>std::vector</code> or a <code>std::string</code> you need another function. For <code>a &lt; b</code> instead of <code>a == b</code>, another one.</li>
+<li>The program exits with 0 even when a check failed, so no other tool (a build system, a script) can tell whether the tests passed.</li>
+<li>Every test file has to repeat the <code>main</code>, the counting, and the printing.</li>
+</ul>
+
+<p>A <strong>test framework</strong> is a library that fixes exactly these four things and nothing else. It gives you a way to name a group of checks, a <code>CHECK</code> that works for any comparison and prints both sides when it fails, a <code>main</code> that runs every group and counts, and an exit code that other tools can read. doctest is such a library, and it is small enough that the whole thing is one file.</p>
+
+<h2>doctest: one header file</h2>
+<p>doctest lives in this repository at <code>third_party/doctest/doctest.h</code>. It is a single header of about nine thousand lines, version 2.5.3, copied in (the word for this is <strong>vendored</strong>) so that you do not have to install anything. The Life <code>CMakeLists.txt</code> already tells the compiler where to find it; <a href="11-cmake.html">chapter 11</a> showed the line: <code>include_directories(src ${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/doctest)</code>. When you compile a test file by hand in <code>scratch/</code>, you pass the same folder with <code>-I</code> (capital i, for "include path"), which tells the compiler one more folder to search when it sees <code>#include "doctest.h"</code>.</p>
+
+<p>There are four things to learn. The first complete program below uses the first three (the define, <code>TEST_CASE</code>, <code>CHECK</code>); <code>REQUIRE</code> gets its own program right after.</p>
+
+<h3>The define, exactly once</h3>
+<p>A test program needs a <code>main</code>: something has to find all the tests, run them, count, and print the summary. doctest has one ready. You ask for it with a line <em>before</em> the include:</p>
+<pre class="code" data-lang="cpp" data-file="define_once.cpp" data-check="fragment"><code>#define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include "doctest.h"
+</code></pre>
+<p><code>#define NAME</code> creates a <strong>macro</strong>: a name that the preprocessor (the part of the compiler that handles <code>#include</code>, from <a href="10-headers-and-files.html">chapter 10</a>) knows about from that line on. <code>doctest.h</code> contains, roughly, "if <code>DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN</code> is defined, also include the code of the test runner and a <code>main</code>". Without the define you get only the declarations: enough to write tests, not enough to run them.</p>
+<p>The rule is: in each test program, exactly one <code>.cpp</code> file has this define. If none has it, there is no <code>main</code> and the linker complains (you will see the message below). If two have it, there are two copies of everything and the linker complains about that instead. <code>tests/life_test.cpp</code> is the one file in the Life project that has it.</p>
+
+<h3>TEST_CASE: a named group of checks</h3>
+<pre class="code" data-lang="cpp" data-file="test_case_shape.cpp" data-check="fragment"><code>TEST_CASE("a short sentence saying what this group claims") {
+    // checks go here
+}
+</code></pre>
+<p>A <strong>test case</strong> is a block of code with a name. The name is any text in quotes; it is printed when a check inside fails, so make it a sentence a stranger could understand. doctest finds every <code>TEST_CASE</code> in the program and runs them one after another. You do not call them, and you do not list them anywhere; take it on trust that the library collects them before <code>main</code> starts (the mechanism uses language features from week 4).</p>
+
+<h3>CHECK: one claim</h3>
+<pre class="code" data-lang="cpp" data-file="check_shape.cpp" data-check="fragment"><code>CHECK(clamp(42, 0, 10) == 10);
+</code></pre>
+<p><code>CHECK</code> takes one expression that is either true or false. If it is true, nothing happens (the check is counted as passed). If it is false, doctest prints the file and line, the expression exactly as you wrote it, and the values of both sides. Then it <em>continues</em> with the next line. A test case with five <code>CHECK</code>s reports all five results, not only the first failure.</p>
+
+<h3>REQUIRE: a claim the rest depends on</h3>
+<pre class="code" data-lang="cpp" data-file="require_shape.cpp" data-check="fragment"><code>REQUIRE(v.size() == 3);
+</code></pre>
+<p><code>REQUIRE</code> is the same as <code>CHECK</code> except that on failure it <em>stops the current test case</em>. Use it when the lines after it would be meaningless or dangerous if it failed, for example reading <code>v[2]</code> when <code>v</code> might have two elements. Other test cases still run.</p>
+
+<h2>A complete test program, with one mistake</h2>
+<p>Here is a whole doctest program testing <code>clamp</code>. The last check is wrong on purpose, so that you can see what a failure looks like before you meet one that is not on purpose. Type it into <code>scratch/clamp_test.cpp</code>.</p>
+
+<pre class="code" data-lang="cpp" data-file="clamp_test.cpp" data-check="fragment"><code>// clamp_test.cpp — a complete doctest program with one deliberate mistake.
+#define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include "doctest.h"
+
+// Keep v inside [lo, hi]: too small becomes lo, too big becomes hi.
+int clamp(int v, int lo, int hi) {
+    if (v &lt; lo) {
+        return lo;
+    }
+    if (v > hi) {
+        return hi;
+    }
+    return v;
+}
+
+TEST_CASE("clamp: values inside the range are unchanged") {
+    CHECK(clamp(5, 0, 10) == 5);
+    CHECK(clamp(0, 0, 10) == 0);
+    CHECK(clamp(10, 0, 10) == 10);
+}
+
+TEST_CASE("clamp: values outside the range are pulled to the edge") {
+    CHECK(clamp(-3, 0, 10) == 0);
+    CHECK(clamp(42, 0, 10) == 10);
+    CHECK(clamp(42, 0, 10) == 9);   // wrong on purpose: the answer is 10
+}
+</code></pre>
+
+<p>There is no <code>main</code> in the file; the define provides it. Compile from inside <code>scratch/</code>, telling the compiler where <code>doctest.h</code> is, and run:</p>
+
+<pre class="shell"><code>$ cd scratch
+$ clang++ -std=c++23 -Wall -Wextra -I ../third_party/doctest clamp_test.cpp -o clamp_test
+$ ./clamp_test
+[doctest] doctest version is "2.5.3"
+[doctest] run with "--help" for options
+===============================================================================
+clamp_test.cpp:22:
+TEST CASE:  clamp: values outside the range are pulled to the edge
+
+clamp_test.cpp:25: ERROR: CHECK( clamp(42, 0, 10) == 9 ) is NOT correct!
+  values: CHECK( 10 == 9 )
+
+===============================================================================
+[doctest] test cases: 2 | 1 passed | 1 failed | 0 skipped
+[doctest] assertions: 6 | 5 passed | 1 failed |
+[doctest] Status: FAILURE!
+</code></pre>
+
+<p>Read it from the top. Every line is there for a reason.</p>
+<ul>
+<li><code>[doctest] doctest version is "2.5.3"</code>: the library announcing itself. Two lines of this, always.</li>
+<li><code>clamp_test.cpp:22:</code> followed by <code>TEST CASE: clamp: values outside ...</code>: the test case that contains the failure, with the file and the line where the <code>TEST_CASE</code> begins. Test cases with no failures print nothing at all; that is why the first one is absent.</li>
+<li><code>clamp_test.cpp:25: ERROR: CHECK( clamp(42, 0, 10) == 9 ) is NOT correct!</code>: the exact line of the failing check, and the expression as you typed it. You can jump straight to line 25.</li>
+<li><code>values: CHECK( 10 == 9 )</code>: the same expression with each side replaced by its value. The left side, <code>clamp(42, 0, 10)</code>, evaluated to 10. The right side was 9. This one line usually tells you whether the function is wrong or the test is wrong. Here the function is right and the test is wrong.</li>
+<li><code>test cases: 2 | 1 passed | 1 failed | 0 skipped</code>: the count of test cases. A test case counts as failed if any check in it failed.</li>
+<li><code>assertions: 6 | 5 passed | 1 failed</code>: the count of individual <code>CHECK</code>s and <code>REQUIRE</code>s. (<strong>Assertion</strong> is the general word for "a claim that is checked at run time".)</li>
+<li><code>Status: FAILURE!</code>: the one word you look at first. The program also exits with code 1 instead of 0, which is how <code>ctest</code> and scripts know.</li>
+</ul>
+
+<div class="callout principle"><span class="label">First principle</span><p>How can <code>CHECK</code> print <code>10 == 9</code> when you wrote <code>clamp(42, 0, 10) == 9</code>? Because <code>CHECK</code> is a macro, not a function. The preprocessor replaces the text <code>CHECK(a == b)</code>, before the compiler proper sees it, with a longer piece of code that evaluates <code>a</code> on its own, then <code>b</code> on its own, compares them, and keeps both values for the message. It also pastes in the text of the expression as a string, plus <code>__FILE__</code> and <code>__LINE__</code>, two built-in names the preprocessor fills with the current file and line. Nothing in C++ is doing anything magical: it is text substitution followed by ordinary code.</p></div>
+
+<p>Now fix the mistake. Change the <code>9</code> on line 25 to <code>10</code>, recompile, run. (If your run says a different line number, you typed one blank line more or fewer than the listing; nothing is wrong. Always follow the numbers <em>your</em> run prints.)</p>
+
+<pre class="shell"><code>$ clang++ -std=c++23 -Wall -Wextra -I ../third_party/doctest clamp_test.cpp -o clamp_test
+$ ./clamp_test
+[doctest] doctest version is "2.5.3"
+[doctest] run with "--help" for options
+===============================================================================
+[doctest] test cases: 2 | 2 passed | 0 failed | 0 skipped
+[doctest] assertions: 6 | 6 passed | 0 failed |
+[doctest] Status: SUCCESS!
+</code></pre>
+
+<p>Green. Note how little it says: a passing test prints only the summary. That is deliberate. The output of a healthy test run should be short enough that a problem stands out instantly. If you want to see the passing checks too, there is a flag for that, shown below.</p>
+
+<div class="callout try"><span class="label">Try it</span><p>Two small experiments on <code>clamp_test.cpp</code>, in this order. First, add a third test case at the bottom of the file, named <code>"clamp: a range of one value, and negative bounds"</code>, with <code>CHECK(clamp(7, 7, 7) == 7)</code> and <code>CHECK(clamp(-100, -10, 10) == -10)</code>. Compile and run: you should see <code>test cases: 3 | 3 passed</code> and <code>assertions: 8 | 8 passed</code>. Second, break <code>clamp</code> on purpose: change <code>if (v > hi)</code> to <code>if (v > lo)</code>. Before you run, predict which of the eight checks will fail. Then run. Exactly one fails, <code>CHECK( clamp(5, 0, 10) == 5 )</code> with <code>values: CHECK( 10 == 5 )</code>, and the other seven still pass, because for every other input the broken line happens to give the right answer. That is a lesson in itself: a bug can hide behind seven passing checks, and it was the plain, boring, middle-of-the-range input that caught it. Put <code>hi</code> back.</p></div>
+
+<div class="callout trap"><span class="label">Trap</span><p>Forgetting the <code>#define</code> line. The file compiles, because every name it uses is declared in the header, but the linker (<a href="10-headers-and-files.html">chapter 10</a>) cannot find the definitions, nor a <code>main</code>. The message is long; here are its first and last lines:</p>
+<pre class="shell"><code>$ clang++ -std=c++23 -Wall -Wextra -I ../third_party/doctest no_main.cpp -o no_main
+Undefined symbols for architecture arm64:
+  "doctest_detail_test_suite_ns::getCurrentTestSuite()", referenced from:
+      ___cxx_global_var_init.1 in no_main-22a247.o
+      ___cxx_global_var_init.4 in no_main-22a247.o
+  "doctest::getContextOptions()", referenced from:
+  ...
+  "_main", referenced from:
+      &lt;initial-undefines&gt;
+ld: symbol(s) not found for architecture arm64
+clang++: error: linker command failed with exit code 1 (use -v to see invocation)
+</code></pre>
+<p>Whenever you see <code>Undefined symbols</code> with a wall of <code>doctest::</code> names ending in <code>_main</code>, you forgot the define. (The number after <code>no_main-</code> is a random tag the compiler gives its temporary object file; yours will differ.) The opposite mistake, two files that both have the define, produces <code>duplicate symbol 'doctest::Context::setOption(char const*, int)' in:</code> followed by the two object files, and then a similar wall of further duplicates. Exactly one file, always.</p></div>
+
+<h2>CHECK keeps going; REQUIRE stops</h2>
+<p>The difference between the two matters most when a later line would misbehave if an earlier claim is false. The function below is deliberately wrong: it is supposed to return the first <code>n</code> even numbers but returns one too few. Watch what the two test cases do with the same wrong function.</p>
+
+<pre class="code" data-lang="cpp" data-file="require_vs_check.cpp" data-check="fragment"><code>// require_vs_check.cpp — CHECK keeps going, REQUIRE stops the test case.
+#define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include "doctest.h"
+
+#include &lt;vector&gt;
+
+// Returns the first n even numbers, starting at 0. (Deliberately wrong: it
+// returns one too few.)
+std::vector&lt;int&gt; first_evens(int n) {
+    std::vector&lt;int&gt; out;
+    for (int i = 0; i &lt; n - 1; ++i) {
+        out.push_back(2 * i);
+    }
+    return out;
+}
+
+TEST_CASE("first_evens with CHECK: every failure is reported") {
+    std::vector&lt;int&gt; v = first_evens(3);
+    CHECK(v.size() == 3);
+    CHECK(v[0] == 0);
+    CHECK(v[1] == 2);
+    CHECK(v.at(2) == 4);   // .at() on a 2-element vector: not safe!
+}
+
+TEST_CASE("first_evens with REQUIRE: stop before touching missing cells") {
+    std::vector&lt;int&gt; v = first_evens(3);
+    REQUIRE(v.size() == 3);   // if this fails, the lines below never run
+    CHECK(v[0] == 0);
+    CHECK(v[1] == 2);
+    CHECK(v[2] == 4);
+}
+</code></pre>
+
+<pre class="shell"><code>$ clang++ -std=c++23 -Wall -Wextra -I ../third_party/doctest require_vs_check.cpp -o require_vs_check
+$ ./require_vs_check
+[doctest] doctest version is "2.5.3"
+[doctest] run with "--help" for options
+===============================================================================
+require_vs_check.cpp:17:
+TEST CASE:  first_evens with CHECK: every failure is reported
+
+require_vs_check.cpp:19: ERROR: CHECK( v.size() == 3 ) is NOT correct!
+  values: CHECK( 2 == 3 )
+
+require_vs_check.cpp:22: ERROR: CHECK( v.at(2) == 4 ) THREW exception: "vector"
+
+===============================================================================
+require_vs_check.cpp:25:
+TEST CASE:  first_evens with REQUIRE: stop before touching missing cells
+
+require_vs_check.cpp:27: FATAL ERROR: REQUIRE( v.size() == 3 ) is NOT correct!
+  values: REQUIRE( 2 == 3 )
+
+===============================================================================
+[doctest] test cases: 2 | 0 passed | 2 failed | 0 skipped
+[doctest] assertions: 5 | 2 passed | 3 failed |
+[doctest] Status: FAILURE!
+</code></pre>
+
+<p>In the first test case, the size check fails and doctest carries on. <code>v[0]</code> and <code>v[1]</code> pass (the two values that exist are right). Then <code>v.at(2)</code> asks for a third element that is not there. You met <code>.at()</code> in <a href="06-vector.html">chapter 6</a>: unlike <code>[]</code>, it refuses loudly. doctest catches the refusal, reports it as <code>THREW exception</code>, and keeps the program alive. (The mechanism, exceptions, is a later-week topic. For now: <code>.at()</code> out of range is an error that doctest can report; <code>[]</code> out of range is the silent kind that the sanitizers from <a href="11-cmake.html">chapter 11</a> exist to catch.)</p>
+
+<p>In the second test case, <code>REQUIRE</code> fails, is reported as <code>FATAL ERROR</code>, and the three lines after it never run. The assertion count confirms it: five assertions in total, not eight. The last three were never reached. This is what you want when a later line reads memory that only exists if the earlier claim holds.</p>
+
+<p>Rule of thumb for the week: use <code>CHECK</code> by default, because more information per run is better. Use <code>REQUIRE</code> for a claim that the later lines cannot do without, most often a size: if the vector does not have three elements, there is no point reading the third one.</p>
+
+<h2>SUBCASE: one setup, several continuations</h2>
+<p>You will not need this for the Life tests, but you will see it in other people's test files and it is worth one program. A <code>SUBCASE</code> is a block inside a test case. doctest runs the test case <em>once per subcase</em>, executing the shared code at the top each time and then one subcase. So each subcase starts from a fresh copy of the setup.</p>
+
+<pre class="code" data-lang="cpp" data-file="subcase_demo.cpp" data-check="fragment"><code>// subcase_demo.cpp — SUBCASE: shared setup, several continuations.
+#define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include "doctest.h"
+
+#include &lt;vector&gt;
+
+TEST_CASE("a vector of three zeros") {
+    std::vector&lt;int&gt; v(3, 0);
+    REQUIRE(v.size() == 3);
+
+    SUBCASE("push_back makes it longer") {
+        v.push_back(7);
+        CHECK(v.size() == 4);
+        CHECK(v[3] == 7);
+    }
+    SUBCASE("resize to zero empties it") {
+        v.resize(0);
+        CHECK(v.size() == 0);
+    }
+    SUBCASE("the setup is fresh in every subcase") {
+        CHECK(v.size() == 3);   // the push_back and resize above never happened here
+    }
+}
+</code></pre>
+
+<p>Run it with <code>-s</code>, the flag that also prints passing assertions, so that you can watch the order of execution:</p>
+
+<pre class="shell"><code>$ clang++ -std=c++23 -Wall -Wextra -I ../third_party/doctest subcase_demo.cpp -o subcase_demo
+$ ./subcase_demo -s
+[doctest] doctest version is "2.5.3"
+[doctest] run with "--help" for options
+===============================================================================
+subcase_demo.cpp:7:
+TEST CASE:  a vector of three zeros
+
+subcase_demo.cpp:9: SUCCESS: REQUIRE( v.size() == 3 ) is correct!
+  values: REQUIRE( 3 == 3 )
+
+===============================================================================
+subcase_demo.cpp:7:
+TEST CASE:  a vector of three zeros
+  push_back makes it longer
+
+subcase_demo.cpp:13: SUCCESS: CHECK( v.size() == 4 ) is correct!
+  values: CHECK( 4 == 4 )
+
+subcase_demo.cpp:14: SUCCESS: CHECK( v[3] == 7 ) is correct!
+  values: CHECK( 7 == 7 )
+
+===============================================================================
+subcase_demo.cpp:7:
+TEST CASE:  a vector of three zeros
+
+subcase_demo.cpp:9: SUCCESS: REQUIRE( v.size() == 3 ) is correct!
+  values: REQUIRE( 3 == 3 )
+
+===============================================================================
+subcase_demo.cpp:7:
+TEST CASE:  a vector of three zeros
+  resize to zero empties it
+
+subcase_demo.cpp:18: SUCCESS: CHECK( v.size() == 0 ) is correct!
+  values: CHECK( 0 == 0 )
+
+===============================================================================
+subcase_demo.cpp:7:
+TEST CASE:  a vector of three zeros
+
+subcase_demo.cpp:9: SUCCESS: REQUIRE( v.size() == 3 ) is correct!
+  values: REQUIRE( 3 == 3 )
+
+===============================================================================
+subcase_demo.cpp:7:
+TEST CASE:  a vector of three zeros
+  the setup is fresh in every subcase
+
+subcase_demo.cpp:21: SUCCESS: CHECK( v.size() == 3 ) is correct!
+  values: CHECK( 3 == 3 )
+
+===============================================================================
+[doctest] test cases: 1 | 1 passed | 0 failed | 0 skipped
+[doctest] assertions: 7 | 7 passed | 0 failed |
+[doctest] Status: SUCCESS!
+</code></pre>
+
+<p>The <code>REQUIRE</code> on line 9 ran three times, once before each subcase, which is how the third subcase can still see a vector of size 3 after the first subcase pushed and the second resized. One test case, seven assertions. The Life tests do not use <code>SUBCASE</code>; they make a fresh grid in every test case instead, which does the same job with less to explain.</p>
+
+<div class="callout analogy"><span class="label">Analogy</span><p>A test case is a recipe card with a title and a list of things that must be true at the end: "the cake is golden", "the centre is set". <code>CHECK</code> is ticking a line and moving on. <code>REQUIRE</code> is "if the oven did not reach temperature, do not bother checking the cake". <code>SUBCASE</code> is baking the batter three times to try three toppings, starting from fresh batter each time. Where the analogy breaks: real recipes are followed by a cook who notices things that are not on the list. A test checks exactly what you wrote and nothing else. If you forgot to check the edge, the edge is not checked.</p></div>
+
+<h2>Running the Life tests</h2>
+<p>Now the real thing. In <a href="11-cmake.html">chapter 11</a> you configured and built the Life project. One of the three programs it produces is <code>life_tests</code>, made from <code>tests/life_test.cpp</code> and your <code>src/life.cpp</code>. Running it is one command, from the challenge folder (the <code>cd</code> below starts at the repo root; if you are still in <code>scratch/</code>, go up one level first):</p>
+
+<pre class="shell"><code>$ cd phase1-terminal/01-life
+$ cmake --build build
+ninja: no work to do.
+$ ./build/life_tests
+[doctest] doctest version is "2.5.3"
+[doctest] run with "--help" for options
+===============================================================================
+/Users/dan/Desktop/projects/cpp-101/phase1-terminal/01-life/tests/life_test.cpp:22:
+TEST CASE:  index_of: row-major flat index
+
+/Users/dan/Desktop/projects/cpp-101/phase1-terminal/01-life/tests/life_test.cpp:24: ERROR: CHECK( index_of(9, 0, 10) == 9 ) is NOT correct!
+  values: CHECK( 0 == 9 )
+
+/Users/dan/Desktop/projects/cpp-101/phase1-terminal/01-life/tests/life_test.cpp:25: ERROR: CHECK( index_of(0, 1, 10) == 10 ) is NOT correct!
+  values: CHECK( 0 == 10 )
+
+...  (49 more failures, one per wrong answer)  ...
+
+===============================================================================
+[doctest] test cases:    13 |     1 passed | 12 failed | 0 skipped
+[doctest] assertions: 10061 | 10010 passed | 51 failed |
+[doctest] Status: FAILURE!
+</code></pre>
+
+<p>This is what the project looks like before you have written anything: the stubs in <code>life.cpp</code> return 0 or an empty result, and twelve of the thirteen test cases fail. The file paths are long because CMake hands the compiler the full path of each source file, and that is what <code>__FILE__</code> becomes. The first failure reads: on line 24, the test expected <code>index_of(9, 0, 10)</code> to be 9, and your stub returned 0.</p>
+
+<p>Two numbers deserve a second look. "1 passed": one test case passes with the stubs. Can you guess which, before reading on? And "10061 assertions, 10010 passed": most of those come from one loop in the <code>random_cells</code> test that checks ten thousand cells individually, and the stub's all-zero grid happens to satisfy "each cell is 0 or 1". Passing checks are not proof of anything on their own; the <em>set</em> of checks is designed so that a wrong function cannot pass all of them.</p>
+
+<h3>One test case at a time</h3>
+<p>Fifty-one failures at once is noise. While you work on <code>wrap</code>, you only care about the <code>wrap</code> test. The <code>-tc</code> flag (test case) takes a <strong>pattern</strong>: a piece of text in which <code>*</code> stands for "any characters, including none". The quotes around the pattern are for the shell, not for doctest: without them the shell would try to replace <code>wrap*</code> with the names of files that start with <code>wrap</code>, and doctest would never see the <code>*</code>.</p>
+
+<pre class="shell"><code>$ ./build/life_tests -tc="wrap*"
+[doctest] doctest version is "2.5.3"
+[doctest] run with "--help" for options
+===============================================================================
+/Users/dan/Desktop/projects/cpp-101/phase1-terminal/01-life/tests/life_test.cpp:67:
+TEST CASE:  wrap: like a clock face
+
+/Users/dan/Desktop/projects/cpp-101/phase1-terminal/01-life/tests/life_test.cpp:69: ERROR: CHECK( wrap(7, 10) == 7 ) is NOT correct!
+  values: CHECK( 0 == 7 )
+
+/Users/dan/Desktop/projects/cpp-101/phase1-terminal/01-life/tests/life_test.cpp:71: ERROR: CHECK( wrap(11, 10) == 1 ) is NOT correct!
+  values: CHECK( 0 == 1 )
+
+/Users/dan/Desktop/projects/cpp-101/phase1-terminal/01-life/tests/life_test.cpp:72: ERROR: CHECK( wrap(-1, 10) == 9 ) is NOT correct!
+  values: CHECK( 0 == 9 )
+
+/Users/dan/Desktop/projects/cpp-101/phase1-terminal/01-life/tests/life_test.cpp:74: ERROR: CHECK( wrap(-11, 10) == 9 ) is NOT correct!
+  values: CHECK( 0 == 9 )
+
+===============================================================================
+[doctest] test cases: 1 | 0 passed | 1 failed | 12 skipped
+[doctest] assertions: 7 | 3 passed | 4 failed |
+[doctest] Status: FAILURE!
+</code></pre>
+
+<p>Twelve skipped, one run. And look: three of the seven <code>wrap</code> checks pass with a stub that always returns 0, because <code>wrap(0, 10)</code>, <code>wrap(10, 10)</code> and <code>wrap(-10, 10)</code> really are 0. This is why the test has seven checks and not one. A single check can be passed by accident; seven well-chosen ones cannot.</p>
+
+<p>The pattern is matched against the whole name, ignoring the difference between upper and lower case. So <code>-tc="wrap*"</code> means "names starting with wrap", <code>-tc="*torus*"</code> means "names containing torus", and <code>-tc="wrap*,index*"</code> runs two groups. But <code>-tc="wrap"</code>, without the <code>*</code>, matches only a test named exactly <code>wrap</code>, and there is none. If nothing matches you get <code>test cases: 0 | 0 passed | 0 failed | 13 skipped</code> and, confusingly, <code>Status: SUCCESS!</code>: no tests ran, so none failed. Check the count.</p>
+
+<h3>Listing, and seeing the passes</h3>
+<p>To see the names without running anything, <code>-ltc</code> (list test cases):</p>
+
+<pre class="shell"><code>$ ./build/life_tests -ltc
+[doctest] listing all test case names
+===============================================================================
+index_of: row-major flat index
+random_cells: size, determinism and fill extremes
+render: '#' alive, '.' dead, newline after every row
+wrap: like a clock face
+count_neighbours: interior cell
+count_neighbours: does not count the cell itself
+count_neighbours: edges wrap around (torus)
+step: a lone cell dies
+step: block is a still life
+step: blinker oscillates with period 2
+step: birth with exactly three neighbours
+step: wraps across the edges
+step: does not modify current
+===============================================================================
+[doctest] unskipped test cases passing the current filters: 13
+</code></pre>
+
+<p>That list is the table of contents of your week. To see the passing assertions as well as the failing ones, add <code>-s</code> (success), as in the <code>SUBCASE</code> example above. It is useful for one test case at a time; on all thirteen it prints about thirty thousand lines, three per assertion. The flags combine: <code>./build/life_tests -tc="wrap*" -s</code>.</p>
+
+<h3>Through ctest</h3>
+<p>The last two lines of the Life <code>CMakeLists.txt</code> were <code>enable_testing()</code> and <code>add_test(NAME life_tests COMMAND life_tests)</code>. They register the program with <strong>ctest</strong>, CMake's test runner, which runs every registered program and reads its exit code: 0 is a pass, anything else is a fail.</p>
+
+<pre class="shell"><code>$ ctest --test-dir build
+Test project /Users/dan/Desktop/projects/cpp-101/phase1-terminal/01-life/build
+    Start 1: life_tests
+1/1 Test #1: life_tests .......................***Failed    0.07 sec
+
+0% tests passed, 1 tests failed out of 1
+
+Total Test time (real) =   0.08 sec
+
+The following tests FAILED:
+	  1 - life_tests (Failed)
+Errors while running CTest
+Output from these tests are in: /Users/dan/Desktop/projects/cpp-101/phase1-terminal/01-life/build/Testing/Temporary/LastTest.log
+Use "--rerun-failed --output-on-failure" to re-run the failed cases verbosely.
+</code></pre>
+
+<p>By default ctest hides the program's output and shows one line per test. That is the right view when a project has fifty test programs; for one program it hides exactly what you want to read. <code>--output-on-failure</code> shows the output of any test that failed:</p>
+
+<pre class="shell"><code>$ ctest --test-dir build --output-on-failure
+Test project /Users/dan/Desktop/projects/cpp-101/phase1-terminal/01-life/build
+    Start 1: life_tests
+1/1 Test #1: life_tests .......................***Failed    0.06 sec
+[doctest] doctest version is "2.5.3"
+[doctest] run with "--help" for options
+===============================================================================
+/Users/dan/Desktop/projects/cpp-101/phase1-terminal/01-life/tests/life_test.cpp:22:
+TEST CASE:  index_of: row-major flat index
+
+/Users/dan/Desktop/projects/cpp-101/phase1-terminal/01-life/tests/life_test.cpp:24: ERROR: CHECK( index_of(9, 0, 10) == 9 ) is NOT correct!
+  values: CHECK( 0 == 9 )
+
+...  (the rest of the doctest output, then the ctest summary)  ...
+
+0% tests passed, 1 tests failed out of 1
+
+Total Test time (real) =   0.06 sec
+
+The following tests FAILED:
+	  1 - life_tests (Failed)
+Errors while running CTest
+</code></pre>
+
+<p>For this week, running <code>./build/life_tests</code> directly is simpler and lets you pass <code>-tc</code>. <code>ctest</code> is what a script or a <strong>continuous-integration</strong> server would call (a machine that builds and tests every commit automatically; this repository has one from week 1, and in week 13 you add a release workflow to it). It is good to know that both exist and agree. The times printed, <code>0.07 sec</code> above, will differ a little from run to run; only the pass/fail word matters.</p>
+
+<div class="callout note"><span class="label">Where does the time go?</span><p>The whole run takes 0.06 to 0.07 seconds on this machine, with sanitizers on, in a Debug build. Keep it that way. A test suite that takes a minute gets run once an hour; one that takes a second gets run after every edit. When you add tests, keep the grids small. Benchmarks on 1000 by 1000 grids belong in <code>life_bench</code>, not here.</p></div>
+
+<h2>The thirteen test cases, one by one</h2>
+<p>Open <code>phase1-terminal/01-life/tests/life_test.cpp</code> next to this page. Below is every test case in the file, reproduced, with two things said about each: what it <em>claims</em> about the function, and <em>why that claim matters</em>. These tests are the specification. If you understand them, you understand the challenge.</p>
+
+<h3>The helper: grid_with</h3>
+<pre class="code" data-lang="cpp" data-file="grid_with.cpp" data-check="fragment"><code>// Small helper used by the tests only: a grid with a list of live (x, y) cells.
+static Cells grid_with(int width, int height, std::initializer_list&lt;std::pair&lt;int, int&gt;&gt; alive) {
+    Cells cells(static_cast&lt;std::size_t&gt;(width) * static_cast&lt;std::size_t&gt;(height), 0);
+    for (auto [x, y] : alive) {
+        cells[static_cast&lt;std::size_t&gt;(y * width + x)] = 1;
+    }
+    return cells;
+}
+</code></pre>
+<p><code>grid_with(5, 5, {{2, 2}})</code> makes a 5 by 5 grid of dead cells and sets the cell at column 2, row 2 alive. <code>grid_with(3, 2, {{0, 0}, {2, 1}})</code> makes a 3 by 2 grid with two live cells. It is a convenience so that each test can describe a picture in one line instead of twenty.</p>
+<p>Its signature uses three things you have not met. <code>static</code> in front of a function means "this function is private to this file"; that is <a href="10-headers-and-files.html">chapter 10</a> territory, take it on trust for now. <code>std::initializer_list&lt;std::pair&lt;int, int&gt;&gt;</code> is "a list of pairs of two ints", which is what <code>{{0, 0}, {2, 1}}</code> is. <code>auto [x, y]</code> unpacks one pair into two named variables, so that inside the loop <code>x</code> is the column and <code>y</code> the row. The last two are week-4 topics. Take the helper on trust; what it does is exactly what the comment says, and it uses <code>y * width + x</code>, the formula from <a href="07-flat-grid.html">chapter 7</a>, to find each cell. Notice that it deliberately does <em>not</em> call your <code>index_of</code>. If it did, a bug in <code>index_of</code> would corrupt every test grid, and every test would fail for a reason that has nothing to do with the function it is testing. Tests should depend on as little of your code as possible.</p>
+
+<h3>Milestone 1: index_of</h3>
+<pre class="code" data-lang="cpp" data-file="t_index_of.cpp" data-check="fragment"><code>TEST_CASE("index_of: row-major flat index") {
+    CHECK(index_of(0, 0, 10) == 0);
+    CHECK(index_of(9, 0, 10) == 9);
+    CHECK(index_of(0, 1, 10) == 10);
+    CHECK(index_of(3, 2, 10) == 23);
+    CHECK(index_of(4, 4, 5) == 24);
+}
+</code></pre>
+<p><strong>Claim:</strong> the cell at column <code>x</code>, row <code>y</code> of a grid <code>width</code> columns wide lives at position <code>y * width + x</code> in the flat vector. <strong>Why it matters:</strong> everything else in the project reads and writes cells through this formula. The five checks are chosen to catch the common mistakes: the first cell (0), the end of the first row (9, so <code>x</code> is not being dropped), the start of the second row (10, so the row stride is <code>width</code>, not 1), a general interior cell, and the last cell of a different-sized grid (so <code>width</code> is really being used and not a hard-coded 10). If you swapped <code>x</code> and <code>y</code>, the third check would say <code>1 == 10</code>.</p>
+
+<h3>Milestone 2: random_cells and render</h3>
+<pre class="code" data-lang="cpp" data-file="t_random_cells.cpp" data-check="fragment"><code>TEST_CASE("random_cells: size, determinism and fill extremes") {
+    Cells a = random_cells(8, 4, 42, 0.5);
+    CHECK(a.size() == 32);
+
+    Cells b = random_cells(8, 4, 42, 0.5);
+    CHECK(a == b);  // same seed, same grid
+
+    Cells dead = random_cells(8, 4, 1, 0.0);
+    int live = 0;
+    for (std::uint8_t c : dead) live += c;
+    CHECK(live == 0);
+
+    Cells full = random_cells(8, 4, 1, 1.0);
+    live = 0;
+    for (std::uint8_t c : full) live += c;
+    CHECK(live == 32);
+
+    Cells half = random_cells(100, 100, 7, 0.5);
+    live = 0;
+    for (std::uint8_t c : half) {
+        CHECK((c == 0 || c == 1));
+        live += c;
+    }
+    CHECK(live > 4000);
+    CHECK(live &lt; 6000);
+}
+</code></pre>
+<p><strong>Claims:</strong> the grid has <code>width * height</code> cells; the same seed gives the same grid twice (<a href="08-strings-and-args.html">chapter 8</a> explained why a seeded generator does this); a fill of 0.0 gives no live cells and 1.0 gives all live; every cell is exactly 0 or 1 and nothing else; and a fill of 0.5 on ten thousand cells gives roughly half alive. <strong>Why it matters:</strong> determinism is what makes a bug reproducible: "seed 7 looks wrong" is a report you can act on. The extremes pin down the meaning of <code>fill</code> without depending on any particular random numbers. The 4000 to 6000 window is wide on purpose. Ten thousand honest coin flips give 5000 heads give or take about 50 (that "about 50" is the typical wobble; 4000 or 6000 would be twenty times the typical wobble away, which does not happen in practice). So a correct <code>random_cells</code> always lands inside the window, while a function that compared against the wrong threshold, or produced mostly 1s, would miss it.</p>
+<p>Two small things about how the test is written. <code>CHECK(a == b)</code> compares two whole vectors with <code>==</code>, the element-by-element comparison from <a href="06-vector.html">chapter 6</a>, so one <code>==</code> checks all 32 cells. And <code>for (std::uint8_t c : dead) live += c;</code> is a range-for from <a href="06-vector.html">chapter 6</a> whose body is a single statement written on the same line without braces. The language allows that; <a href="03-control-flow.html">chapter 3</a> told you to always write the braces anyway, and that advice stands for your own code. The test file is someone else's code, and you only need to read it. Finally, notice the double parentheses in <code>CHECK((c == 0 || c == 1))</code>: the macro wants one expression, and the inner pair keeps <code>||</code> from confusing it.</p>
+
+<pre class="code" data-lang="cpp" data-file="t_render.cpp" data-check="fragment"><code>TEST_CASE("render: '#' alive, '.' dead, newline after every row") {
+    Cells g = grid_with(3, 2, {{0, 0}, {2, 1}});
+    CHECK(render(g, 3, 2) == "#..\n..#\n");
+
+    Cells empty(4, 0);
+    CHECK(render(empty, 2, 2) == "..\n..\n");
+}
+</code></pre>
+<p><strong>Claim:</strong> the string is exactly the grid, row by row, <code>#</code> for alive and <code>.</code> for dead, with <code>\n</code> after every row including the last. <strong>Why it matters:</strong> a string comparison is unforgiving, which is good here: an extra space, a missing final newline, or rows in the wrong order all fail. The first grid has a live cell in the top-left and one in the bottom-right, so swapping <code>x</code> and <code>y</code> or counting rows from the bottom both produce a different string. When this check fails, the <code>values:</code> line prints both strings with their line breaks taken literally, so each one is drawn as a little picture. With the stub, which returns an empty string, it looks like this (the left side is empty, the right side is the expected picture, and the closing bracket lands on its own line because of the final <code>\n</code>):</p>
+
+<pre class="shell"><code>/Users/dan/Desktop/projects/cpp-101/phase1-terminal/01-life/tests/life_test.cpp:60: ERROR: CHECK( render(g, 3, 2) == "#..\n..#\n" ) is NOT correct!
+  values: CHECK(  == #..
+..#
+ )
+</code></pre>
+
+<pre class="grid-figure">   x: 0 1 2
+y=0   # . .      "#..\n"
+y=1   . . #      "..#\n"
+</pre>
+
+<h3>Milestone 3: wrap and count_neighbours</h3>
+<pre class="code" data-lang="cpp" data-file="t_wrap.cpp" data-check="fragment"><code>TEST_CASE("wrap: like a clock face") {
+    CHECK(wrap(0, 10) == 0);
+    CHECK(wrap(7, 10) == 7);
+    CHECK(wrap(10, 10) == 0);
+    CHECK(wrap(11, 10) == 1);
+    CHECK(wrap(-1, 10) == 9);
+    CHECK(wrap(-10, 10) == 0);
+    CHECK(wrap(-11, 10) == 9);
+}
+</code></pre>
+<p><strong>Claim:</strong> <code>wrap(v, n)</code> brings any integer into the range 0 to <code>n - 1</code> the way a clock brings any hour into 0 to 11. <strong>Why it matters:</strong> this is the function that makes the grid a torus, and <a href="07-flat-grid.html">chapter 7</a> showed you the trap: in C++, <code>-1 % 10</code> is <code>-1</code>, not 9. The last three checks exist for that trap alone: minus one, exactly minus <code>n</code>, and one past minus <code>n</code>. A <code>wrap</code> that is nothing more than <code>v % n</code> passes five of the seven, including <code>wrap(-10, 10)</code> by luck (<code>-10 % 10</code> is 0), and fails <code>wrap(-1, 10)</code> and <code>wrap(-11, 10)</code>, both with <code>values: CHECK( -1 == 9 )</code>; the message will tell you precisely that.</p>
+
+<pre class="code" data-lang="cpp" data-file="t_neighbours_interior.cpp" data-check="fragment"><code>TEST_CASE("count_neighbours: interior cell") {
+    // 5x5, a ring of 8 around the centre (2,2)
+    Cells g = grid_with(5, 5, {{1, 1}, {2, 1}, {3, 1}, {1, 2}, {3, 2}, {1, 3}, {2, 3}, {3, 3}});
+    CHECK(count_neighbours(g, 5, 5, 2, 2) == 8);
+    CHECK(count_neighbours(g, 5, 5, 0, 0) == 1);  // only (1,1) touches the corner
+    CHECK(count_neighbours(g, 5, 5, 2, 0) == 3);  // (1,1) (2,1) (3,1)
+}
+</code></pre>
+<pre class="grid-figure">   x: 0 1 2 3 4
+y=0   . . . . .
+y=1   . # # # .
+y=2   . # . # .      centre (2,2) is dead and has 8 live neighbours
+y=3   . # # # .
+y=4   . . . . .
+</pre>
+<p><strong>Claims:</strong> the centre of a full ring has 8 neighbours (so all eight directions are visited: miss one and you get 7); the corner (0,0) sees only (1,1) (so diagonals count); the top-middle cell (2,0) sees the three cells below it (so the row below counts, and the cells left and right of it, which are dead, do not). <strong>Why it matters:</strong> 8 is the maximum, and a count that reaches 8 on a full ring and 1 on a corner is visiting exactly the right eight positions. Note that the corner checks also exercise wrapping (row -1 wraps to row 4, which is dead here), but in a way that gives the same answer whether or not wrapping is correct. The next two test cases separate those concerns.</p>
+
+<pre class="code" data-lang="cpp" data-file="t_neighbours_self.cpp" data-check="fragment"><code>TEST_CASE("count_neighbours: does not count the cell itself") {
+    Cells g = grid_with(3, 3, {{1, 1}});
+    CHECK(count_neighbours(g, 3, 3, 1, 1) == 0);
+    CHECK(count_neighbours(g, 3, 3, 0, 0) == 1);
+}
+</code></pre>
+<p><strong>Claim:</strong> a lone live cell has zero live neighbours, and its neighbours each see exactly one. <strong>Why it matters:</strong> the most natural way to visit the 3 by 3 block around a cell visits nine positions, and the middle one is the cell itself. Forget to skip it and every live cell counts one too many. The <code>== 0</code> check catches that in the simplest possible setting, where no other explanation is available.</p>
+
+<pre class="code" data-lang="cpp" data-file="t_neighbours_torus.cpp" data-check="fragment"><code>TEST_CASE("count_neighbours: edges wrap around (torus)") {
+    // Live cell at the far right of row 0; the cell at x=0 must see it.
+    Cells g = grid_with(5, 3, {{4, 0}});
+    CHECK(count_neighbours(g, 5, 3, 0, 0) == 1);
+    CHECK(count_neighbours(g, 5, 3, 0, 1) == 1);
+    CHECK(count_neighbours(g, 5, 3, 0, 2) == 1);  // wraps vertically too: row -1 is row 2
+
+    // Live cell at bottom-right corner is a neighbour of top-left corner.
+    Cells h = grid_with(4, 4, {{3, 3}});
+    CHECK(count_neighbours(h, 4, 4, 0, 0) == 1);
+}
+</code></pre>
+<pre class="grid-figure">grid g, 5 wide, 3 tall:        grid h, 4 by 4:
+   x: 0 1 2 3 4                   x: 0 1 2 3
+y=0   . . . . #                y=0   . . . .
+y=1   . . . . .                y=1   . . . .
+y=2   . . . . .                y=2   . . . .
+                               y=3   . . . #
+(0,0) sees (4,0) across the    (0,0) sees (3,3) across
+left edge; (0,2) sees it       both edges at once: its
+across the left edge AND the   up-left neighbour is (-1,-1),
+top edge (row -1 is row 2).    which wraps to (3,3).
+</pre>
+<p><strong>Claim:</strong> the grid is a torus: column -1 is the last column, row -1 is the last row, and a diagonal step off a corner lands in the opposite corner. <strong>Why it matters:</strong> this is the one test that fails if you clamp at the edges or skip out-of-range neighbours instead of wrapping, and it would be invisible on screen for a long time. The three checks on <code>g</code> are ordered to tell horizontal wrapping from vertical. (0,0) and (0,1) need only the left edge: their neighbour at column -1 must become column 4. (0,2) is on the bottom row, so it also needs the bottom edge: its down-left neighbour is at column -1, row 3, and row 3 must become row 0 for it to land on the live cell at (4,0). Seen from the live cell instead, the same fact reads "row -1 is row 2", which is how the comment in the test puts it. Grid <code>h</code> is the hardest single case: both coordinates wrap at once.</p>
+
+<h3>Milestone 4: step</h3>
+<pre class="code" data-lang="cpp" data-file="t_step_lone.cpp" data-check="fragment"><code>TEST_CASE("step: a lone cell dies") {
+    Cells cur = grid_with(5, 5, {{2, 2}});
+    Cells next(25, 1);  // deliberately dirty: step must overwrite every cell
+    step(cur, next, 5, 5);
+    for (std::uint8_t c : next) CHECK(c == 0);
+}
+</code></pre>
+<p><strong>Claim:</strong> a cell with no neighbours dies, no cell is born anywhere, and <code>step</code> writes every cell of <code>next</code>. <strong>Why it matters:</strong> the dirty <code>next</code>, filled with 1s, is the important part. A <code>step</code> that only writes cells that <em>change</em>, or only writes the live ones, would leave 1s behind and fail 24 of the 25 checks. The contract says "writes the result into next"; the test makes "the whole result" explicit. This is a habit worth stealing: when a function fills a buffer, test it with a buffer full of wrong values, never with a clean one.</p>
+
+<pre class="code" data-lang="cpp" data-file="t_step_block.cpp" data-check="fragment"><code>TEST_CASE("step: block is a still life") {
+    Cells cur = grid_with(6, 6, {{2, 2}, {3, 2}, {2, 3}, {3, 3}});
+    Cells next(36, 0);
+    step(cur, next, 6, 6);
+    CHECK(next == cur);
+}
+</code></pre>
+<pre class="grid-figure">   x: 0 1 2 3 4 5
+y=0   . . . . . .
+y=1   . . . . . .
+y=2   . . # # . .      each live cell has 3 live neighbours: survives
+y=3   . . # # . .      each dead cell next to the block has at most 2: stays dead
+y=4   . . . . . .
+y=5   . . . . . .
+</pre>
+<p><strong>Claim:</strong> a 2 by 2 block is a <strong>still life</strong>: a pattern that is its own next generation. <strong>Why it matters:</strong> every live cell in a block has exactly 3 live neighbours, so the survival rule ("2 or 3 stays alive") must include 3. Every dead cell touching the block has 1 or 2 live neighbours, never 3, so no birth happens. Comparing whole vectors with <code>==</code> checks all 36 cells at once; when it fails, doctest prints both vectors in full, 36 numbers each in row order, and you can read the two grids out of the braces. With the stub, <code>next</code> stays all zeros and the message is:</p>
+
+<pre class="shell"><code>/Users/dan/Desktop/projects/cpp-101/phase1-terminal/01-life/tests/life_test.cpp:115: ERROR: CHECK( next == cur ) is NOT correct!
+  values: CHECK( {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0} == {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0} )
+</code></pre>
+<p>Count along the right-hand list: the 1s sit at positions 14, 15, 20 and 21, which are <code>2 * 6 + 2</code>, <code>2 * 6 + 3</code>, <code>3 * 6 + 2</code> and <code>3 * 6 + 3</code>: the block, exactly where <code>grid_with</code> put it.</p>
+
+<pre class="code" data-lang="cpp" data-file="t_step_blinker.cpp" data-check="fragment"><code>TEST_CASE("step: blinker oscillates with period 2") {
+    Cells horizontal = grid_with(5, 5, {{1, 2}, {2, 2}, {3, 2}});
+    Cells vertical = grid_with(5, 5, {{2, 1}, {2, 2}, {2, 3}});
+    Cells next(25, 0);
+
+    step(horizontal, next, 5, 5);
+    CHECK(next == vertical);
+
+    Cells again(25, 0);
+    step(next, again, 5, 5);
+    CHECK(again == horizontal);
+}
+</code></pre>
+<pre class="grid-figure">generation 0        generation 1        generation 2
+. . . . .           . . . . .           . . . . .
+. . . . .           . . # . .           . . . . .
+. # # # .    -->    . . # . .    -->    . # # # .
+. . . . .           . . # . .           . . . . .
+. . . . .           . . . . .           . . . . .
+</pre>
+<p><strong>Claim:</strong> three cells in a row become three cells in a column, and back again: an <strong>oscillator</strong> with <strong>period 2</strong>. <strong>Why it matters:</strong> this one pattern exercises all three rules at once. The two end cells each have 1 neighbour and die. The middle cell has 2 and survives. The two dead cells above and below the middle each have exactly 3 and are born. Any rule written wrong (survive on 1, no birth on 3, birth on 2) changes the picture. Running two generations and expecting the original back checks twice as much for one extra line, and it also checks that <code>step</code> reads <code>current</code> correctly when <code>current</code> is the result of a previous <code>step</code>.</p>
+
+<pre class="code" data-lang="cpp" data-file="t_step_birth.cpp" data-check="fragment"><code>TEST_CASE("step: birth with exactly three neighbours") {
+    Cells cur = grid_with(5, 5, {{1, 1}, {2, 1}, {1, 2}});
+    Cells next(25, 0);
+    step(cur, next, 5, 5);
+    CHECK(next[2 * 5 + 2] == 1);  // (2,2) is born
+    CHECK(next[1 * 5 + 1] == 1);  // (1,1) survives with 2 neighbours
+}
+</code></pre>
+<p><strong>Claim:</strong> a dead cell with exactly three live neighbours becomes alive, and a live cell with two survives. <strong>Why it matters:</strong> three live cells in an L shape; the missing corner of the square has all three as neighbours. This isolates the birth rule in a picture where there is exactly one candidate for birth. (Three cells in an L is also the first generation of a block: after this step the L becomes a 2 by 2 block, which the still-life test then covers.) The index <code>2 * 5 + 2</code> written out in the test is the formula from chapter 7 again, spelled so you can see which cell is meant.</p>
+
+<pre class="code" data-lang="cpp" data-file="t_step_wrap.cpp" data-check="fragment"><code>TEST_CASE("step: wraps across the edges") {
+    // Horizontal blinker straddling the right/left edge of a 5-wide grid:
+    // cells at x = 4, 0, 1 on row 2. Next generation: vertical at x = 0.
+    Cells cur = grid_with(5, 5, {{4, 2}, {0, 2}, {1, 2}});
+    Cells next(25, 0);
+    step(cur, next, 5, 5);
+    CHECK(next == grid_with(5, 5, {{0, 1}, {0, 2}, {0, 3}}));
+}
+</code></pre>
+<pre class="grid-figure">before                        after
+   x: 0 1 2 3 4                  x: 0 1 2 3 4
+y=0   . . . . .               y=0   . . . . .
+y=1   . . . . .               y=1   # . . . .
+y=2   # # . . #               y=2   # . . . .
+y=3   . . . . .               y=3   # . . . .
+y=4   . . . . .               y=4   . . . . .
+
+Read row 2 as a ring: ... 3 4 | 0 1 2 ... The three live cells at
+x = 4, 0, 1 are adjacent on the ring, with x = 0 in the middle.
+</pre>
+<p><strong>Claim:</strong> a blinker that crosses the edge behaves exactly like a blinker in the middle. <strong>Why it matters:</strong> <code>count_neighbours</code> was tested for wrapping already, but <code>step</code> could still get it wrong by, for example, not calling <code>count_neighbours</code> for edge cells, or by special-casing the borders. This is the <strong>integration test</strong> for the torus: a test of several functions working together (<code>step</code> calling <code>count_neighbours</code> calling <code>wrap</code>), where the earlier tests checked each one alone. If it fails while the <code>count_neighbours</code> torus test passes, the bug is in <code>step</code>, not in the counting.</p>
+
+<pre class="code" data-lang="cpp" data-file="t_step_const.cpp" data-check="fragment"><code>TEST_CASE("step: does not modify current") {
+    Cells cur = grid_with(4, 4, {{1, 1}, {2, 1}, {1, 2}, {2, 2}});
+    Cells copy = cur;
+    Cells next(16, 0);
+    step(cur, next, 4, 4);
+    CHECK(cur == copy);
+}
+</code></pre>
+<p><strong>Claim:</strong> after <code>step</code>, <code>current</code> is unchanged. <strong>Why it matters:</strong> this is the one test case that passes with the stubs (a function that does nothing certainly does not modify its input), so it is the answer to the puzzle above. It is also the contract behind double buffering from chapter 7: <code>step</code> reads from one vector and writes to the other, and must never write into the one it is reading, because a cell that has already been updated would then influence its neighbours' counts in the same generation. The signature already says <code>const Cells&amp; current</code>, so the compiler refuses most ways of breaking this (<a href="05-references-and-const.html">chapter 5</a>). The test guards against the ways the compiler cannot see, such as a <code>step</code> that is given the same vector for both arguments, or a rewrite next week that drops the <code>const</code>.</p>
+
+<div class="callout principle"><span class="label">First principle</span><p>Notice what the thirteen tests never do: they never look inside your implementation. They call the six functions through the signatures in <code>life.hpp</code> and judge only the answers. This means you can rewrite <code>step</code> any way you like in chapter 13 and later, and the same thirteen tests still say whether it is correct. Tests that depend on <em>how</em> a function works break every time you improve it; tests that depend on <em>what</em> it returns are the ones worth having.</p></div>
+
+<h2>The rhythm for the rest of the week</h2>
+<p>You now know what every red line means. Here is the loop you will run in <a href="14-build-life.html">chapter 14</a>, in order:</p>
+<ol>
+<li><strong>Build.</strong> <code>cmake --build build</code>. If it does not compile, nothing else matters; read the first error, fix it, build again.</li>
+<li><strong>Run the test for the function you are on.</strong> <code>./build/life_tests -tc="index_of*"</code>. Read the <em>first</em> failing <code>CHECK</code>: the expression, then the <code>values:</code> line. Decide whether you believe the test (you should; but reading it carefully is how you find out what the function is meant to do).</li>
+<li><strong>Change one thing</strong> in <code>src/life.cpp</code>. One function, or one line of one function.</li>
+<li><strong>Build and run again.</strong> Did the number of failures go down? If it went up, you know exactly which edit did it, because you made only one.</li>
+<li><strong>When the test case is green, commit.</strong> <code>git add -A &amp;&amp; git commit -m "M1: index_of green"</code>. A commit per green test case gives you a trail you can always return to, and a sense of progress that is real rather than felt.</li>
+<li><strong>Run all thirteen</strong> before moving to the next milestone, to be sure the new function did not break an old one. This week that is unlikely, because each new function only calls the ones that are already green (<code>step</code> will call <code>count_neighbours</code>, which calls <code>wrap</code>, never the other way round), but the habit is the point. And it does catch one real mistake: going back to "improve" <code>wrap</code> while working on <code>step</code>.</li>
+</ol>
+
+<pre class="shell"><code>$ cmake --build build &amp;&amp; ./build/life_tests -tc="index_of*"
+</code></pre>
+
+<p>The <code>&amp;&amp;</code> between the two commands means "and then, only if the first succeeded". If the build fails, the tests do not run, and you are not confused by stale results from the previous binary. This one line is your most-typed command this week.</p>
+
+<div class="callout trap"><span class="label">Trap</span><p>Running <code>./build/life_tests</code> without rebuilding first. The executable in <code>build/</code> is whatever you last compiled; editing <code>life.cpp</code> changes the source file and nothing else. If a test keeps failing in a way that makes no sense given what you just wrote, check that you rebuilt. The <code>&amp;&amp;</code> form above makes this mistake impossible.</p></div>
+
+<div class="callout try"><span class="label">Try it</span><p>Before you implement anything, make the <code>index_of</code> stub return <code>x</code> instead of 0, rebuild, and run <code>-tc="index_of*"</code>. Two checks will pass and three will fail. Read the three <code>values:</code> lines and say out loud, for each one, what the stub got wrong. Then put the 0 back. Being able to read a failure as a sentence is the skill; the implementing comes in chapter 14.</p></div>
+
+<h2>Writing a test of your own</h2>
+<p>The thirteen tests are the <strong>acceptance criteria</strong>: the list of things that must be true for the week's work to count as done. But they are not everything you might worry about. When you find yourself thinking "what happens if the grid is tiny?", the answer is not to think harder; it is to write the question down as a test and let the computer answer. You add a <code>TEST_CASE</code> to <code>tests/life_test.cpp</code>, anywhere after <code>grid_with</code>, rebuild, and run it with <code>-tc</code>.</p>
+
+<p>Here is a worry worth having. On a grid that is only 2 columns wide, what is the left neighbour of a cell in column 0? Column -1, which wraps to column 1. And its right neighbour? Column 1. The same cell, twice. Here is the ring of columns for width 2:</p>
+
+<pre class="grid-figure">width 5:   ... 3 4 | 0 1 2 3 4 | 0 1 ...     left of 0 is 4, right of 0 is 1: different cells
+width 2:   ... 0 1 | 0 1 | 0 1 ...           left of 0 is 1, right of 0 is 1: the SAME cell
+</pre>
+
+<p>So on a 2-wide grid, a live cell in column 1 is seen from column 0 as both a left neighbour and a right neighbour, and contributes 2 to the count. Is that correct? The contract in <code>life.hpp</code> says "how many of the 8 neighbours of (x, y) are alive", and defines neighbours by position on a torus. On a torus of width 2 the eight positions around a cell are not eight distinct cells, so counting positions gives 2 and counting distinct cells gives 1. Both readings are defensible. What is <em>not</em> defensible is not knowing which one your code does. So you decide, and you write the decision down as a test. The eight-positions reading is the one that falls out of the straightforward stencil and the one the rest of this book assumes:</p>
+
+<pre class="code" data-lang="cpp" data-file="t_two_wide.cpp" data-check="fragment"><code>TEST_CASE("count_neighbours: on a 2-wide grid the other column is seen twice") {
+    // 2 columns, 3 rows; one live cell at (1, 1), the middle of the right column.
+    Cells g = grid_with(2, 3, {{1, 1}});
+    // From (0, 1): the left neighbour is column -1, which wraps to column 1.
+    // The right neighbour is column 1. Same cell, seen from both sides.
+    CHECK(count_neighbours(g, 2, 3, 0, 1) == 2);
+    // From (0, 0): the two lower diagonals (-1,+1) and (+1,+1) both land on (1, 1).
+    CHECK(count_neighbours(g, 2, 3, 0, 0) == 2);
+    // The live cell itself still does not count itself.
+    CHECK(count_neighbours(g, 2, 3, 1, 1) == 0);
+}
+</code></pre>
+
+<p>Push the same idea to the limit: a 1 by 1 grid. Every one of the eight neighbour positions wraps to the single cell. A live cell on a 1 by 1 torus therefore has eight live neighbours, all of them itself, and dies of overcrowding in the next generation. A dead one has zero and stays dead. Strange, but consistent with the rules as written, and a very good test of whether your <code>wrap</code> handles <code>n == 1</code> and offsets of both signs:</p>
+
+<pre class="code" data-lang="cpp" data-file="t_one_by_one.cpp" data-check="fragment"><code>TEST_CASE("1x1 grid: every neighbour position is the cell itself") {
+    Cells alive = grid_with(1, 1, {{0, 0}});
+    CHECK(count_neighbours(alive, 1, 1, 0, 0) == 8);
+
+    Cells dead(1, 0);
+    CHECK(count_neighbours(dead, 1, 1, 0, 0) == 0);
+
+    Cells next(1, 1);
+    step(alive, next, 1, 1);
+    CHECK(next[0] == 0);   // eight neighbours: dies
+}
+</code></pre>
+
+<p>Why bother with grids nobody will ever run? Because the edge cases are where the formula and your intuition disagree, and a test is the cheapest way to find out which one your code followed. A <code>wrap</code> that works for <code>n = 10</code> and breaks for <code>n = 1</code> (dividing by 1 is fine; but did you write <code>n - 1</code> somewhere?) is a real class of bug. And in week 13 you will run a cellular automaton over a 400 by 200 grid on several threads, each thread handling a strip a few rows tall, and a strip two rows tall has exactly this "my neighbour above and my neighbour below are the same row" property. The tiny grid is not a toy; it is the small version of a real situation.</p>
+
+<div class="callout note"><span class="label">Tests the main program cannot have</span><p>You will notice there is no test for <code>main</code>: argument parsing, the animated loop, the screen clearing. That is deliberate. <code>main</code> talks to a terminal and sleeps between frames, which a test cannot easily observe, and a test program already <em>has</em> a <code>main</code> (doctest's). This is the practical reason the contract puts all the logic in six free functions and leaves <code>main</code> thin: everything that can be wrong in an interesting way lives in a function that a test can call. Keep that shape in every project.</p></div>
+
+<h2>Numbers that are nearly equal</h2>
+<p>One more thing before the twin, because it will bite you the first time you test anything with a <code>double</code>. Two <code>double</code>s that should be equal often are not, by a hair, because the machine stores them in binary and most decimal fractions have no exact binary form (<a href="02-values-and-types.html">chapter 2</a>). Watch:</p>
+
+<pre class="code" data-lang="cpp" data-file="approx.cpp" data-check="fragment"><code>// approx.cpp — comparing numbers that are only "nearly" equal.
+#define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include "doctest.h"
+
+#include &lt;cmath&gt;
+
+TEST_CASE("0.1 + 0.2 is not exactly 0.3 in a double") {
+    double a = 0.1 + 0.2;
+    double b = 0.3;
+    CHECK(a == b);                        // fails: the two doubles differ in the last bits
+    CHECK(std::abs(a - b) &lt; 1e-9);        // passes: close enough for any purpose here
+    CHECK(a == doctest::Approx(b));       // doctest's built-in way of saying the same thing
+}
+</code></pre>
+
+<pre class="shell"><code>$ clang++ -std=c++23 -Wall -Wextra -I ../third_party/doctest approx.cpp -o approx
+$ ./approx
+[doctest] doctest version is "2.5.3"
+[doctest] run with "--help" for options
+===============================================================================
+approx.cpp:7:
+TEST CASE:  0.1 + 0.2 is not exactly 0.3 in a double
+
+approx.cpp:10: ERROR: CHECK( a == b ) is NOT correct!
+  values: CHECK( 0.3 == 0.3 )
+
+===============================================================================
+[doctest] test cases: 1 | 0 passed | 1 failed | 0 skipped
+[doctest] assertions: 3 | 2 passed | 1 failed |
+[doctest] Status: FAILURE!
+</code></pre>
+
+<p><code>values: CHECK( 0.3 == 0.3 )</code> looks absurd until you remember that doctest prints a <code>double</code> rounded to six significant digits, which is the default of C++'s older printing machinery. The two numbers differ around the seventeenth significant digit: <code>0.1 + 0.2</code> is stored as 0.30000000000000004, and <code>0.3</code> as 0.29999999999999999, exactly as <a href="02-values-and-types.html">chapter 2</a> showed with <code>{:.20f}</code>. The fix is never to compare floating-point numbers with <code>==</code>. Instead check that the difference is smaller than a <strong>tolerance</strong>, a small number you choose: <code>std::abs</code> (from <code>&lt;cmath&gt;</code>; take it on trust) gives the absolute value, so <code>std::abs(a - b)</code> is the distance between the two, and <code>1e-9</code> is the number 0.000000001. <code>doctest::Approx(b)</code> is doctest's own way of saying "anything within a tiny fraction of <code>b</code>": the comparison <code>a == doctest::Approx(b)</code> is true when <code>a</code> and <code>b</code> differ by less than about one part in a hundred thousand of their size, and when it fails the message shows both numbers. Integers, which is all Life uses, never have this problem; <code>0</code> and <code>1</code> are exact.</p>
+
+<div class="callout twin"><span class="label">Inference twin</span><p>In week 15 you will write a matrix multiply and need to know it is correct. The reference answer will come from PyTorch: a Python script dumps a tensor to a file, your C++ reads it, and your test says <code>CHECK(std::abs(mine[i] - reference[i]) &lt; 1e-5)</code> for every element. Same header, same <code>TEST_CASE</code>, same <code>CHECK</code>, same red-to-green loop; only the tolerance is new, because two correct matrix multiplies that add numbers in a different order produce answers that differ in the last bits. Every optimisation you make to that matmul over the following weeks (blocking, SIMD, quantisation, your own CUDA kernel) is accepted or rejected by exactly this test. The habit you build on Life this week, "change it, run the tests, read the first red line", is the habit you will use on a SmolLM2-135M forward pass.</p></div>
+
+<h2>Check yourself</h2>
+<div class="quiz">
+<div class="q"><p>A test file compiles cleanly but linking fails with a long list of <code>Undefined symbols</code> including <code>"_main"</code>. What did you forget?</p><details class="answer"><summary>Answer</summary><p>The line <code>#define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN</code> before <code>#include "doctest.h"</code>. Without it the header provides only declarations, so there is no test runner and no <code>main</code> for the linker to find. Exactly one file in the test program must have the define.</p></details></div>
+
+<div class="q"><p>A test case has five <code>CHECK</code>s. The second one fails. How many of the five run, and how many would run if the second were a <code>REQUIRE</code>?</p><details class="answer"><summary>Answer</summary><p>All five run with <code>CHECK</code>; doctest reports the failure and continues. With <code>REQUIRE</code>, only two run: the first (passes) and the second (fails, reported as <code>FATAL ERROR</code>), and the test case stops there. Other test cases still run either way.</p></details></div>
+
+<div class="q"><p>You run <code>./build/life_tests -tc="wrap"</code> and get <code>test cases: 0 | 0 passed | 0 failed | 13 skipped</code> and <code>Status: SUCCESS!</code>. Did the wrap tests pass?</p><details class="answer"><summary>Answer</summary><p>No. Nothing ran: the pattern is matched against the whole name, and no test is named exactly <code>wrap</code>; the one you wanted is <code>wrap: like a clock face</code>, which only <code>-tc="wrap*"</code> matches. Zero tests ran, so zero failed, and doctest calls that success. Always read the counts, not only the status word. Use <code>-ltc</code> to see the exact names.</p></details></div>
+
+<div class="q"><p>Why does the test "step: a lone cell dies" fill <code>next</code> with 1s before calling <code>step</code>, when a vector of 0s would be the natural choice?</p><details class="answer"><summary>Answer</summary><p>To prove that <code>step</code> writes every cell of <code>next</code>. If <code>next</code> started as all 0s, a <code>step</code> that only wrote live cells, or only wrote cells that changed, would pass by accident. Starting from the wrong value everywhere means every correct 0 in the result had to be written by <code>step</code>.</p></details></div>
+
+<div class="q"><p>The failure message says <code>CHECK( wrap(-1, 10) == 9 ) is NOT correct!</code> and <code>values: CHECK( -1 == 9 )</code>. Is the function wrong or the test wrong, and what is the likely bug?</p><details class="answer"><summary>Answer</summary><p>The function. <code>wrap(-1, 10)</code> should be 9 (one step back from 0 on a 10-hour clock). The left side evaluated to -1, which is exactly what <code>-1 % 10</code> gives in C++: the remainder keeps the sign of the dividend. The function is using <code>%</code> without correcting negative results. Chapter 7 showed the trap and how to think about it.</p></details></div>
+
+<div class="q"><p>Which of the thirteen test cases passes before you have written any code, and why?</p><details class="answer"><summary>Answer</summary><p>"step: does not modify current". The stub <code>step</code> does nothing, and a function that does nothing certainly leaves <code>current</code> unchanged. It is still a valuable test: it guards against a future <code>step</code> that writes into the vector it reads from, which would break double buffering.</p></details></div>
+
+<div class="q"><p>On a 2-wide grid, a live cell at (1, 1) is the only live cell. What does <code>count_neighbours(g, 2, 3, 0, 1)</code> return under the "eight positions" reading, and why?</p><details class="answer"><summary>Answer</summary><p>2. From (0, 1) the left neighbour is column -1, which wraps to column 1, and the right neighbour is column 1. Both positions are the same cell, (1, 1), and it is counted once for each position. The up-left, up-right, down-left and down-right positions land on (1, 0) and (1, 2), which are dead.</p></details></div>
+
+<div class="q"><p>Why is <code>CHECK(0.1 + 0.2 == 0.3)</code> a bad test, and what should you write instead?</p><details class="answer"><summary>Answer</summary><p>Because <code>double</code>s store most decimal fractions inexactly; <code>0.1 + 0.2</code> and <code>0.3</code> differ in the last bits and the <code>==</code> fails even though both are "right". Compare with a tolerance instead: <code>CHECK(std::abs(a - b) &lt; 1e-9)</code> or <code>CHECK(a == doctest::Approx(b))</code>. Integer comparisons do not have this problem.</p></details></div>
+</div>
+
+<h2>What you can do now</h2>
+<ul>
+<li>Explain why a test suite is the specification written as code, and why it makes changing <code>step()</code> safe next chapter.</li>
+<li>Write a complete doctest program from an empty file: the define, the include, <code>TEST_CASE</code>, <code>CHECK</code>, compiled with <code>-I ../third_party/doctest</code>.</li>
+<li>Read a failing check as a sentence: which file and line, which expression, what each side evaluated to, and whether the function or the test is wrong.</li>
+<li>Choose between <code>CHECK</code> and <code>REQUIRE</code>, and recognise <code>SUBCASE</code> when you see it.</li>
+<li>Run the Life tests all at once, one test case at a time with <code>-tc</code>, list them with <code>-ltc</code>, see passes with <code>-s</code>, and run them through <code>ctest --test-dir build --output-on-failure</code>.</li>
+<li>State, for each of the thirteen test cases in <code>tests/life_test.cpp</code>, what it claims and what mistake it would catch.</li>
+<li>Work in the red-to-green rhythm: build, run one test case, change one thing, rerun, commit on green.</li>
+<li>Turn a worry about an edge case (a 1 by 1 grid, a 2-wide grid) into a <code>TEST_CASE</code> of your own, and explain why wrapping on a 2-wide grid counts the same cell twice.</li>
+<li>Compare floating-point results with a tolerance instead of <code>==</code>, which is how you will test a matrix multiply against PyTorch in week 15.</li>
+</ul>
+</main>
+</body>
+</html>

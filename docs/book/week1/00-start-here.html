@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>00 · Start here — C++ from zero to Life</title>
+<link rel="stylesheet" href="assets/book.css?v=9">
+<link rel="stylesheet" href="assets/tutor.css?v=9">
+<script src="assets/theme.js?v=9"></script>
+<script defer src="assets/book.js?v=9"></script>
+<script defer src="assets/tutor.js?v=9"></script>
+</head>
+<body>
+<nav class="sidebar" aria-label="Chapters"></nav>
+<main>
+<p class="chapter-kicker">Chapter 00</p>
+<h1>Start here</h1>
+<p class="lede">By the end of this chapter you will know what you are building this week, why it was chosen, what is installed on your machine, where every file in the repo lives, how to run one C++ file from the terminal, and how to read the rest of this book. No C++ is taught yet. This is the map; the journey starts in <a href="01-what-a-program-is.html">chapter 1</a>.</p>
+
+<div class="callout note"><span class="label">In this chapter</span>
+<ul>
+<li>Who this book is for, and the one program you will build: Conway's Game of Life in the terminal.</li>
+<li>How the week runs: seven milestones, about 35 hours, a day-by-day plan.</li>
+<li>Your machine as it was actually found, and the two small things that are not set up yet.</li>
+<li>A tour of the repo and the rule in <code>CLAUDE.md</code>.</li>
+<li>Opening Terminal.app and running your first file with <code>tools/run.sh</code>.</li>
+<li>How to read this book: callouts, hidden hints, the done box, keyboard arrows.</li>
+<li>How to get unstuck, and a short contract with yourself.</li>
+</ul>
+</div>
+
+<h2>Who this is for</h2>
+<p>This book is for you: someone who is comfortable using a computer and has opened a terminal before, but who has never written C++ and may never have written a program at all. Nothing is assumed. Every word that has a special meaning is defined the first time it appears, in bold. If a chapter ever uses something before explaining it, the text will say so and tell you which chapter pays the debt.</p>
+<p>It is also the first week of a longer plan. <code>goal.md</code> at the root of the repo describes a 30-week curriculum that ends with you writing a quantised inference engine for a small Llama-architecture language model (SmolLM2-135M) in C++ and reading <code>llama.cpp</code> fluently. Those words (quantised, inference engine, SmolLM2-135M, <code>llama.cpp</code>) name the destination, not the first step. You do not need to know what any of them means today, and nothing in this week assumes you do. The first five weeks are terminal games. That is not a detour. The games are chosen so that the code you write has the same <em>shape</em> as inference code; only the names change later. This week's game, the Game of Life, is the purest example of that idea, which is why it comes first.</p>
+<p>You will spend about 35 hours this week. That is a real job's worth of attention. Protect it.</p>
+
+<h2>What you will build: the Game of Life</h2>
+<p>The Game of Life is not a game you play. It is a game you watch. There is a grid of square cells. Each cell is either <strong>alive</strong> or <strong>dead</strong>. Time moves in <strong>generations</strong>: you look at the whole grid, apply three rules to every cell at once, and that gives you the next grid. Then you do it again. From three simple rules come patterns with names. A <strong>glider</strong> is five cells that crawl across the grid. A <strong>blinker</strong> is three cells in a row that flip between lying flat and standing up, once per generation. A <strong>gun</strong> is a larger pattern that fires out a new glider every so often, forever. You will meet gliders and blinkers again in the tests this week.</p>
+<p>Here is a 10-wide, 6-tall grid. A <code>#</code> is a live cell, a <code>.</code> is a dead one. The five live cells form a <strong>glider</strong>, the most famous pattern in Life:</p>
+<pre class="grid-figure">     x: 0 1 2 3 4 5 6 7 8 9
+  y: 0  . . . . . . . . . .
+     1  . . # . . . . . . .
+     2  . . . # . . . . . .
+     3  . # # # . . . . . .
+     4  . . . . . . . . . .
+     5  . . . . . . . . . .
+</pre>
+<p>Two words you will use all week. A cell's position is written as <strong>(x, y)</strong>: <strong>x</strong> is the column, counted from 0 on the left; <strong>y</strong> is the row, counted from 0 at the top. So the top live cell of the glider is at (2, 1), and the bottom row of the glider is cells (1, 3), (2, 3) and (3, 3). Computers count from zero, and so does this book.</p>
+<p>A cell's <strong>neighbours</strong> are the eight cells that touch it: left, right, above, below, and the four diagonals. Every cell has exactly eight neighbours, no more and no fewer. That is true even for a cell on the edge of the grid; how an edge cell gets its eight is explained below, under the word <em>torus</em>.</p>
+
+<h3>The three rules</h3>
+<p>To compute the next generation, look at every cell, count how many of its eight neighbours are alive <em>right now</em>, and apply:</p>
+<ol>
+<li><strong>Survival.</strong> A live cell with 2 or 3 live neighbours stays alive.</li>
+<li><strong>Birth.</strong> A dead cell with exactly 3 live neighbours becomes alive.</li>
+<li><strong>Death.</strong> Every other cell is dead in the next generation. A live cell with 0 or 1 neighbours dies of loneliness; a live cell with 4 or more dies of overcrowding; a dead cell with any count other than 3 stays dead.</li>
+</ol>
+<table>
+<thead><tr><th>Cell now</th><th>Live neighbours</th><th>Cell next generation</th></tr></thead>
+<tbody>
+<tr><td>alive</td><td>0 or 1</td><td>dead</td></tr>
+<tr><td>alive</td><td>2 or 3</td><td>alive</td></tr>
+<tr><td>alive</td><td>4 to 8</td><td>dead</td></tr>
+<tr><td>dead</td><td>exactly 3</td><td>alive</td></tr>
+<tr><td>dead</td><td>anything else</td><td>dead</td></tr>
+</tbody>
+</table>
+<p>Apply the rules to four cells of the glider by hand. The letters mark the cells you are looking at; the grid is the same one as above, and the three <code>#</code> cells in row 3 are still alive.</p>
+<pre class="grid-figure">     x: 0 1 2 3 4 5 6 7 8 9
+  y: 0  . . . . . . . . . .
+     1  . . A . . . . . . .      A = (2,1)  alive, 1 live neighbour  -> dies
+     2  . B D C . . . . . .      B = (1,2)  dead,  3 live neighbours -> born
+     3  . # # # . . . . . .      C = (3,2)  alive, 3 live neighbours -> survives
+     4  . . . . . . . . . .      D = (2,2)  dead,  5 live neighbours -> stays dead
+     5  . . . . . . . . . .
+</pre>
+<p>Check A yourself. A is at (2,1), so its eight neighbours are the cells one step away in every direction: (1,0), (2,0), (3,0), (1,1), (3,1), (1,2), (2,2), (3,2). Look each one up in the figure. Only (3,2), which is C, is alive. One live neighbour is fewer than two, so A dies. Now check B, at (1,2). Its eight neighbours are (0,1), (1,1), (2,1), (0,2), (2,2), (0,3), (1,3), (2,3). Three of them are alive: (2,1), (1,3) and (2,3). Exactly three, so B is born.</p>
+<div class="callout try"><span class="label">Try it</span><p>On paper, do C and D the same way. Write down the eight neighbours of C = (3,2), look each one up, and count the live ones; you should get 3, so C survives. Then do D = (2,2); you should get 5, so D stays dead. Do not skip this. Counting eight neighbours and looking each one up is exactly what the <code>count_neighbours</code> function will do thousands of times a second, and the tests check counts just like these.</p></div>
+<p>Do the same for every one of the 60 cells and you get generation 1:</p>
+<pre class="grid-figure">     x: 0 1 2 3 4 5 6 7 8 9
+  y: 0  . . . . . . . . . .
+     1  . . . . . . . . . .
+     2  . # . # . . . . . .
+     3  . . # # . . . . . .
+     4  . . # . . . . . . .
+     5  . . . . . . . . . .
+</pre>
+<p>Four generations later the glider looks exactly like it did at the start, but one cell down and one cell to the right. It glides. Your program will show this happening live in the terminal, many times a second, on a grid as big as your terminal window.</p>
+
+<div class="callout trap"><span class="label">Trap</span><p>All cells change <em>at the same time</em>. When you count the neighbours of B, you count them in the <em>current</em> grid, not in a grid where A has already died. If you update cells one by one in place, later cells see a mixture of old and new, and the glider falls apart. This is why your program will keep two grids, the current one and the next one. <a href="07-flat-grid.html">Chapter 7</a> teaches this with a one-dimensional <strong>automaton</strong>: a single row of cells with a rule of its own. It has all the same moving parts as Life (two rows, a swap, neighbours, wrapping) and is much smaller.</p></div>
+
+<p>One more rule. It is not one of Life's three rules; it is a decision about what happens at the edges of the grid, and the challenge makes the decision for you: the grid is a <strong>torus</strong>. The left edge touches the right edge and the top touches the bottom, like a map of a world that wraps around. On the 10-wide, 6-tall grid above, a cell at x = 0 has a left neighbour at x = 9, and a cell at y = 0 has a neighbour above it at y = 5. The corner cell (0, 0) touches both edges at once, so its upper-left diagonal neighbour is the opposite corner, (9, 5). This is how every cell, edge or not, has exactly eight neighbours. The glider never falls off; it comes back round the other side. The <code>wrap</code> function in the challenge is exactly this idea.</p>
+
+<div class="callout analogy"><span class="label">Analogy</span><p>Think of the grid as a sheet of graph paper and each generation as a photocopy with corrections. You never write on the original while reading it; you read the original, write the copy, then throw away the original and the copy becomes the new original. <em>Where it breaks:</em> a photocopier copies everything, but your program does no copying at all. It reuses the same two sheets forever, swapping which one is "original" after each generation. That swap costs almost nothing. Copying a million cells every generation would cost a great deal, and a large part of the program's speed comes from never doing it.</p></div>
+
+<h3>Why Life</h3>
+<p>Here is the honest reason Life is the first project rather than a calculator or a to-do list. Inside a computer, the grid is not a grid. It is one long row of numbers, one per cell, laid end to end: row 0, then row 1, then row 2. To find the cell at (x, y) you compute <em>y × width + x</em> and look that far along the row. On the 10-wide grid above, the top cell of the glider, (2, 1), is at position 1 × 10 + 2 = 12: skip the ten cells of row 0, then two more. The cell (0, 0) is at position 0 and the last cell, (9, 5), is at position 5 × 10 + 9 = 59, which is why a 10 × 6 grid has 60 cells. To compute one generation, you visit every position, read the eight numbers around it, add them up, and write one number into the second long row. Computer scientists call this a <strong>3 × 3 stencil over a flat array</strong>: <em>flat array</em> because the numbers lie in one line, <em>stencil</em> because you read the same 3 × 3 pattern of positions around every cell, like moving a stencil across a page.</p>
+<div class="callout twin"><span class="label">Inference twin</span><p><code>goal.md</code> says every challenge has an <em>inference twin</em>: the inference concept it is secretly teaching. You do not need to understand the rest of this box today; it is here so you can see the shape of the road. For Life, the twin is this: a <em>tensor</em>, the block of numbers a neural network is made of, is a flat array plus a shape, exactly like your grid is a flat array plus a width and a height. The Life step, which reads a 3 × 3 window around each cell and writes one result, has the same shape as the kernels (small loops over numbers) that make up a neural network, and the two-grid swap is the <em>ping-pong buffering</em> those kernels use so that no read sees a half-written result. In week 15 you write a tensor library whose every loop looks like the one you write this week, and in week 22 you port this same program to a GPU. You are not learning C++ "for later". You are learning the exact mechanics now, with a game you can see.</p></div>
+
+<h2>How the week runs</h2>
+<p>The challenge is in <code>phase1-terminal/01-life/</code>. Three words in this section are used before their chapters; take them on trust for now. A <strong>function</strong> is a named piece of a program that does one job and hands back an answer (<a href="04-functions.html">chapter 4</a>). A <strong>header file</strong> is a file that lists functions by name and says what each one takes and gives back, without saying how it works (<a href="10-headers-and-files.html">chapter 10</a>). A <strong>test</strong> is a tiny program that calls a function with known inputs and complains if the answer is wrong (<a href="12-testing.html">chapter 12</a>).</p>
+<p>The challenge's header file, <code>src/life.hpp</code>, declares six functions and says precisely what each must do. Its test file, <code>tests/life_test.cpp</code>, contains 13 small tests that call those functions and check the answers. Right now every function is a <strong>stub</strong>: a placeholder that compiles but hands back a made-up answer, usually 0. So twelve of the thirteen tests fail. A failing test is called <strong>red</strong> and a passing one <strong>green</strong>, after the colours the test program prints. (The one green test only checks that <code>step</code> leaves the current grid untouched, which a stub that does nothing manages by accident.) The week is over when all thirteen are green, the program animates on your screen, and you have written one number into <code>BENCH.md</code>.</p>
+
+<h3>Seven milestones</h3>
+<p>The work is split into seven <strong>milestones</strong>, each a thing you can finish and test before moving on. The stubs in <code>life.cpp</code> name their milestone in a comment, and <a href="14-build-life.html">chapter 14</a> has a hint ladder for each one.</p>
+<table>
+<thead><tr><th>Milestone</th><th>What you make work</th><th>Chapters it needs</th></tr></thead>
+<tbody>
+<tr><td><strong>M1</strong></td><td><code>index_of</code>: turn (x, y) into a position in the flat array.</td><td>1–4, 7</td></tr>
+<tr><td><strong>M2</strong></td><td><code>random_cells</code> and <code>render</code>: a random starting grid, and the grid as text.</td><td>6, 7, 8</td></tr>
+<tr><td><strong>M3</strong></td><td><code>wrap</code> and <code>count_neighbours</code>: the clock-face wrap, then the 3 × 3 count on a torus.</td><td>7</td></tr>
+<tr><td><strong>M4</strong></td><td><code>step</code>: one generation, from the current grid into the next.</td><td>5, 6, 7</td></tr>
+<tr><td><strong>M5</strong></td><td><code>main</code> with command-line arguments and a single static print of the grid.</td><td>8</td></tr>
+<tr><td><strong>M6</strong></td><td><code>main</code> as an animated loop: clear the screen, draw, step, swap, sleep.</td><td>9</td></tr>
+<tr><td><strong>M7</strong></td><td>The benchmark: time one step on a 1000 × 1000 grid and fill in <code>BENCH.md</code>.</td><td>11, 13</td></tr>
+</tbody>
+</table>
+
+<h3>A day plan</h3>
+<p>About 45 hours over two six-day weeks (Mon 9 Nov to Sat 21 Nov 2026), roughly four to five hours a day with Sundays off. Week 1 is chapters 0 to 10 and the first four milestones (the tests go green); week 2 is chapters 11 to 14, the game itself and the benchmark. Saturdays are strand days: a measurement experiment and, from week 2, a short maths slot (goal.md, section 10).</p>
+<table>
+<thead><tr><th>Day</th><th>Do</th><th>You end the day able to</th></tr></thead>
+<tbody>
+<tr><td>1–2</td><td>Chapters 1–6: a program, values, decisions and loops, functions, references, <code>std::vector</code>.</td><td>Write a 40-line program with loops and functions that compiles cleanly.</td></tr>
+<tr><td>3</td><td>Chapters 7–9: the flat grid, strings and arguments, the terminal.</td><td>Draw a wrapping one-dimensional automaton that animates in the terminal.</td></tr>
+<tr><td>4</td><td>Chapters 10–13: headers, CMake, doctest, timing.</td><td>Build the challenge with CMake, run its tests (twelve of thirteen red), run the benchmark on the stubs.</td></tr>
+<tr><td>5–6</td><td><a href="14-build-life.html">Chapter 14</a>: milestones M1 through M6.</td><td>Watch gliders on your own grid.</td></tr>
+<tr><td>7</td><td>M7, <code>BENCH.md</code>, a short write-up, final commit.</td><td>Point at a number and explain where it came from.</td></tr>
+</tbody>
+</table>
+<p>If a day slips, let it slip. Do not skip a chapter to catch up; every chapter is used by the one after it. The rule from <code>goal.md</code> is firm on one point only: nothing is half-finished. The week ends with a runnable program and a number, even if the week takes nine days.</p>
+
+<h2>Your machine, as actually found</h2>
+<p>Before the book was written, your machine was inspected. Here is what is there, so you never wonder whether a problem is you or the setup.</p>
+<table>
+<thead><tr><th>Thing</th><th>Found</th><th>Status</th></tr></thead>
+<tbody>
+<tr><td>Hardware</td><td>Apple M5, 10 cores, 24 GB memory</td><td>Plenty. A 1000 × 1000 grid is one million cells at one byte each, so one million bytes per grid. Two grids are two million bytes; 24 GB is about 25,000 million bytes, so the whole game uses less than one ten-thousandth of your memory.</td></tr>
+<tr><td>Operating system</td><td>macOS 26.7.2</td><td>Fine.</td></tr>
+<tr><td>Compiler</td><td>Apple clang 21.0.0</td><td>Supports C++23 including <code>std::println</code>. This is the compiler the book uses everywhere.</td></tr>
+<tr><td>Build tools</td><td>CMake 4.4.5, Ninja 1.13.2</td><td>Installed. Needed from <a href="11-cmake.html">chapter 11</a>.</td></tr>
+<tr><td>Version control</td><td>git 2.50.1; <code>gh</code> logged in</td><td>Ready to commit and push.</td></tr>
+<tr><td>Formatter and linter</td><td>Homebrew LLVM 23.1.5 is installed, but <code>clang-format</code> and <code>clang-tidy</code> are <strong>not on your PATH</strong></td><td>Fix: put a shortcut to each of the two programs into <code>/opt/homebrew/bin</code>, a folder that is already on your PATH. Such a shortcut is called a <strong>symbolic link</strong> and is made with the <code>ln -s</code> command; the two exact commands are in <code>docs/setup.md</code>. (Do not put the whole LLVM <code>bin</code> folder on PATH: it holds a second <code>clang++</code> that would hide Apple's.) The pre-commit hook that checks formatting already knows the full path, so commits work either way.</td></tr>
+<tr><td>Text editor</td><td>Zed is installed (<code>Zed.app</code> in Applications); <code>nano</code> and <code>nvim</code> work inside the terminal. VS Code is <strong>not</strong> installed.</td><td>Any of these will do. The book needs only a plain-text editor; it never depends on editor features.</td></tr>
+<tr><td>Google Benchmark</td><td>Not installed</td><td>Not needed until week 6 (<code>brew install google-benchmark</code>). This week's benchmark uses only the standard library's clock.</td></tr>
+<tr><td>Linux containers</td><td>Docker 29.8.2 and OrbStack 2.2.5 present</td><td>Not needed until week 6.</td></tr>
+<tr><td>Python</td><td>python3 3.9.6</td><td>Fine for glue (the book checker is a Python script). Never study time.</td></tr>
+</tbody>
+</table>
+<p>The full report, including the exact commands that were run and the fix commands, is in <a href="../../setup.md">docs/setup.md</a>. The only action you might take today is the <code>clang-format</code> fix, and only if you want to run the formatter by hand this week. Everything the book needs already works.</p>
+
+<div class="callout note"><span class="label">A word that will keep appearing</span><p><strong>PATH</strong> is a list of folders that the shell (the program that reads the commands you type; more on it below) searches when you type a command name. If you type <code>clang-format</code> and the shell says <code>command not found</code>, the program may well be installed; it is just in a folder that is not on the list. You can always run it by its full path, <code>/opt/homebrew/opt/llvm/bin/clang-format</code>, and the fix in <code>docs/setup.md</code> simply puts a link to it in a folder that <em>is</em> on the list.</p></div>
+
+<h2>A tour of the repo</h2>
+<p>Everything lives in one folder, <code>cpp-101</code>, which this book calls the <strong>repo root</strong>. Every path in this book is written relative to it. Here is what is inside and what each thing is for.</p>
+<table>
+<thead><tr><th>Path</th><th>What it is</th></tr></thead>
+<tbody>
+<tr><td><code>goal.md</code></td><td>The 30-week curriculum: thesis, toolchain decisions, the phase map, and the inference twin for every week. Read the Thesis and the week 1 row once; come back to it when you want to know why.</td></tr>
+<tr><td><code>README.md</code></td><td>The map of the repo: phases, progress, and the benchmark table that grows every week.</td></tr>
+<tr><td><code>CLAUDE.md</code></td><td>The tutor rules. Claude explains, generates challenges, and reviews your finished code. Claude never writes solutions. More on this below.</td></tr>
+<tr><td><code>CONCEPTS.md</code></td><td>The concept graph: every C++ and inference idea in the curriculum, and which week's challenge teaches it. Skim the week 1 rows later in the week.</td></tr>
+<tr><td><code>docs/</code></td><td>This book (<code>docs/book/week1/</code>), the machine report <code>docs/setup.md</code>, the method notes <code>docs/methodology.md</code>, and <code>docs/log/</code> for a short weekly log.</td></tr>
+<tr><td><code>phase1-terminal/01-life/</code></td><td>The week 1 challenge. Detailed below.</td></tr>
+<tr><td><code>third_party/doctest/doctest.h</code></td><td>The testing library, a single file, vendored so there is nothing to install. <a href="12-testing.html">Chapter 12</a>.</td></tr>
+<tr><td><code>tools/run.sh</code></td><td>Compiles one C++ file with the week's flags and runs it. You will use it hundreds of times. Shown below.</td></tr>
+<tr><td><code>tools/book-check.py</code></td><td>Compiles and runs every example in this book to make sure the printed outputs are real. You do not need to run it.</td></tr>
+<tr><td><code>scratch/</code></td><td>Your sandbox for throwaway experiments. It is <strong>git-ignored</strong>: its name is listed in the repo's <code>.gitignore</code> file, so git never records anything inside it (except its own <code>README.md</code>), and you can make any mess you like.</td></tr>
+<tr><td><code>common/</code></td><td>Only a <code>README.md</code> for now. Tiny headers you grow yourself in later weeks.</td></tr>
+</tbody>
+</table>
+<div class="callout note"><span class="label">Four git words</span><p>This chapter uses a few words from <strong>git</strong>, the program that keeps the history of the repo, without teaching git. A <strong>commit</strong> is one saved snapshot of your files, with a short message saying what changed. To <strong>push</strong> is to send your commits to GitHub, so they exist somewhere other than your laptop. A <strong>pre-commit hook</strong> is a small script that git runs just before it saves a commit; this repo's hook checks that your C++ is formatted. Right now the repo has no commits at all; your first one will be this week. The handful of commands you need are in <a href="15-appendix.html#git-for-the-week">chapter 15, "git for the week"</a>.</p></div>
+
+<h3>Inside the challenge folder</h3>
+<table>
+<thead><tr><th>File</th><th>What it is</th></tr></thead>
+<tbody>
+<tr><td><code>README.md</code></td><td>The frozen spec: concept, inference twin, the six-function contract in words, the seven milestones, acceptance tests and stretch goals. Written before the week starts so the goalposts cannot move.</td></tr>
+<tr><td><code>src/life.hpp</code></td><td>The <strong>contract</strong>: the six functions, their exact names and parameters, and comments saying what each must do. You do not change this file. Read it today, even though you cannot yet read C++; the comments are in English.</td></tr>
+<tr><td><code>src/life.cpp</code></td><td>Where you write. Six stubs, each marked <code>TODO(you): milestone N</code>.</td></tr>
+<tr><td><code>src/main.cpp</code></td><td>The program people run. A stub with a four-line plan in its comment; you replace it in M5 and M6.</td></tr>
+<tr><td><code>tests/life_test.cpp</code></td><td>13 test cases, written with <code>doctest</code>, the testing library from <a href="12-testing.html">chapter 12</a>. One small claim each, in milestone order. Your job is to turn them green.</td></tr>
+<tr><td><code>bench/bench_life.cpp</code></td><td>The benchmark. Given to you complete; it times 20 steps on a 1000 × 1000 grid and prints milliseconds per step and nanoseconds per cell.</td></tr>
+<tr><td><code>CMakeLists.txt</code></td><td>The build recipe that turns the sources into three programs: <code>life</code>, <code>life_tests</code>, <code>life_bench</code>. <a href="11-cmake.html">Chapter 11</a> explains every line.</td></tr>
+<tr><td><code>BENCH.md</code></td><td>An empty table with columns for date, machine, build type, grid size and timings. You fill it in on day 7.</td></tr>
+</tbody>
+</table>
+
+<h3>The rule in CLAUDE.md</h3>
+<p>The repo contains a file that tells Claude how to behave when you ask it for help: explain any concept, generate practice problems, review code you have finished, but <strong>never write the solution</strong> to a challenge function. This book follows the same rule. It teaches every mechanism you need with complete, working examples, but always on a different problem that is one step away from the answer. You will learn flat indexing on a multiplication table, wrap-around on a clock face, and the two-buffer stencil on a one-dimensional automaton. Then you will write the two-dimensional version yourself.</p>
+<div class="callout principle"><span class="label">First principle</span><p>You learn to program by producing programs, not by reading them. Reading a correct <code>step</code> function takes two minutes and leaves nothing behind. Writing it takes an hour, during which you discover that you forgot the torus, that your loop ran one too far, and that counting the cell itself as its own neighbour gives nonsense. Each of those mistakes, found and fixed by you, becomes a thing you know. A pasted solution skips exactly the part that was the learning. That is why the rule exists, and why it applies to you as much as to Claude.</p></div>
+
+<h2>Your first time in the terminal</h2>
+<p>Everything this week happens in the terminal: compiling, running, testing, committing. Open it now and run one program.</p>
+
+<h3>Opening Terminal.app</h3>
+<p>Press <kbd>Cmd</kbd> + <kbd>Space</kbd> to open Spotlight, type <code>Terminal</code>, and press <kbd>Return</kbd>. (It also lives in <code>/System/Applications/Utilities/Terminal.app</code>.) A window appears with a line of text ending in a <code>%</code> and a blinking cursor. That line is the <strong>prompt</strong>.</p>
+
+<h3>What a shell prompt is</h3>
+<p>The program running inside the terminal window is the <strong>shell</strong>. On your Mac it is <code>zsh</code>. The shell waits for you to type a command, runs it, shows you what it printed, and then shows the prompt again to say "your turn". The prompt itself is just text; the default one looks something like <code>dan@dans-MacBook-Air cpp-101 %</code>: your user name, your machine's name, the folder you are currently in, and <code>%</code>. The folder you are in is called the <strong>working directory</strong>, and most commands act on files relative to it. A brand-new terminal window always starts in your home folder, <code>/Users/dan</code>, so the first thing you do in every new window is move to the repo.</p>
+<p>In this book, shell blocks show commands on lines beginning with <code>$ </code>. The <code>$</code> stands for your prompt; do not type it. Lines without <code>$ </code> are what the computer printed back. Try these three commands. Type each one and press <kbd>Return</kbd>:</p>
+<pre class="shell"><code>$ cd ~/Desktop/projects/cpp-101
+$ pwd
+/Users/dan/Desktop/projects/cpp-101
+$ ls
+CLAUDE.md  CONCEPTS.md  README.md  common  docs  goal.md  phase1-terminal  scratch  third_party  tools
+</code></pre>
+<p><code>cd</code> means <em>change directory</em>: it moves your working directory to the repo root. The <code>~</code> is short for your home folder, <code>/Users/dan</code>. <code>pwd</code> means <em>print working directory</em>: it tells you where you are. <code>ls</code> lists what is in the current folder. (Your shell may be set up to show the listing in a different layout or with icons; the names are what matter.) Every shell block in this book assumes you are at the repo root, so <code>cd</code> there first whenever you open a new terminal window.</p>
+
+<div class="callout analogy"><span class="label">Analogy</span><p>The shell is a receptionist at a desk. You say a command, the receptionist goes away, does it, puts the result on the desk, and comes back to the desk to wait for the next request. The prompt is the receptionist being back at the desk. <em>Where it breaks:</em> a receptionist understands intent. The shell understands only exact spelling. <code>tools/run.sh</code> and <code>tools/Run.sh</code> are different names, and a missing space can turn one command into another.</p></div>
+
+<h3>Running one file with tools/run.sh</h3>
+<p>Now create your first program. Open a plain-text editor. Zed is already installed on your Mac, in the Applications folder. If you would rather stay in the terminal, <code>nano scratch/hello.cpp</code> opens a small editor right there; <kbd>Ctrl</kbd> + <kbd>O</kbd> then <kbd>Return</kbd> saves, and <kbd>Ctrl</kbd> + <kbd>X</kbd> quits. TextEdit also works if you set it to plain text in its Format menu. Do not use a word processor such as Pages: it saves fonts and layout along with your words, and the compiler wants bare characters only.</p>
+<p>Create a new file, type the six lines below exactly (the empty second line counts), and save it as <code>hello.cpp</code> inside the repo's <code>scratch/</code> folder, which already exists. The <code>.cpp</code> ending tells both you and the compiler that the file holds C++ source code.</p>
+<p>You will not understand these lines yet; that is the whole point of <a href="01-what-a-program-is.html">chapter 1</a>. Take them on trust for the next hour: the first line borrows the ability to print, <code>int main()</code> is where every C++ program begins, <code>std::println</code> prints a line of text, and <code>return 0</code> reports success.</p>
+<pre class="code" data-lang="cpp" data-file="hello.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int main() {
+    std::println("Hello, Life.");
+    return 0;
+}
+</code></pre>
+<p>When it runs, the program prints exactly one line:</p>
+<pre class="output" data-for="hello.cpp"><code>Hello, Life.
+</code></pre>
+<p>To make that happen, go back to the terminal, make sure you are at the repo root (<code>pwd</code> should print <code>/Users/dan/Desktop/projects/cpp-101</code>), and type the command on the <code>$</code> line. The whole exchange looks like this:</p>
+<pre class="shell"><code>$ tools/run.sh scratch/hello.cpp
+Hello, Life.
+</code></pre>
+<p>Something real just happened. <code>tools/run.sh</code> is a short script that does two things. First it calls the <strong>compiler</strong>, a program named <code>clang++</code>, which reads your text file and writes a new file containing instructions the M5 chip can execute. The script passes the compiler the week's flags: speak C++23, report every warning, and build in a set of safety checks called <strong>sanitizers</strong>. Sanitizers turn memory mistakes into readable error messages instead of silent nonsense. The new file is written to <code>/tmp</code>, a system folder for temporary files, never next to your source. Second, the script runs that new file, which prints <code>Hello, Life.</code>, and then deletes it so nothing piles up. <a href="01-what-a-program-is.html">Chapter 1</a> opens up each of these steps; <a href="11-cmake.html">chapter 11</a> explains the flags.</p>
+<p>The script is used like this throughout the book. If a program needs arguments, they go after the file name: <code>tools/run.sh scratch/life_demo.cpp 40 20</code>.</p>
+
+<div class="callout trap"><span class="label">Trap</span><p>Running the script from the wrong folder. If you see this:</p>
+<pre class="shell"><code>$ tools/run.sh scratch/hello.cpp
+zsh: no such file or directory: tools/run.sh
+</code></pre>
+<p>nothing is broken. The shell looked for a folder called <code>tools</code> inside your <em>current</em> working directory and found none, because you are not at the repo root. Type <code>pwd</code> to see where you are, then <code>cd ~/Desktop/projects/cpp-101</code> and try again. This is the single most common error of the first day, and it will happen to you every time you open a new terminal window and forget to <code>cd</code>.</p></div>
+
+<div class="callout try"><span class="label">Try it</span><p>Change the text inside the quotes to something else, save, and run the script again. Then add a second <code>std::println</code> line under the first, with different text, and run it a third time. The program should print two lines, in the order you wrote them. You have now written, compiled and run three programs.</p></div>
+<details class="answer"><summary>Show one possible two-line version</summary>
+<pre class="code" data-lang="cpp" data-file="hello_two.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int main() {
+    std::println("Hello, Life.");
+    std::println("Generation 1.");
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="hello_two.cpp"><code>Hello, Life.
+Generation 1.
+</code></pre>
+<p>Each <code>std::println</code> prints its text and then ends the line, so the second one starts on a fresh line. <a href="01-what-a-program-is.html">Chapter 1</a> explains the rest.</p>
+</details>
+
+<h2>How to read this book</h2>
+<p>Each chapter introduces one group of ideas, in a fixed rhythm: a problem, the smallest complete program that solves it, the program's exact output, then wider use. Every program in the book is complete. You can type it, run it with <code>tools/run.sh</code>, and see precisely the output printed below it, because a script compiled and ran every one of them before the book was published.</p>
+
+<h3>The callouts</h3>
+<p>Coloured boxes mark five kinds of aside. You have met all of them in this chapter:</p>
+<ul>
+<li><strong>First principle</strong>: the underlying reason something is the way it is. What the machine is actually doing. Slow down here.</li>
+<li><strong>Analogy</strong>: a picture from everyday life that helps the idea land, always followed by the place where the picture stops being true. The second half matters more than the first.</li>
+<li><strong>Inference twin</strong>: where the thing you are doing this week reappears in inference engineering, months from now. Read it once; do not dwell.</li>
+<li><strong>Trap</strong>: a mistake almost everyone makes at this point. Read it before you make it; then make it anyway, and recognise it.</li>
+<li><strong>Try it</strong>: a small experiment to do right now, in <code>scratch/</code>, before reading on. These are not optional.</li>
+</ul>
+<p>Plain boxes with other labels, like "In this chapter", are notes.</p>
+
+<h3>Hidden hints and answers</h3>
+<p>Some exercises have help folded away behind a line you can click:</p>
+<details class="hint"><summary>Stuck? First nudge</summary><p>This is what a hint looks like. Hints come in ladders of up to four rungs: the first says where to look, the second gives the idea in plain words, the third gives the shape (which loop goes where, what to test first), and the fourth names the arithmetic or the one detail that usually goes wrong (a cast, a seed, a swap). No rung ever contains the code. Open one at a time and go back to work after each.</p></details>
+<details class="answer"><summary>Show the answer</summary><p>This is what an answer looks like. Open it only after you have written your own and want to compare. For the challenge functions themselves there are no answers anywhere in this book, by design.</p></details>
+
+<h3>Moving around</h3>
+<p>The chapter list is on the left (on a narrow window, behind the "Chapters" button). At the bottom of every chapter is a checkbox, <em>I have worked through this chapter</em>. Ticking it marks the chapter done in the sidebar; the mark is saved in this browser only. Below the checkbox are links to the previous and next chapters. The <kbd>←</kbd> and <kbd>→</kbd> arrow keys do the same thing. Every chapter ends with "Check yourself", four to eight questions with hidden answers, and "What you can do now", a plain list of what you have gained. If you cannot answer the questions, reread before moving on; the next chapter will assume you can.</p>
+
+<h2>How to get unstuck</h2>
+<p>You will get stuck. It is part of the job, not a sign that you are bad at it. Here is the order to try things in.</p>
+
+<h3>1. Read the first compiler error</h3>
+<p>When the compiler refuses a program, it prints an <strong>error message</strong>. Here is a program with one character missing: the semicolon at the end of the fourth line. Save it as <code>scratch/missing_semicolon.cpp</code>, run it with <code>tools/run.sh scratch/missing_semicolon.cpp</code>, and the compiler answers with the text shown below it.</p>
+<pre class="code" data-lang="cpp" data-file="missing_semicolon.cpp" data-check="error"><code>#include &lt;print&gt;
+
+int main() {
+    std::println("Hello, Life.")
+    return 0;
+}
+</code></pre>
+<pre class="output"><code>scratch/missing_semicolon.cpp:4:33: error: expected ';' after expression
+    4 |     std::println("Hello, Life.")
+      |                                 ^
+      |                                 ;
+1 error generated.
+</code></pre>
+<p>Read it piece by piece. <code>scratch/missing_semicolon.cpp</code> is the file. <code>4:33</code> is line 4, character 33. <code>error:</code> says this is fatal, as opposed to a <code>warning:</code>, which lets the program build but should still be fixed. <code>expected ';' after expression</code> is the complaint in English. (An <strong>expression</strong> is a piece of code that works out a value or does one thing; here it is the <code>std::println(...)</code> call. In C++ every such piece ends with a semicolon. <a href="01-what-a-program-is.html">Chapter 1</a> explains why.) Then the compiler shows you the line, points a <code>^</code> at the exact spot, and here even suggests the fix underneath. Most errors are this kind: a typo, a missing character, a misspelt name.</p>
+<p>When there are several errors, <strong>read the first one only</strong>, fix it, and compile again. Later errors are often not real; they are the compiler guessing badly after the first mistake confused it. Here one missing line produces two errors at once. Save this as <code>scratch/missing_include.cpp</code> and run it:</p>
+<pre class="code" data-lang="cpp" data-file="missing_include.cpp" data-check="error"><code>int main() {
+    std::println("Hello, Life.");
+    std::println("Goodbye, Life.");
+    return 0;
+}
+</code></pre>
+<pre class="output"><code>scratch/missing_include.cpp:2:5: error: use of undeclared identifier 'std'
+    2 |     std::println("Hello, Life.");
+      |     ^
+scratch/missing_include.cpp:3:5: error: use of undeclared identifier 'std'
+    3 |     std::println("Goodbye, Life.");
+      |     ^
+2 errors generated.
+</code></pre>
+<p>An <strong>identifier</strong> is a name, and <em>undeclared</em> means the compiler has never heard of it. Both <code>std::println</code> lines are fine as written. What is missing is <code>#include &lt;print&gt;</code> at the top, which is the line that introduces the name <code>std</code> and everything in it to the compiler. Fix the cause of the first error and the second one disappears too, without you touching line 3. <a href="15-appendix.html">Chapter 15</a> has a table of the error messages you are most likely to meet this week, each with what it usually means.</p>
+
+<div class="callout trap"><span class="label">Trap</span><p>Scrolling to the bottom of a wall of errors and starting there. The bottom is the least reliable part. Scroll to the top, find the first line containing <code>error:</code>, and read only that.</p></div>
+
+<h3>2. Climb the hint ladder</h3>
+<p>If the program compiles but does the wrong thing, or you do not know how to begin, open the first hint for that exercise. Go back and try. Only then open the second. <a href="14-build-life.html">Chapter 14</a> has a ladder for every milestone, written to get close to the answer without giving it.</p>
+
+<h3>3. Ask Claude to explain, not to solve</h3>
+<p>Ask a question about the <em>idea</em>, with your actual code and your actual error message pasted in. Good: "Here is my <code>count_neighbours</code> and the failing test. Why does the edge test fail when the interior test passes?" Also good: "Explain what <code>%</code> does with a negative number, with an example." Not useful to you: "Write <code>count_neighbours</code>." <code>CLAUDE.md</code> makes Claude decline that anyway, but the point is that the answer would not help you.</p>
+
+<h3>4. Take a walk</h3>
+<p>After forty minutes without progress, stop. Go outside for fifteen minutes without the problem in your hands. A surprising number of bugs are found on the way back to the desk. This is not a soft suggestion; it is one of the most reliable debugging techniques there is, and the only one on this list that costs nothing.</p>
+
+<div class="callout principle"><span class="label">First principle</span><p><strong>Type every program yourself. Do not paste.</strong> Each code block has a copy button; it is there for checking your version against the book's, not for skipping the typing. When you type a program, your fingers meet every semicolon, every bracket, every <code>std::</code>. You make small mistakes, the compiler points at them, and you learn to read its messages on tiny problems before you meet them on large ones. Typing is slow by exactly the amount that learning takes.</p></div>
+
+<h2>A contract with yourself</h2>
+<p>Three habits, kept all week, make the difference between a week that produced a program and a week that produced an engineer. Write these down somewhere you will see them.</p>
+<ol>
+<li><strong>One commit per milestone.</strong> When M1 passes its test, commit with a message that says so. Seven milestones, at least seven commits. The history is your evidence trail, and <code>goal.md</code> calls the repo your application.</li>
+<li><strong>Tests green before moving on.</strong> Do not start M4 while an M3 test is red. A red test is the cheapest bug you will ever have; a red test you ignored becomes an expensive one two milestones later.</li>
+<li><strong><code>BENCH.md</code> filled in.</strong> The week is not over when the glider moves. It is over when there is a number in the table, with the date and the machine, and a sentence about what you expected and what you saw.</li>
+</ol>
+<p>That is the whole orientation. The next chapter opens <code>hello.cpp</code> back up and explains, line by line, what a program actually is.</p>
+
+<h2>Check yourself</h2>
+<div class="quiz">
+<div class="q"><p>A live cell has exactly four live neighbours. What happens to it in the next generation?</p><details class="answer"><summary>Answer</summary><p>It dies. A live cell survives only with 2 or 3 live neighbours; 4 or more is overcrowding.</p></details></div>
+<div class="q"><p>A dead cell has two live neighbours. What happens to it?</p><details class="answer"><summary>Answer</summary><p>It stays dead. Birth needs exactly 3 live neighbours.</p></details></div>
+<div class="q"><p>On a 10-wide toroidal grid, which cell is the left neighbour of the cell at x = 0? And on a 10-wide grid, at which position in the flat row does the cell (4, 2) live?</p><details class="answer"><summary>Answer</summary><p>The cell at x = 9, in the same row: the left edge wraps round to the right edge. The cell (4, 2) is at position 2 × 10 + 4 = 24: skip two full rows of ten, then four more.</p></details></div>
+<div class="q"><p>Why does the program need two grids rather than one?</p><details class="answer"><summary>Answer</summary><p>Because every cell's new state depends on its neighbours' <em>current</em> states. If you overwrote cells one at a time in a single grid, later cells would see neighbours that had already changed, and the result would be wrong.</p></details></div>
+<div class="q"><p>The compiler prints eleven errors. Which one do you read?</p><details class="answer"><summary>Answer</summary><p>The first one. Fix it, compile again, and most of the others usually vanish, because they were consequences of the first.</p></details></div>
+<div class="q"><p>What does <code>tools/run.sh scratch/x.cpp</code> do, in two steps?</p><details class="answer"><summary>Answer</summary><p>It compiles <code>scratch/x.cpp</code> with <code>clang++</code> using the week's flags (C++23, all warnings, sanitizers), then runs the resulting program and deletes it.</p></details></div>
+<div class="q"><p>Where in the repo is the file that says exactly what each of the six challenge functions must do?</p><details class="answer"><summary>Answer</summary><p><code>phase1-terminal/01-life/src/life.hpp</code>. It is the contract; you edit <code>src/life.cpp</code>, not the header.</p></details></div>
+<div class="q"><p>Which of these is not set up on your machine yet, and does it matter this week?</p><details class="answer"><summary>Answer</summary><p><code>clang-format</code> and <code>clang-tidy</code> are installed but not on PATH, and Google Benchmark is not installed. Neither matters for week 1; the fixes are in <code>docs/setup.md</code>.</p></details></div>
+</div>
+
+<h2>What you can do now</h2>
+<ul>
+<li>Say what x and y mean in (x, y), list the eight neighbours of any cell, and say which cell is a neighbour across a wrapped edge.</li>
+<li>State the three rules of Life and apply them by hand to any cell on a small grid.</li>
+<li>Explain why Life is a 3 × 3 stencil over a flat array, and what that has to do with tensors.</li>
+<li>Name the seven milestones and say roughly which day you will reach each.</li>
+<li>Open Terminal.app, move to the repo root, and know what the prompt and the working directory are.</li>
+<li>Create a file in <code>scratch/</code> and compile and run it with <code>tools/run.sh</code>.</li>
+<li>Read a compiler error message: file, line, column, the complaint, and the caret.</li>
+<li>Find every file in the challenge folder and say what it is for.</li>
+<li>Recite the contract: one commit per milestone, tests green before moving on, <code>BENCH.md</code> filled in.</li>
+</ul>
+</main>
+</body>
+</html>

@@ -1,0 +1,764 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>02 · Values and types — C++ from zero to Life</title>
+<link rel="stylesheet" href="assets/book.css?v=9">
+<link rel="stylesheet" href="assets/tutor.css?v=9">
+<script src="assets/theme.js?v=9"></script>
+<script defer src="assets/book.js?v=9"></script>
+<script defer src="assets/tutor.js?v=9"></script>
+</head>
+<body>
+<nav class="sidebar" aria-label="Chapters"></nav>
+<main>
+<p class="chapter-kicker">Chapter 02</p>
+<h1>Values and types</h1>
+<p class="lede">At the end of this chapter you can store a number, a yes/no answer or a character in a named place in memory, do arithmetic with it, print it neatly, and explain exactly which bytes the computer is using and what it thinks they mean.</p>
+
+<div class="callout note"><span class="label">In this chapter</span>
+<ul>
+<li>Why bytes mean nothing on their own, and what a <strong>type</strong> adds.</li>
+<li>Variables: declaring, initialising, assigning, and why you always initialise.</li>
+<li>Seven types: <code>int</code>, <code>double</code>, <code>float</code>, <code>bool</code>, <code>char</code>, <code>std::size_t</code>, <code>std::uint8_t</code>; how many bytes each one takes and what goes wrong at its edges. Six of them appear in the Week 1 code; <code>float</code> is here because of where you are heading.</li>
+<li>Integer division and the remainder operator <code>%</code>, including the negative-number trap you will meet in <a href="07-flat-grid.html">chapter 7</a>.</li>
+<li>Undefined behaviour, what it is and how the sanitizers catch it.</li>
+<li>Converting between types: the automatic conversions, the lossy ones, and <code>static_cast</code>.</li>
+<li><code>const</code>, <code>auto</code>, literals, naming, and the formatting codes for <code>std::println</code>.</li>
+</ul>
+</div>
+
+<h2>Bytes have no meaning</h2>
+<p>In <a href="01-what-a-program-is.html">chapter 1</a> you printed text. Behind that text, the machine was shuffling <strong>bytes</strong>: groups of 8 bits, each bit a 0 or a 1. A byte can hold one of 256 patterns (2 multiplied by itself 8 times). Memory is nothing more than a very long row of these bytes, each with a position number called its <strong>address</strong>.</p>
+<p>Here is the fact that this whole chapter rests on: a byte does not know what it is. Take four bytes in a row: three of them all zeros, one with the pattern <code>01000001</code>. Are they the whole number 65? Are they the letter <code>A</code> and three empty characters? Are they a very small fraction? Are they part of a longer number? The bytes themselves cannot tell you. They are the same bytes in every case.</p>
+<p>Something has to decide. In C++ that something is the <strong>type</strong>. A type is a label that tells the compiler two things about a stretch of memory:</p>
+<ul>
+<li><strong>How to interpret the bytes.</strong> How many bytes belong together, and what rule turns those bit patterns into a value (a whole number? a fraction? a character? yes or no?).</li>
+<li><strong>Which operations are allowed.</strong> You can divide two numbers; you cannot divide two characters. You can ask whether a yes/no value is true; you cannot ask that of a fraction without saying what you mean.</li>
+</ul>
+<p>The compiler uses the type every time you touch the memory. If it knows four bytes are an <code>int</code>, it produces the CPU instruction for adding whole numbers. If it knows eight bytes are a <code>double</code>, it produces the quite different instruction for adding fractions. The bytes do not carry the type at run time. The type exists only in the compiler's head, while it is translating your program.</p>
+<p>You can see this with one program. The same value, 65, is stored twice: once in a one-byte box labelled "character", once in a four-byte box labelled "whole number". The byte that holds 65 has the same bit pattern, <code>01000001</code>, in both; the <code>int</code> simply has three more bytes of zeros beside it. Only the label differs, and the label decides what gets printed.</p>
+
+<pre class="code" data-lang="cpp" data-file="same_bytes.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int main() {
+    char as_character = 65;   // one byte holding the value 65
+    int  as_number    = 65;   // four bytes holding the value 65
+
+    std::println("as a char: {}", as_character);
+    std::println("as an int: {}", as_number);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="same_bytes.cpp"><code>as a char: A
+as an int: 65
+</code></pre>
+
+<p>Take the two new words <code>char</code> and <code>int</code> on trust for a few minutes; both get their own section below. The point is the pair of lines at the bottom: same number in, different thing out, because the type told <code>std::println</code> how to read the box.</p>
+
+<div class="callout principle"><span class="label">First principle</span><p>Memory is bytes. Bytes have no meaning. A type is the rule the compiler uses to give a stretch of bytes a meaning and a set of allowed operations. Every variable you will ever write is "some bytes plus a type".</p></div>
+
+<div class="callout analogy"><span class="label">Analogy</span><p>Think of a variable as a labelled box on a shelf. The <strong>label</strong> is the type: "whole number, 4 bytes". The <strong>contents</strong> are the value: 65. The <strong>name</strong> written on the box is the variable name: <code>as_number</code>. You can replace the contents as often as you like, but you can never change the label; a box labelled "whole number" holds whole numbers for its entire life.</p>
+<p>Where the analogy breaks: a real box can be empty. A C++ variable cannot. The bytes are always there, and they always contain <em>some</em> pattern, even before you put anything in. That difference causes a real bug, and it comes up in the next section.</p></div>
+
+<h2>Variables: declare, initialise, assign</h2>
+<p>A <strong>variable</strong> is a named region of memory with a type. You bring one into existence with a <strong>declaration</strong>: the type, then the name. You give it a first value with an <strong>initialisation</strong>: an <code>=</code> and a value on the same line. Later you can replace the value with an <strong>assignment</strong>, which is also written with <code>=</code>.</p>
+
+<pre class="code" data-lang="cpp" data-file="box.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int main() {
+    int apples = 5;              // declare a box called apples, put 5 in it
+    std::println("apples: {}", apples);
+
+    apples = 8;                  // replace the contents
+    std::println("apples: {}", apples);
+
+    apples = apples + 2;         // read, add 2, store back
+    std::println("apples: {}", apples);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="box.cpp"><code>apples: 5
+apples: 8
+apples: 10
+</code></pre>
+
+<p>Read the first line of <code>main</code> as three steps the compiler takes: reserve four bytes somewhere in memory; remember that they are called <code>apples</code> and are to be read as an <code>int</code>; write the bit pattern for 5 into them. From then on, whenever you write <code>apples</code>, the compiler substitutes "the four bytes at that address, read as an <code>int</code>".</p>
+<p>The line <code>apples = apples + 2;</code> looks like a false equation if you read <code>=</code> as "equals". It is not an equation. In C++, <code>=</code> means <strong>store</strong>: compute whatever is on the right, then put the result into the box named on the left. The right side runs first, reading 8 out of the box; the addition makes 10; then 10 is written back into the same box. The old 8 is gone.</p>
+<p>"Read, change, store back" is so common that C++ has a shorthand for it. <code>apples += 2;</code> means exactly the same as <code>apples = apples + 2;</code>: add 2 to what is in the box and store the result in the same box. The operator is called <strong>compound assignment</strong>, and every arithmetic operator has one: <code>apples -= 3;</code> subtracts 3, <code>apples *= 2;</code> doubles, <code>apples /= 2;</code> halves (with integer division, which has its own section below). The book uses <code>+=</code> freely from here on, mostly to add things up: <code>total += x;</code> reads "add <code>x</code> to <code>total</code>".</p>
+<p>The <code>{}</code> in the text given to <code>std::println</code> is a <strong>placeholder</strong>: the value after the comma is printed in its place, and <code>std::println</code> uses that value's type to decide how to turn the bytes into characters.</p>
+
+<h3>Always initialise</h3>
+<p>A declaration without an <code>=</code> is legal. The box is reserved, but nothing is written into it. Remember the broken part of the analogy: the bytes are there anyway, holding whatever pattern the previous user of that memory left behind. Reading them gives you a nonsense value, and a different nonsense value on another run or another machine.</p>
+
+<pre class="code" data-lang="cpp" data-file="uninit.cpp" data-check="fragment"><code>#include &lt;print&gt;
+
+int main() {
+    int count;                   // declared, but nothing was put in the box
+    int doubled = count * 2;     // reads whatever bytes happened to be there
+    std::println("doubled: {}", doubled);
+    return 0;
+}
+</code></pre>
+
+<p>This program compiles. With <code>-Wall</code> the compiler does what it can, which is to warn you:</p>
+
+<pre class="output"><code>uninit.cpp:5:19: warning: variable 'count' is uninitialized when used here [-Wuninitialized]
+    5 |     int doubled = count * 2;     // reads whatever bytes happened to be there
+      |                   ^~~~~
+uninit.cpp:4:14: note: initialize the variable 'count' to silence this warning
+    4 |     int count;                   // declared, but nothing was put in the box
+      |              ^
+      |               = 0
+1 warning generated.
+</code></pre>
+
+<p>On the run that produced the text for this chapter, it printed <code>doubled: -420151120</code>. On your machine it will print something else. Reading an uninitialised variable is one example of <strong>undefined behaviour</strong>, which has its own section below. Be warned: the sanitizers you will meet there do <em>not</em> catch this one. The same program compiled with <code>-fsanitize=address,undefined</code> printed <code>doubled: 0</code> and no message at all. That looks perfectly healthy and is not. The compiler warning is your only guard. The rule that avoids the problem is short:</p>
+
+<div class="callout trap"><span class="label">Trap</span><p>Never write <code>int x;</code>. Always write <code>int x = 0;</code> (or whatever the right first value is). An uninitialised variable is not empty, it is random, and a program that reads it is broken even on the days it seems to work. The compiler's warning is your friend here: read every warning and fix it.</p></div>
+
+<div class="callout try"><span class="label">Try it</span><p>Save the program above as <code>scratch/uninit.cpp</code>. Compile it twice: once with <code>clang++ -std=c++23 uninit.cpp -o uninit</code> and once with <code>-Wall -Wextra</code> added. Only the second compile warns; the first hands you a broken program in silence, which is why the project never compiles without those two flags. Run the program a few times and watch the number. Then add <code>= 0</code> to the declaration, recompile with the warnings on, and confirm that both the warning and the nonsense are gone.</p></div>
+
+<h2><code>int</code>: whole numbers in four bytes</h2>
+<p><code>int</code> is the type for whole numbers: counts, positions, indices. On your Mac an <code>int</code> is 4 bytes, which is 32 bits. The operator <code>sizeof</code> asks the compiler how many bytes a type takes, and you can print the answer.</p>
+<p>Thirty-two bits give 2<sup>32</sup> patterns, a little over 4.29 billion. An <code>int</code> is a <strong>signed</strong> type: one of its 32 bits, the <strong>sign bit</strong>, records whether the number is negative. That spends half of the patterns on negative numbers, so the range runs from −2,147,483,648 up to 2,147,483,647: roughly plus or minus 2.1 billion. The opposite kind, an <strong>unsigned</strong> type, has no sign bit and uses every pattern for zero and the positive numbers. You meet two unsigned types later in this chapter.</p>
+
+<pre class="code" data-lang="cpp" data-file="int_range.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int main() {
+    int biggest  = 2147483647;
+    int smallest = -2147483648;
+    std::println("biggest int:  {}", biggest);
+    std::println("smallest int: {}", smallest);
+    std::println("sizeof(int):  {} bytes = {} bits", sizeof(int), sizeof(int) * 8);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="int_range.cpp"><code>biggest int:  2147483647
+smallest int: -2147483648
+sizeof(int):  4 bytes = 32 bits
+</code></pre>
+
+<p>Two point one billion is plenty for a Life grid: a 1000 by 1000 grid has a million cells. But think about what happens one step past the top.</p>
+
+<h3>Overflow</h3>
+<p>What is 2,147,483,647 plus 1? In mathematics, 2,147,483,648. In a 4-byte <code>int</code> there is no bit pattern for that number. The language does not say what happens. To see what your machine does, compile the program below with a <strong>sanitizer</strong> switched on. A sanitizer is extra checking code that the compiler weaves into your program when you pass a <code>-fsanitize=</code> flag. While the program runs, those checks watch the risky operations and print a message the moment one goes wrong. <a href="00-start-here.html">Chapter 0</a> mentioned sanitizers in passing; this is the first time you hear one speak. The one used here is the UndefinedBehaviorSanitizer, one of the two that <code>tools/run.sh</code> and the project's Debug build (take that name on trust until <a href="11-cmake.html">chapter 11</a>) always switch on:</p>
+
+<pre class="code" data-lang="cpp" data-file="overflow.cpp" data-check="compile"><code>#include &lt;print&gt;
+
+int main() {
+    int biggest = 2147483647;
+    int one = 1;
+    int beyond = biggest + one;      // there is no int this big
+    std::println("beyond: {}", beyond);
+    return 0;
+}
+</code></pre>
+
+<pre class="shell"><code>$ clang++ -std=c++23 -Wall -Wextra -fsanitize=undefined overflow.cpp -o overflow
+$ ./overflow
+</code></pre>
+<pre class="output"><code>overflow.cpp:6:26: runtime error: signed integer overflow: 2147483647 + 1 cannot be represented in type 'int'
+SUMMARY: UndefinedBehaviorSanitizer: undefined-behavior overflow.cpp:6:26
+beyond: -2147483648
+</code></pre>
+
+<p>Read the first line carefully. It names the file, the line and the column, says what went wrong (signed integer overflow), and gives the exact numbers. Then the program carried on and printed −2,147,483,648: the counter went past the top and came out at the bottom, like a car's odometer going from 999999 to 000000. That wrapped value is what this CPU happened to do today. It is not what the language promised, because the language promised nothing.</p>
+
+<h3>Undefined behaviour</h3>
+<p><strong>Undefined behaviour</strong> (often shortened to UB) means the C++ language gives no promise at all about what a program does from that point on. Not "the result is unspecified", but "anything may happen". The obvious wrapped number is one possibility. So is a crash. So is a wrong answer somewhere else in the program, far from the line that broke the rule. So is a program that appears to work perfectly today and fails next month after a compiler update.</p>
+<p>You will meet three kinds of UB in Week 1: signed overflow, reading an uninitialised variable, and indexing outside a <code>std::vector</code> (<a href="06-vector.html">chapter 6</a>). You cannot test for UB after the fact, because what you observe is not reliable. The wrapped number above is what happened this time; it is not a result you may build on.</p>
+<p>What you can do is compile with sanitizers. They insert checks at the risky operations they know about and print a message at the exact line the moment a rule is broken. The UndefinedBehaviorSanitizer catches signed overflow and division by zero. The AddressSanitizer catches most out-of-range memory access, including the vector case in <a href="06-vector.html">chapter 6</a>. Neither catches a read of an uninitialised variable. (The tool for that, MemorySanitizer, is not available on macOS.) For that one bug, the compiler warning from the previous section is the whole defence.</p>
+<p>This is why <code>tools/run.sh</code> and the project's Debug build always pass <code>-fsanitize=address,undefined</code>. It is also why you develop with the sanitizers on and switch them off only to measure speed (<a href="13-timing-and-benchmark.html">chapter 13</a>), and why you never leave a warning unread.</p>
+
+<div class="callout note"><span class="label">Why not just define it?</span><p>Other languages do define overflow (Python grows the number; Java wraps). C++ leaves it undefined so the compiler may assume it never happens, which lets it produce faster code for loops over indices. You are learning C++ for speed, so you inherit that bargain. The sanitizers are the safety rail that makes the bargain survivable.</p></div>
+
+<h2>Integer division and remainder</h2>
+<p>Dividing one <code>int</code> by another gives an <code>int</code>. There is no box for the fraction, so the fraction is thrown away. <code>7 / 2</code> is not 3.5. It is 3. The part that was thrown away is available from a second operator, <code>%</code>, read as "remainder" or "modulo": <code>7 % 2</code> is 1, because 7 is 3 twos plus 1 left over.</p>
+
+<pre class="code" data-lang="cpp" data-file="division.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int main() {
+    std::println("7 / 2 = {}", 7 / 2);
+    std::println("7 % 2 = {}", 7 % 2);
+    std::println("23 / 10 = {}", 23 / 10);
+    std::println("23 % 10 = {}", 23 % 10);
+    std::println("9 / 3 = {}, 9 % 3 = {}", 9 / 3, 9 % 3);
+    std::println("(23 / 10) * 10 + 23 % 10 = {}", (23 / 10) * 10 + 23 % 10);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="division.cpp"><code>7 / 2 = 3
+7 % 2 = 1
+23 / 10 = 2
+23 % 10 = 3
+9 / 3 = 3, 9 % 3 = 0
+(23 / 10) * 10 + 23 % 10 = 23
+</code></pre>
+
+<p>Together the two operators split a number: <code>23 / 10</code> tells you how many whole tens (2), <code>23 % 10</code> tells you what is left (3). The two pieces always fit back together, as the last line shows: the quotient times the divisor, plus the remainder, is the original number (2 × 10 + 3 = 23). That holds for every pair of <code>int</code>s, negative ones included. Keep that pair in mind; it is exactly how a position in a flat list turns back into a row and a column in <a href="07-flat-grid.html">chapter 7</a>, and the remainder is also how a value that has run off one edge of a grid comes back in on the other side.</p>
+
+<h3>Negative numbers divide toward zero</h3>
+<p>Here is the part most people get wrong the first time. In C++, integer division rounds <em>toward zero</em>, not downward. So <code>-7 / 2</code> is −3 (not −4), and to keep the equation above true the remainder has to be <code>-7 % 2 == -1</code>. The remainder takes the sign of the left operand.</p>
+
+<pre class="code" data-lang="cpp" data-file="negative_division.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int main() {
+    std::println(" 7 / 2 = {},   7 % 2 = {}", 7 / 2, 7 % 2);
+    std::println("-7 / 2 = {},  -7 % 2 = {}", -7 / 2, -7 % 2);
+    std::println("-1 / 10 = {},  -1 % 10 = {}", -1 / 10, -1 % 10);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="negative_division.cpp"><code> 7 / 2 = 3,   7 % 2 = 1
+-7 / 2 = -3,  -7 % 2 = -1
+-1 / 10 = 0,  -1 % 10 = -1
+</code></pre>
+
+<div class="callout trap"><span class="label">Trap</span><p>Look at the last line. If you want "the hour before midnight on a 10-hour clock", you want 9. C++ gives you <code>-1 % 10 == -1</code>. The remainder operator alone does not wrap negative numbers round to the top. This single fact is behind the comment "careful with negative numbers" next to <code>wrap</code> in <code>phase1-terminal/01-life/src/life.cpp</code>. <a href="07-flat-grid.html">Chapter 7</a> shows the fix; for now just remember that <code>%</code> of a negative number is negative or zero, never positive.</p></div>
+
+<div class="callout note"><span class="label">Dividing by zero</span><p><code>7 / 0</code> and <code>7 % 0</code> are undefined behaviour, the same category as overflow. The sanitizer reports them as "division by zero". Never divide by a value you have not checked.</p></div>
+
+<div class="callout try"><span class="label">Try it</span><p>Before you run anything, write down on paper what these eight expressions give: <code>17 / 5</code>, <code>17 % 5</code>, <code>-17 / 5</code>, <code>-17 % 5</code>, <code>5 / 17</code>, <code>5 % 17</code>, <code>-3 % 10</code>, <code>10 % 10</code>. Then write a program that prints all eight and compare. Each one you got wrong points at a rule you have not absorbed yet; re-read the paragraph for that case.</p></div>
+<details class="answer"><summary>Show the answers</summary><p>3, 2, −3, −2, 0, 5, −3, 0. Division rounds toward zero; the remainder has the sign of the left operand; and when the left number is smaller than the right one, the quotient is 0 and the remainder is the whole left number. The last one, <code>10 % 10</code>, is 0: landing exactly on the divisor leaves nothing over, which is why the top of a wrapping range comes back to position 0.</p></details>
+
+<h2><code>double</code> and <code>float</code>: numbers with a decimal point</h2>
+<p>When you need fractions you use a <strong>floating-point</strong> type. The name means the decimal point is not nailed to one position: the type stores a fixed number of significant digits and, separately, where the point goes, so the same box can hold 0.000035 or 35000000.0. <code>double</code> is the default: 8 bytes, written with a decimal point. In Week 1 you use a <code>double</code> for exactly one thing, the <code>fill</code> probability passed to <code>random_cells</code> ("each cell is alive with probability 0.35").</p>
+
+<pre class="code" data-lang="cpp" data-file="doubles.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int main() {
+    double half = 7.0 / 2.0;
+    std::println("7.0 / 2.0 = {}", half);
+
+    double fill = 0.35;                 // probability that a cell starts alive
+    std::println("fill = {}", fill);
+
+    double sum = 0.1 + 0.2;
+    std::println("0.1 + 0.2 = {}", sum);
+    std::println("0.1 + 0.2 = {:.20f}", sum);
+    std::println("0.3       = {:.20f}", 0.3);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="doubles.cpp"><code>7.0 / 2.0 = 3.5
+fill = 0.35
+0.1 + 0.2 = 0.30000000000000004
+0.1 + 0.2 = 0.30000000000000004441
+0.3       = 0.29999999999999998890
+</code></pre>
+
+<p>The first line settles something from the previous section: <code>7.0 / 2.0</code> is 3.5, because both operands are <code>double</code>s and the result has room for the half. The decimal point in <code>7.0</code> is what makes it a <code>double</code> instead of an <code>int</code>.</p>
+<p>The last three lines show the catch. A <code>double</code> is <strong>approximate</strong>. It stores a number as a binary fraction with 53 significant bits, and most decimal fractions cannot be written exactly in binary, just as 1/3 cannot be written exactly in decimal (0.333…). So 0.1 is stored as the nearest representable value, 0.2 likewise, their sum lands on a value just above 0.3, and the nearest representable value to 0.3 itself is just below. The formatting code <code>{:.20f}</code> (twenty digits after the point; the full table is at the end of the chapter) exposes the digits that the default printing politely hides.</p>
+<p>The practical rules: use <code>double</code> for measurements and probabilities, never for counting; never test two <code>double</code>s for exact equality (ask whether their difference is tiny instead); and do not be alarmed when the sixteenth or seventeenth significant digit is not what you typed. That is the approximation showing, not a bug in your program.</p>
+
+<h3><code>float</code>: the same idea in four bytes</h3>
+<p><code>float</code> is a floating-point number in 4 bytes instead of 8. It has about 7 significant decimal digits where <code>double</code> has about 16. A literal with an <code>f</code> on the end, <code>0.1f</code>, is a <code>float</code>.</p>
+
+<pre class="code" data-lang="cpp" data-file="floats.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int main() {
+    float  weight_f = 0.1f;            // 4 bytes
+    double weight_d = 0.1;             // 8 bytes
+
+    std::println("float:  {:.20f}", weight_f);
+    std::println("double: {:.20f}", weight_d);
+    std::println("sizeof(float) = {}, sizeof(double) = {}", sizeof(float), sizeof(double));
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="floats.cpp"><code>float:  0.10000000149011611938
+double: 0.10000000000000000555
+sizeof(float) = 4, sizeof(double) = 8
+</code></pre>
+
+<p>Both are "0.1", and both are wrong, but the <code>float</code> agrees with 0.1 for only 8 decimal places (count the zeros) and the <code>double</code> for 17. You pay for precision with bytes. Week 1 does not need <code>float</code>; you meet it now because it is the single most common type in the field you are heading for.</p>
+
+<div class="callout twin"><span class="label">Inference twin</span><p>The weights of a neural network are stored as floating-point numbers, and <code>float</code> (called <strong>fp32</strong> in that world, "32-bit floating point") is the default <strong>dtype</strong> (data type, the same idea as a C++ type) in PyTorch, the Python library most models are trained with. A GPT-2 weight file is mostly a long row of fp32 values. When people say a model has been "quantized to int8" or "to 4-bit", they mean the same <strong>tensor</strong> (a grid of numbers; in Week 1 terms, a flat list plus a width and a height) has been re-encoded into a different <em>type</em>: one byte per weight, or half a byte, plus a scale factor per block, instead of four bytes. Same meaning, fewer bytes, less precision, exactly the <code>float</code>-versus-<code>double</code> trade above pushed further. Everything in this chapter about "bytes plus a type" is the vocabulary of quantization; in week 9 you will write the int8 and Q4 encodings yourself.</p></div>
+
+<h2><code>bool</code>: yes or no</h2>
+<p><code>bool</code> is the type with exactly two values, <code>true</code> and <code>false</code>. It takes one byte (a single bit would do, but memory is addressed by the byte, so one byte is the smallest box). You will mostly meet <code>bool</code>s as the result of a <strong>comparison</strong>: <code>==</code> (equal), <code>!=</code> (not equal), <code>&lt;</code>, <code>></code>, <code>&lt;=</code>, <code>>=</code>. Comparisons get their proper treatment in <a href="03-control-flow.html">chapter 3</a>; take them on trust until then. For now all you need is this: a comparison is an expression that produces a <code>bool</code>, and you can store that <code>bool</code> in a variable like any other value.</p>
+
+<pre class="code" data-lang="cpp" data-file="bools.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int main() {
+    bool alive = true;
+    bool dead = false;
+    std::println("alive = {}, dead = {}", alive, dead);
+
+    int neighbours = 3;
+    bool is_three = neighbours == 3;    // == asks "are these equal?"
+    bool is_two   = neighbours == 2;
+    bool at_least_two = neighbours >= 2;
+    std::println("is_three = {}, is_two = {}, at_least_two = {}", is_three, is_two, at_least_two);
+
+    std::println("sizeof(bool) = {}", sizeof(bool));
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="bools.cpp"><code>alive = true, dead = false
+is_three = true, is_two = false, at_least_two = true
+sizeof(bool) = 1
+</code></pre>
+
+<p>Notice that <code>=</code> and <code>==</code> are different operators. One <code>=</code> stores. Two <code>==</code> compare. The line <code>bool is_three = neighbours == 3;</code> uses both: compare first (giving <code>true</code>), then store the result. In <a href="03-control-flow.html">chapter 3</a> you will put comparisons directly into <code>if</code> to make the program choose a path; the rules of Life ("a dead cell with exactly 3 live neighbours becomes alive") are comparisons like these.</p>
+
+<div class="callout trap"><span class="label">Trap</span><p>Writing <code>=</code> where you meant <code>==</code> is the most common typo in C++, and the compiler accepts it, because <code>neighbours = 3</code> is a valid expression: it stores 3 and then has the value 3, which counts as <code>true</code>. <code>-Wall</code> warns about one form only, a lone <code>=</code> inside the condition of an <code>if</code> (<a href="03-control-flow.html">chapter 3</a>). Everywhere else you are on your own. When a comparison "does not work", count the equals signs first.</p></div>
+
+<h2><code>char</code>: one byte holding a character code</h2>
+<p>A <code>char</code> is a 1-byte box whose contents are interpreted as a character. "Interpreted" is doing real work in that sentence. The byte holds a number from the <strong>ASCII</strong> table, a 1960s agreement that assigns a code to every English letter, digit and punctuation mark: <code>'A'</code> is 65, <code>'a'</code> is 97, <code>'0'</code> is 48, <code>'#'</code> is 35. A character written between single quotes, <code>'#'</code>, is a <strong>character literal</strong> and its value is simply that code.</p>
+<p>Because a <code>char</code> is really a small number, you can ask to see the number. The way to do that is <code>static_cast&lt;int&gt;(c)</code>: "give me this value, re-labelled as an <code>int</code>". The full story of <code>static_cast</code> comes a few sections down; here it just reveals the code.</p>
+
+<pre class="code" data-lang="cpp" data-file="chars.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int main() {
+    char alive = '#';
+    char dead = '.';
+    std::println("alive: {}  dead: {}", alive, dead);
+
+    std::println("the code of '#' is {}", static_cast&lt;int&gt;(alive));
+    std::println("the code of '.' is {}", static_cast&lt;int&gt;(dead));
+    std::println("the code of 'A' is {}", static_cast&lt;int&gt;('A'));
+    std::println("the code of '\\n' is {}", static_cast&lt;int&gt;('\n'));
+
+    char from_code = 72;                // 72 is the code of 'H'
+    std::println("code 72 is the character {}", from_code);
+    std::println("sizeof(char) = {}", sizeof(char));
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="chars.cpp"><code>alive: #  dead: .
+the code of '#' is 35
+the code of '.' is 46
+the code of 'A' is 65
+the code of '\n' is 10
+code 72 is the character H
+sizeof(char) = 1
+</code></pre>
+
+<p>Two things to notice. First, <code>'\n'</code> is a character too: the <strong>newline</strong>, code 10. The backslash is an <strong>escape</strong> that lets you write a character you cannot type directly; <code>'\t'</code> is a tab and <code>'\\'</code> is a single backslash. In the text of the fourth <code>println</code>, <code>'\\n'</code> is used so that the output shows a backslash and an n rather than breaking the line. Second, <code>render</code> in the Week 1 contract builds its output from exactly three characters: <code>'#'</code>, <code>'.'</code> and <code>'\n'</code> after every row. You now know what all three are.</p>
+
+<div class="callout trap"><span class="label">Trap</span><p>A <code>char</code> is one byte, and one byte holds one ASCII code. The Danish letters <code>æ</code>, <code>ø</code> and <code>å</code> are not in ASCII. Your Mac stores source files as UTF-8, in which each of those letters takes two bytes, so none of them fits in a <code>char</code>. The compiler refuses:</p>
+<pre class="code" data-lang="cpp" data-file="danish_char.cpp" data-check="error"><code>#include &lt;print&gt;
+
+int main() {
+    char letter = 'æ';             // the Danish ae, two bytes in UTF-8
+    std::println("{}", letter);
+    return 0;
+}
+</code></pre>
+<pre class="output"><code>danish_char.cpp:4:19: error: character too large for enclosing character literal type
+    4 |     char letter = 'æ';             // the Danish ae, two bytes in UTF-8
+      |                   ^
+1 error generated.
+</code></pre>
+<p>Inside double quotes the same letters are fine: <code>std::println("blåbærgrød");</code> prints <code>blåbærgrød</code>, because a string literal is a row of bytes and the terminal reassembles the pairs. For Week 1, keep every <code>char</code> inside ASCII; <code>'#'</code>, <code>'.'</code> and <code>'\n'</code> all qualify. Text beyond ASCII is a week 29 topic (the optional tokeniser).</p></div>
+
+<h2><code>std::size_t</code>: the type for sizes and counts</h2>
+<p>How many cells does a grid have? How long is a list? Those numbers are never negative, and on a machine with lots of memory they can be bigger than 2.1 billion. The standard library has a type made for exactly this job: <code>std::size_t</code>. It is <strong>unsigned</strong>, meaning it has no sign bit and spends all its patterns on non-negative numbers, and on your Mac it is 8 bytes, so it reaches up to about 18 billion billion. It comes from the header <code>&lt;cstddef&gt;</code>, although nearly every standard header brings it along anyway.</p>
+<p>Every size in the standard library is a <code>std::size_t</code>. <code>sizeof</code> gives one. In <a href="06-vector.html">chapter 6</a>, <code>vector.size()</code> gives one, and the index you write between square brackets is one. This is why the type matters this week even though you only have a few variables so far: you will be mixing your own <code>int</code> coordinates with the library's <code>std::size_t</code> sizes, and the mixing has rules.</p>
+
+<pre class="code" data-lang="cpp" data-file="sizet.cpp" data-check="run"><code>#include &lt;cstddef&gt;
+#include &lt;print&gt;
+
+int main() {
+    std::size_t width = 80;
+    std::size_t height = 24;
+    std::size_t cell_count = width * height;
+    std::println("cells: {}", cell_count);
+    std::println("sizeof(std::size_t) = {} bytes", sizeof(std::size_t));
+
+    std::size_t zero = 0;
+    std::size_t wrapped = zero - 1;     // cannot be -1: there is no sign bit
+    std::println("0 - 1 as std::size_t = {}", wrapped);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="sizet.cpp"><code>cells: 1920
+sizeof(std::size_t) = 8 bytes
+0 - 1 as std::size_t = 18446744073709551615
+</code></pre>
+
+<div class="callout trap"><span class="label">Trap</span><p>Zero minus one, in a type that cannot hold negative numbers, is the largest value the type has: 18,446,744,073,709,551,615. Unlike signed overflow this is <em>not</em> undefined behaviour; unsigned arithmetic is defined to wrap, so the sanitizer stays silent. It is still almost certainly not what you wanted. The classic form is "the last index is <code>size - 1</code>" when the size is zero, or counting down with an unsigned variable until it is "below zero", which never happens. When you need to subtract, or to represent "one step to the left of position 0", use a signed type. That is why the Week 1 contract passes <code>x</code>, <code>y</code>, <code>width</code> and <code>height</code> as <code>int</code>: the neighbour of column 0 is column −1 before wrapping, and <code>int</code> can say −1.</p></div>
+
+<h2><code>std::uint8_t</code>: exactly one byte</h2>
+<p>The <code>int</code> type is "at least 16 bits, 32 on every machine you will touch", and <code>std::size_t</code> is "whatever fits a size". Sometimes you want to say exactly how many bytes. The header <code>&lt;cstdint&gt;</code> provides types with the size in the name: <code>std::uint8_t</code> is an unsigned whole number in exactly 8 bits, so its values run from 0 to 255. (There are also <code>std::int32_t</code>, <code>std::uint64_t</code> and so on; the pattern is <code>int</code> or <code>uint</code>, a bit count, <code>_t</code>.)</p>
+<p>This is the cell type of Week 1. Look at the top of <code>phase1-terminal/01-life/src/life.hpp</code>: <code>using Cells = std::vector&lt;std::uint8_t&gt;;</code>. A Life cell is either 1 (alive) or 0 (dead); it would be silly to spend 4 bytes on it when 1 will do, and a 1000 by 1000 grid at one byte per cell is one megabyte, which fits comfortably in the CPU's <strong>cache</strong>, the small, very fast memory that sits next to the processor (you measure what that is worth in <a href="13-timing-and-benchmark.html">chapter 13</a> and study it in week 6). (<code>std::vector</code> and <code>using</code> are chapters <a href="06-vector.html">6</a> and <a href="07-flat-grid.html">7</a>; for now just see the element type.)</p>
+
+<pre class="code" data-lang="cpp" data-file="uint8.cpp" data-check="run"><code>#include &lt;cstdint&gt;
+#include &lt;print&gt;
+
+int main() {
+    std::uint8_t alive = 1;
+    std::uint8_t dead = 0;
+    std::println("alive = {}, dead = {}", alive, dead);
+    std::println("sizeof(std::uint8_t) = {}", sizeof(std::uint8_t));
+
+    std::uint8_t largest = 255;
+    std::println("largest = {}", largest);
+
+    std::uint8_t code = 35;             // 35 is the code of '#' ...
+    std::println("as uint8_t: {}", code);          // ... but this prints 35
+    std::println("as char:    {}", static_cast&lt;char&gt;(code));
+
+    std::uint8_t top = 255;
+    top = top + 1;                      // 256 has no pattern in one byte
+    std::println("255 + 1 as uint8_t = {}", top);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="uint8.cpp"><code>alive = 1, dead = 0
+sizeof(std::uint8_t) = 1
+largest = 255
+as uint8_t: 35
+as char:    #
+255 + 1 as uint8_t = 0
+</code></pre>
+
+<div class="callout note"><span class="label">A byte that prints as a number</span><p><code>char</code> and <code>std::uint8_t</code> are both one byte, and under the hood <code>std::uint8_t</code> is usually an alias of <code>unsigned char</code>. <code>std::println</code> nevertheless prints a <code>std::uint8_t</code> as a <em>number</em> and a <code>char</code> as a <em>character</em>, which is what you want: a cell with value 1 should show as <code>1</code>, not as the invisible control character with code 1. When you write <code>render</code> you will turn each cell into <code>'#'</code> or <code>'.'</code> yourself; you never print a cell directly.</p></div>
+
+<div class="callout note"><span class="label">Small boxes overflow soon</span><p>The last line shows it: 255 is the top of a <code>std::uint8_t</code>, and adding one wraps to 0. Nothing complained. The compiler gave no warning with <code>-Wall -Wextra</code>, and the sanitizer stayed silent, because unsigned wrap-around is defined behaviour, by the same rule as <code>std::size_t</code>. Choose the type to fit the largest value it must ever hold, not the typical one. A Life cell is 0 or 1, so one byte is safe; a neighbour count that could reach 8 would also fit, but the contract uses <code>int</code> for counts, which keeps every arithmetic step in the chapter's "big, signed" type.</p></div>
+
+<h3>All the sizes at once</h3>
+<p>One program, every type in this chapter, so you can see the whole shelf.</p>
+
+<pre class="code" data-lang="cpp" data-file="sizes.cpp" data-check="run"><code>#include &lt;cstddef&gt;
+#include &lt;cstdint&gt;
+#include &lt;print&gt;
+
+int main() {
+    std::println("int           {} bytes", sizeof(int));
+    std::println("double        {} bytes", sizeof(double));
+    std::println("float         {} bytes", sizeof(float));
+    std::println("bool          {} bytes", sizeof(bool));
+    std::println("char          {} bytes", sizeof(char));
+    std::println("std::size_t   {} bytes", sizeof(std::size_t));
+    std::println("std::uint8_t  {} bytes", sizeof(std::uint8_t));
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="sizes.cpp"><code>int           4 bytes
+double        8 bytes
+float         4 bytes
+bool          1 bytes
+char          1 bytes
+std::size_t   8 bytes
+std::uint8_t  1 bytes
+</code></pre>
+
+<table>
+<thead><tr><th>Type</th><th>Bytes</th><th>Holds</th><th>Week 1 use</th></tr></thead>
+<tbody>
+<tr><td><code>int</code></td><td>4</td><td>whole numbers, about ±2.1 billion</td><td>coordinates, width, height, neighbour counts</td></tr>
+<tr><td><code>double</code></td><td>8</td><td>fractions, about 16 digits</td><td>the <code>fill</code> probability, benchmark milliseconds</td></tr>
+<tr><td><code>float</code></td><td>4</td><td>fractions, about 7 digits</td><td>not this week; the dtype of ML weights</td></tr>
+<tr><td><code>bool</code></td><td>1</td><td><code>true</code> or <code>false</code></td><td>results of comparisons, "is this cell alive?"</td></tr>
+<tr><td><code>char</code></td><td>1</td><td>one character code</td><td><code>'#'</code>, <code>'.'</code>, <code>'\n'</code> in <code>render</code></td></tr>
+<tr><td><code>std::size_t</code></td><td>8</td><td>0 to 1.8 × 10<sup>19</sup>, no negatives</td><td>sizes and indices of vectors</td></tr>
+<tr><td><code>std::uint8_t</code></td><td>1</td><td>0 to 255</td><td>one cell: 1 alive, 0 dead</td></tr>
+</tbody>
+</table>
+
+<h2>Conversions between types</h2>
+<p>You will constantly have a value of one type and need it as another: an <code>int</code> coordinate where a <code>std::size_t</code> index is wanted, two <code>int</code> counts whose ratio should be a <code>double</code>. C++ converts between the built-in number types for you in many places, but the conversions are not all equal. Some lose nothing, some lose information quietly.</p>
+<p><strong>Widening</strong> conversions are safe: <code>int</code> to <code>double</code> always works, because every <code>int</code> fits exactly in a <code>double</code>. The compiler does these silently. <strong>Narrowing</strong> conversions can lose information: <code>double</code> to <code>int</code> drops everything after the decimal point (it <strong>truncates</strong>, toward zero, like integer division), and a big <code>int</code> into a <code>std::uint8_t</code> keeps only the lowest byte. When you use plain <code>=</code>, the compiler does these silently as well; even <code>-Wall -Wextra</code> says nothing when a <code>double</code> is stored into an <code>int</code>. That silence is the problem.</p>
+<p>The explicit way to convert is <code>static_cast&lt;T&gt;(value)</code>: "convert <code>value</code> to the type <code>T</code>". It does the same conversion the compiler would have done, but it says so in the source. Two advantages: a reader (including you in six months) sees that a conversion happens there on purpose, and you can search a whole project for <code>static_cast</code> to find every place where information might be lost. The project's stubs already use it: look at <code>random_cells</code> in <code>life.cpp</code>, which casts <code>width</code> and <code>height</code> to <code>std::size_t</code> before multiplying them.</p>
+
+<pre class="code" data-lang="cpp" data-file="conversions.cpp" data-check="run"><code>#include &lt;cstdint&gt;
+#include &lt;print&gt;
+
+int main() {
+    int whole = 7;
+    double widened = whole;              // int -> double: nothing lost
+    std::println("widened = {}", widened);
+
+    double fraction = 3.99;
+    int silent = fraction;               // double -> int: cuts off the decimals, no warning
+    int narrowed = static_cast&lt;int&gt;(fraction);     // the same cut, but now the source says so
+    std::println("silent = {}, narrowed = {}", silent, narrowed);
+
+    double negative = -3.99;
+    std::println("static_cast&lt;int&gt;(-3.99) = {}", static_cast&lt;int&gt;(negative));
+
+    std::println("static_cast&lt;std::uint8_t&gt;(300) = {}", static_cast&lt;std::uint8_t&gt;(300));
+
+    int alive_cells = 350;
+    int total_cells = 1000;
+    std::println("integer ratio: {}", alive_cells / total_cells);
+    std::println("double ratio:  {}", static_cast&lt;double&gt;(alive_cells) / total_cells);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="conversions.cpp"><code>widened = 7
+silent = 3, narrowed = 3
+static_cast&lt;int&gt;(-3.99) = -3
+static_cast&lt;std::uint8_t&gt;(300) = 44
+integer ratio: 0
+double ratio:  0.35
+</code></pre>
+
+<p>Line by line. <code>silent</code> and <code>narrowed</code> hold the same 3; the only difference is that one line admits a conversion happened and the other hides it. 3.99 became 3, not 4: truncation is not rounding. Then 300 into one byte gives 44, because 300 = 256 + 44: the byte keeps the part below 256 and the rest is dropped. (Wrapping at 256 is the same rule you saw with <code>255 + 1</code> above.) The last two lines are the pattern to remember. <code>350 / 1000</code> with two <code>int</code>s is integer division: 0. Convert <em>one</em> operand to <code>double</code> first and the other is widened to match, so the division happens in <code>double</code> and gives 0.35.</p>
+
+<h3>Signed meets unsigned</h3>
+<p>The most dangerous automatic conversion is the one between signed and unsigned integers, and you will meet it the moment an <code>int</code> coordinate stands next to a <code>std::size_t</code> size. When the two are compared, the <code>int</code> is converted to unsigned first. A −1 becomes 18,446,744,073,709,551,615, and the comparison gives the wrong answer. The compiler knows this is a trap and, with <code>-Wall -Wextra</code>, warns you. The following complete program compiles, but with a warning:</p>
+
+<pre class="code" data-lang="cpp" data-file="sign_compare.cpp" data-check="fragment"><code>#include &lt;cstddef&gt;
+#include &lt;print&gt;
+
+int main() {
+    int offset = -1;
+    std::size_t count = 3;
+    bool smaller = offset &lt; count;      // mixing signed and unsigned
+    std::println("is -1 smaller than 3? {}", smaller);
+    return 0;
+}
+</code></pre>
+<pre class="shell"><code>$ clang++ -std=c++23 -Wall -Wextra sign_compare.cpp -o sign_compare
+</code></pre>
+<pre class="output"><code>sign_compare.cpp:7:27: warning: comparison of integers of different signs: 'int' and 'std::size_t' (aka 'unsigned long') [-Wsign-compare]
+    7 |     bool smaller = offset &lt; count;      // mixing signed and unsigned
+      |                    ~~~~~~ ^ ~~~~~
+1 warning generated.
+</code></pre>
+<pre class="shell"><code>$ ./sign_compare
+is -1 smaller than 3? false
+</code></pre>
+
+<p>Minus one is not smaller than three, says the program, because by the time the comparison ran the minus one had become an enormous positive number. The warning text is worth memorising: "comparison of integers of different signs". When you see it, decide which type the comparison should happen in and <code>static_cast</code> the other operand to match. Here the values are small and might be negative, so compare as <code>int</code>:</p>
+
+<pre class="code" data-lang="cpp" data-file="sign_compare_fixed.cpp" data-check="run"><code>#include &lt;cstddef&gt;
+#include &lt;print&gt;
+
+int main() {
+    int offset = -1;
+    std::size_t count = 3;
+    bool smaller = offset &lt; static_cast&lt;int&gt;(count);   // compare two ints
+    std::println("is -1 smaller than 3? {}", smaller);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="sign_compare_fixed.cpp"><code>is -1 smaller than 3? true
+</code></pre>
+
+<p>The other direction comes up just as often: you hold an <code>int</code> coordinate and the library wants a <code>std::size_t</code> index. Then you first make sure the <code>int</code> is not negative and write <code>static_cast&lt;std::size_t&gt;(x)</code>. That is exactly what the <code>random_cells</code> stub in <code>life.cpp</code> does with <code>width</code> and <code>height</code> before multiplying them. <a href="06-vector.html">Chapter 6</a> turns this into a habit.</p>
+
+<div class="callout principle"><span class="label">First principle</span><p>A warning is the compiler telling you it did something you probably did not mean. The project's build turns on <code>-Wall -Wextra -Wpedantic</code>, and the book's own checker refuses any example that warns. Hold yourself to the same standard: a program that compiles with warnings is not finished.</p></div>
+
+<h2><code>const</code>: a promise not to change</h2>
+<p>Many values never change after they are set: the width of the grid, the number of warm-up steps, the fill probability. Putting <code>const</code> in front of the declaration tells the compiler "this box is written once, at initialisation, and never again". The compiler then <em>refuses</em> to compile any later assignment. Here is what breaking the promise looks like:</p>
+
+<pre class="code" data-lang="cpp" data-file="const_error.cpp" data-check="error"><code>#include &lt;print&gt;
+
+int main() {
+    const int width = 10;
+    width = 20;                          // breaking the promise
+    std::println("width = {}", width);
+    return 0;
+}
+</code></pre>
+<pre class="output"><code>const_error.cpp:5:11: error: cannot assign to variable 'width' with const-qualified type 'const int'
+    5 |     width = 20;                          // breaking the promise
+      |     ~~~~~ ^
+const_error.cpp:4:15: note: variable 'width' declared const here
+    4 |     const int width = 10;
+      |     ~~~~~~~~~~^~~~~~~~~~
+1 error generated.
+</code></pre>
+
+<p>This is an error you want. The compiler found, before the program ever ran, a line that contradicts your stated intent; compare the uninitialised-variable example, where the mistake only showed up as a random number at run time. Everything you can move from "wrong at run time" to "refused at compile time" is a win, and <code>const</code> is the cheapest such move. So: make everything <code>const</code> unless it needs to change, and let the compiler tell you when you were wrong. The benchmark file <code>phase1-terminal/01-life/bench/bench_life.cpp</code> follows this rule; count how many of its variables are <code>const</code>.</p>
+
+<pre class="code" data-lang="cpp" data-file="const_ok.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int main() {
+    const int width = 10;
+    const int height = 4;
+    const int cell_count = width * height;
+    int alive = 0;                       // this one will change, so no const
+
+    std::println("{} x {} grid has {} cells", width, height, cell_count);
+    alive = alive + 3;
+    std::println("alive now: {}", alive);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="const_ok.cpp"><code>10 x 4 grid has 40 cells
+alive now: 3
+</code></pre>
+
+<p>Notice that a <code>const</code> can be computed from other values (<code>width * height</code>); "const" means "not changed after this line", not "known before the program runs". In <a href="05-references-and-const.html">chapter 5</a> <code>const</code> gets a second, bigger job: marking which function parameters a function promises not to modify. The <code>const Cells&amp;</code> in the <code>step</code> declaration in <code>life.hpp</code> is that promise.</p>
+
+<h2><code>auto</code>: let the compiler write the type</h2>
+<p>Every initialisation has a value on the right, and the value has a type. If you write <code>auto</code> instead of a type name, the compiler gives the variable the type of the initialiser. <code>auto count = 10;</code> is exactly <code>int count = 10;</code>, because <code>10</code> is an <code>int</code>.</p>
+
+<pre class="code" data-lang="cpp" data-file="auto_demo.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int main() {
+    auto count = 10;                     // int, because 10 is an int literal
+    auto ratio = 0.35;                   // double, because 0.35 is a double literal
+    auto alive = true;                   // bool
+    auto mark = '#';                     // char
+    auto size = sizeof(int);             // std::size_t, because sizeof gives one
+
+    std::println("{} {} {} {} {}", count, ratio, alive, mark, size);
+
+    auto total = 0;                      // int, maybe not what you meant...
+    total = total + 2.5;                 // ...the .5 is lost on the way back into an int
+    std::println("total = {}", total);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="auto_demo.cpp"><code>10 0.35 true # 4
+total = 2
+</code></pre>
+
+<p>When <code>auto</code> helps: the type is obvious from the right side and tedious to spell, such as <code>auto size = sizeof(int);</code> or, from <a href="13-timing-and-benchmark.html">chapter 13</a> on, <code>auto start = clock::now();</code>. When <code>auto</code> hides: the type is <em>not</em> obvious and it matters. <code>auto total = 0;</code> makes an <code>int</code>; adding <code>2.5</code> produces a <code>double</code>, which is narrowed back into the <code>int</code> box, dropping the half. <code>double total = 0;</code> would have made the intent visible and the answer 2.5. A fair rule for Week 1: write the type for numbers you declare yourself; use <code>auto</code> when the right side already names the type or is a library call.</p>
+
+<h2>Literals and names</h2>
+<p>A <strong>literal</strong> is a value written directly in the source. Its spelling decides its type, which is why the previous sections kept pointing at decimal points and quote marks:</p>
+
+<pre class="code" data-lang="cpp" data-file="literals.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int main() {
+    std::println("{}", 3);               // int literal
+    std::println("{}", 3.0);             // double literal
+    std::println("{}", 3.0f);            // float literal
+    std::println("{}", 'c');             // char literal: single quotes
+    std::println("{}", "text");          // string literal: double quotes
+    std::println("{}", true);            // bool literal
+
+    std::println("{} {} {}", 10 / 4, 10.0 / 4, 10 / 4.0);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="literals.cpp"><code>3
+3
+3
+c
+text
+true
+2 2.5 2.5
+</code></pre>
+
+<p>The first three lines all print <code>3</code>, because <code>std::println</code> prints a floating-point value in the shortest form that reads back to the same number, and for 3.0 that is <code>3</code>. The types are still different, as the last line proves: <code>10 / 4</code> with two <code>int</code> literals is 2, and the moment either operand is a <code>double</code> literal the whole division is done in <code>double</code>. If you need to see the decimals, you ask for them with a format code (next section).</p>
+<p>Single quotes make a <code>char</code> (exactly one character). Double quotes make a <strong>string literal</strong>, a sequence of characters; <code>"c"</code> and <code>'c'</code> are different types. Strings get a proper treatment in <a href="08-strings-and-args.html">chapter 8</a>; this week you mostly meet them as the first argument to <code>std::println</code>.</p>
+
+<h3>Naming</h3>
+<p>A name can use letters, digits and underscores, cannot start with a digit, and is case-sensitive (<code>width</code> and <code>Width</code> are different variables). The conventions in this project, matching <code>life.hpp</code>:</p>
+<ul>
+<li><strong><code>snake_case</code></strong>: lower-case words joined by underscores. <code>cell_count</code>, <code>count_neighbours</code>, <code>random_cells</code>.</li>
+<li><strong>Descriptive.</strong> <code>alive_cells</code>, not <code>ac</code>; <code>neighbours</code>, not <code>n</code>. The name should say what the box holds without a comment.</li>
+<li><strong>No single letters</strong>, with two exceptions that are so universal they count as words: loop counters (<code>i</code>, <code>j</code>, <a href="03-control-flow.html">chapter 3</a>) and coordinates (<code>x</code>, <code>y</code>). The contract uses <code>x</code> and <code>y</code> for column and row, and so should you.</li>
+<li><strong>British spelling</strong>, because the contract says <code>count_neighbours</code> and a test that calls <code>count_neighbors</code> will not compile.</li>
+<li><strong>Not a keyword.</strong> Words the language owns, such as <code>int</code>, <code>return</code>, <code>const</code>, <code>auto</code>, <code>true</code> and <code>false</code>, cannot name a variable; <code>int int = 3;</code> is refused. There are a little over 90 of them, and your editor colours them differently, so you will rarely collide with one by accident.</li>
+</ul>
+
+<h2>Formatting output</h2>
+<p>You have seen <code>{}</code> print whatever it is given in a default style. Between the braces you can put a colon and a <strong>format specification</strong> that controls width, alignment, padding and the number of decimals. The benchmark prints <code>ms per step:  {:.3f}</code>, and your Life <code>main</code> will want to line up a status line, so here are the codes you need:</p>
+
+<pre class="code" data-lang="cpp" data-file="format.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int main() {
+    double ms = 3.14159;
+    std::println("[{:.2f}]", ms);        // 2 digits after the point
+    std::println("[{:.0f}]", ms);        // no decimals (rounded)
+    std::println("[{:>5}]", 42);         // right-align in a field 5 wide
+    std::println("[{:&lt;5}]", 42);         // left-align in a field 5 wide
+    std::println("[{:^5}]", 42);         // centre in a field 5 wide
+    std::println("[{:03}]", 7);          // pad with zeros to width 3
+    std::println("[{:>8.3f}]", ms);      // width 8, 3 decimals
+    std::println("[{:+}]", 5);           // always show the sign
+    std::println("[{:>+8.1f}]", ms);     // align, sign, width, precision, type
+    std::println("[{:.0f}] [{:.0f}]", 2.5, 3.5);   // rounding a tie
+    std::println("[{}] [{}]", 1000000, 2.5e-5);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="format.cpp"><code>[3.14]
+[3]
+[   42]
+[42   ]
+[ 42  ]
+[007]
+[   3.142]
+[+5]
+[    +3.1]
+[2] [4]
+[1000000] [2.5e-05]
+</code></pre>
+
+<table>
+<thead><tr><th>Code</th><th>Meaning</th><th>Example</th><th>Prints</th></tr></thead>
+<tbody>
+<tr><td><code>{}</code></td><td>default</td><td><code>3.5</code></td><td><code>3.5</code></td></tr>
+<tr><td><code>{:.2f}</code></td><td>fixed, 2 decimals</td><td><code>3.14159</code></td><td><code>3.14</code></td></tr>
+<tr><td><code>{:.0f}</code></td><td>fixed, rounded to a whole number</td><td><code>3.14159</code></td><td><code>3</code></td></tr>
+<tr><td><code>{:>5}</code></td><td>width 5, right-aligned</td><td><code>42</code></td><td><code>&nbsp;&nbsp;&nbsp;42</code></td></tr>
+<tr><td><code>{:&lt;5}</code></td><td>width 5, left-aligned</td><td><code>42</code></td><td><code>42&nbsp;&nbsp;&nbsp;</code></td></tr>
+<tr><td><code>{:^5}</code></td><td>width 5, centred</td><td><code>42</code></td><td><code>&nbsp;42&nbsp;&nbsp;</code></td></tr>
+<tr><td><code>{:03}</code></td><td>width 3, zero-padded</td><td><code>7</code></td><td><code>007</code></td></tr>
+<tr><td><code>{:>8.3f}</code></td><td>width 8, 3 decimals</td><td><code>3.14159</code></td><td><code>&nbsp;&nbsp;&nbsp;3.142</code></td></tr>
+<tr><td><code>{:+}</code></td><td>always show the sign</td><td><code>5</code></td><td><code>+5</code></td></tr>
+</tbody>
+</table>
+
+<p>The order inside the braces is fixed: first the alignment (<code>&lt;</code>, <code>></code> or <code>^</code>), then a sign flag such as <code>+</code>, then a <code>0</code> if you want zero padding, then the width, then a dot and the precision, then the type letter (<code>f</code> for fixed-point). You may leave any part out, but you may not reorder the parts; <code>{:>+8.1f}</code> in the program uses five of them in that order. The square brackets in the program are ordinary text, there only to make the padding spaces visible. Rounding with <code>.0f</code> is honest rounding, with one wrinkle shown on the <code>[2] [4]</code> line: a value exactly halfway between two whole numbers goes to the even one, so 2.5 prints as <code>2</code> and 3.5 as <code>4</code>. One more detail from the last line: a very small or very large <code>double</code> printed with plain <code>{}</code> may come out in scientific notation (<code>2.5e-05</code> means 2.5 × 10<sup>−5</sup>). If you want a fixed number of decimals regardless, say so with <code>f</code>.</p>
+
+<div class="callout try"><span class="label">Try it</span><p>Write a program that declares a <code>const int</code> width of 1000 and height of 1000, a <code>const double</code> fill of 0.35, and prints three lines: the number of cells, the expected number of live cells (<code>cells * fill</code>) as a whole number using <code>{:.0f}</code>, and the live fraction as a percentage with one decimal. Then change the width to 7 and the height to 3 and check that the live-cell line does something sensible with a fraction of a cell. Compile with <code>tools/run.sh</code> so the sanitizers are on, and make sure there are no warnings.</p></div>
+<details class="hint"><summary>Stuck? First nudge</summary><p><code>width * height</code> is an <code>int</code> times an <code>int</code>, so it is an <code>int</code>. To multiply it by a <code>double</code> you do not have to convert anything: the <code>int</code> is widened automatically. To print it as a percentage, multiply by 100.0 and use <code>{:.1f}</code>.</p></details>
+<details class="answer"><summary>Show one answer</summary>
+<pre class="code" data-lang="cpp" data-file="fill_answer.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int main() {
+    const int width = 1000;
+    const int height = 1000;
+    const double fill = 0.35;
+    const int cells = width * height;
+    const double expected_live = cells * fill;        // int widened to double
+
+    std::println("cells:         {}", cells);
+    std::println("expected live: {:.0f}", expected_live);
+    std::println("live fraction: {:.1f}%", expected_live / cells * 100.0);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="fill_answer.cpp"><code>cells:         1000000
+expected live: 350000
+live fraction: 35.0%
+</code></pre>
+<p>With width 7 and height 3 the middle line prints <code>7</code>: 21 × 0.35 is 7.35, and <code>{:.0f}</code> rounds it. Every variable is <code>const</code>, because none of them changes after its first line.</p>
+</details>
+
+<h2>Check yourself</h2>
+<div class="quiz">
+<div class="q"><p>What does <code>std::println("{}", 7 / 2);</code> print, and why? What would you change to get 3.5?</p><details class="answer"><summary>Answer</summary><p>It prints <code>3</code>. Both operands are <code>int</code> literals, so the division is integer division and the fraction is thrown away. Make either operand a <code>double</code>: <code>7.0 / 2</code>, <code>7 / 2.0</code>, or <code>static_cast&lt;double&gt;(7) / 2</code>.</p></details></div>
+
+<div class="q"><p>What does <code>-7 % 2</code> give, and what does <code>-1 % 10</code> give? Why does this matter for a wrap-around grid?</p><details class="answer"><summary>Answer</summary><p><code>-7 % 2</code> is <code>-1</code> and <code>-1 % 10</code> is <code>-1</code>. Integer division rounds toward zero and the remainder takes the sign of the left operand. On a wrapping grid the cell to the left of column 0 should be the last column (9 on a width-10 grid), but <code>%</code> alone gives −1, which is not a valid position. <a href="07-flat-grid.html">Chapter 7</a> shows how to fix it.</p></details></div>
+
+<div class="q"><p>What does <code>sizeof(int)</code> print on your Mac? And <code>sizeof(std::size_t)</code>, <code>sizeof(char)</code>, <code>sizeof(std::uint8_t)</code>?</p><details class="answer"><summary>Answer</summary><p>4, 8, 1 and 1. <code>sizeof</code> gives the number of bytes a type occupies, as a <code>std::size_t</code>.</p></details></div>
+
+<div class="q"><p>Why does the standard library use <code>std::size_t</code> for sizes rather than <code>int</code>? What is the one thing you must never do with a <code>std::size_t</code>?</p><details class="answer"><summary>Answer</summary><p>A size is never negative and may exceed 2.1 billion, so an unsigned 8-byte type fits the job and wastes no patterns on negatives. The thing to never do is subtract below zero: <code>0 - 1</code> as a <code>std::size_t</code> is 18,446,744,073,709,551,615, silently, with no sanitizer message. Use <code>int</code> for anything that might need to be −1.</p></details></div>
+
+<div class="q"><p>What is undefined behaviour? Name two examples from this chapter and say how you would catch them.</p><details class="answer"><summary>Answer</summary><p>Undefined behaviour is any situation where the C++ language makes no promise about what the program does: anything may happen, including seeming to work. Examples from this chapter: signed integer overflow (<code>2147483647 + 1</code>) and reading an uninitialised variable (<code>int x; ... x * 2</code>). Division by zero is a third. Overflow and division by zero are caught by compiling with <code>-fsanitize=address,undefined</code> (what <code>tools/run.sh</code> and the Debug build do), which prints the file and line the moment the rule is broken. The uninitialised read is <em>not</em> caught by those sanitizers; it is caught only by the compiler's <code>-Wuninitialized</code> warning, so you read every warning.</p></details></div>
+
+<div class="q"><p>Is <code>0.1 + 0.2 == 0.3</code> true in C++? What does this tell you about using <code>double</code>?</p><details class="answer"><summary>Answer</summary><p>No. <code>0.1 + 0.2</code> is stored as 0.30000000000000004441… and <code>0.3</code> as 0.29999999999999998890…; they are different bit patterns. A <code>double</code> is an approximation with about 16 significant digits. Use it for measurements and probabilities, never for exact counting, and never compare two <code>double</code>s with <code>==</code>.</p></details></div>
+
+<div class="q"><p>Both <code>char</code> and <code>std::uint8_t</code> are one byte. What is the difference when you print one holding the value 35?</p><details class="answer"><summary>Answer</summary><p>The bytes are identical; the type differs. <code>std::println</code> prints a <code>char</code> as the character with that code, <code>#</code>, and a <code>std::uint8_t</code> as the number <code>35</code>. This is the whole chapter in one example: the type, not the byte, decides the meaning.</p></details></div>
+
+<div class="q"><p>What does the compiler say about <code>const int w = 10; w = 20;</code>, and why is that message good news?</p><details class="answer"><summary>Answer</summary><p>It refuses to compile: "cannot assign to variable 'w' with const-qualified type 'const int'". It is good news because a contradiction in your intent was caught before the program ran, instead of becoming a silent wrong value at run time. Make things <code>const</code> by default so the compiler can catch more of these.</p></details></div>
+</div>
+
+<h2>What you can do now</h2>
+<ul>
+<li>Explain that memory is bytes with no meaning of their own, and that a type is the rule that gives a stretch of bytes a meaning and a set of allowed operations.</li>
+<li>Declare, initialise and assign variables of type <code>int</code>, <code>double</code>, <code>float</code>, <code>bool</code>, <code>char</code>, <code>std::size_t</code> and <code>std::uint8_t</code>, and say how many bytes each takes.</li>
+<li>Predict the result of integer division and <code>%</code>, including for negative numbers, and explain why <code>-1 % 10</code> is a trap for a wrapping grid.</li>
+<li>Explain undefined behaviour, name three examples, and say which of them the sanitizers in <code>tools/run.sh</code> and the Debug build turn into a readable message, and which only a compiler warning can catch.</li>
+<li>Convert between types on purpose with <code>static_cast</code>, recognise the "comparison of integers of different signs" warning, and fix it.</li>
+<li>Use <code>const</code> by default, use <code>auto</code> where the type is obvious from the right-hand side, and name variables in descriptive <code>snake_case</code>.</li>
+<li>Format output with widths, alignment, zero-padding and a fixed number of decimals.</li>
+</ul>
+<p>Next, <a href="03-control-flow.html">chapter 3</a> lets the program make decisions and repeat itself: <code>if</code>, <code>while</code> and <code>for</code>, built on the <code>bool</code>s you can now produce.</p>
+</main>
+</body>
+</html>

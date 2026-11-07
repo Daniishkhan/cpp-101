@@ -1,0 +1,770 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>09 · The terminal: drawing with bytes — C++ from zero to Life</title>
+<link rel="stylesheet" href="assets/book.css?v=9">
+<link rel="stylesheet" href="assets/tutor.css?v=9">
+<script src="assets/theme.js?v=9"></script>
+<script defer src="assets/book.js?v=9"></script>
+<script defer src="assets/tutor.js?v=9"></script>
+</head>
+<body>
+<nav class="sidebar" aria-label="Chapters"></nav>
+<main>
+<p class="chapter-kicker">Chapter 09</p>
+<h1>The terminal: drawing with bytes</h1>
+<p class="lede">At the end of this chapter you will be able to make a program that clears the screen, draws a picture, waits a tenth of a second, and draws the next picture in the same place, so that a grid of characters appears to move. That is all an animation is, and it is all the Life game loop needs.</p>
+
+<div class="callout note"><span class="label">In this chapter</span>
+<ul>
+<li>What a terminal is: a program that reads bytes from yours and paints characters in a grid.</li>
+<li>Printable bytes and control bytes: <code>'\n'</code>, <code>'\r'</code>, <code>'\t'</code>, and byte 27, the escape.</li>
+<li>Escape sequences: clear the screen, move the cursor, hide it, show it, colour the text.</li>
+<li>Buffering: why a program that prints without newlines can show nothing until it exits, and <code>std::fflush</code>.</li>
+<li>Time: <code>std::chrono</code> durations, the <code>100ms</code> literal, and <code>std::this_thread::sleep_for</code>.</li>
+<li>Frame timing: a time budget per frame, measuring with <code>steady_clock</code>, sleeping only for what is left.</li>
+<li>Flicker, Ctrl-C and the lost cursor, and how big the terminal is.</li>
+</ul>
+</div>
+
+<h2>What a terminal actually is</h2>
+<p>Every program you have written so far ends with text appearing in a window. It is worth asking, once, how that happens, because the answer is simpler than it looks and you are about to exploit it.</p>
+<p>When your program calls <code>std::println("Hello")</code>, it does not draw anything. It cannot: it has no idea what a window is. What it does is hand six bytes (the five letters and a newline) to the operating system and say "this is for output". (Strictly, the bytes wait in a buffer first and are handed over in batches; the section on buffering below is about exactly that.) The operating system passes those bytes to whatever program is listening on the other end of the output. Normally that program is the <strong>terminal</strong>: Terminal.app, iTerm, the terminal pane in your editor. The terminal is an ordinary program. Its one job is to read a stream of bytes and paint characters into a grid of cells, one character per cell, moving a <strong>cursor</strong> (the position where the next character goes) one cell to the right after each one.</p>
+<p>The third program in the picture is the <strong>shell</strong>: zsh on your Mac. The shell is the program that shows you a prompt, reads <code>./hello</code> when you type it, and starts your program with its output connected to the same terminal. When your program ends, the shell prints the next prompt. So there are three programs: the shell, which started yours; your program, which produces bytes; and the terminal, which turns bytes into pixels.</p>
+<p>The stream of bytes your program writes has a name: <strong>standard output</strong>, or <strong>stdout</strong>. <code>std::println</code> and <code>std::print</code> write to it. Nothing else happens. If you see pixels, that is the terminal's doing.</p>
+
+<div class="callout principle"><span class="label">First principle</span><p>Your program never draws. It writes bytes to stdout. The terminal, a separate program, reads those bytes and decides what to paint. Everything in this chapter is about choosing the bytes that make the terminal paint what you want.</p></div>
+
+<p>Here is a program that shows the bytes behind a piece of text. Each <code>char</code> is a one-byte number; <code>static_cast&lt;int&gt;</code> lets you print it as a number instead of a letter (<a href="02-values-and-types.html">chapter 2</a>).</p>
+
+<pre class="code" data-lang="cpp" data-file="bytes_of_text.cpp" data-check="run"><code>#include &lt;print&gt;
+#include &lt;string&gt;
+
+int main() {
+    std::string text = "ab\ncd";
+    std::println("the text has {} bytes", text.size());
+    for (char c : text) {
+        std::println("byte value {}", static_cast&lt;int&gt;(c));
+    }
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="bytes_of_text.cpp"><code>the text has 5 bytes
+byte value 97
+byte value 98
+byte value 10
+byte value 99
+byte value 100
+</code></pre>
+<p>Five bytes. <code>a</code> is 97, <code>b</code> is 98, <code>c</code> is 99, <code>d</code> is 100. Those are <strong>printable bytes</strong>: when the terminal reads one, it paints the matching character in the cell under the cursor and moves the cursor right. In the middle sits byte 10, which is <code>'\n'</code>. The terminal does not paint a "10". Byte 10 is a <strong>control byte</strong>: a byte that commands the terminal instead of drawing. Byte 10 means "move the cursor to the start of the next line".</p>
+<p>So the rule for the whole stream is: printable bytes draw, control bytes command. There are only a few control bytes you need, and you have been using one of them since chapter 1.</p>
+
+<div class="callout analogy"><span class="label">Analogy</span><p>A terminal is a typewriter with a very obedient typist. Each letter you send, the typist types, and the carriage moves one space right. Some keys do not type a letter: the carriage-return lever slides the carriage back to the left margin, the line-feed knob rolls the paper up one line, the tab key jumps the carriage to the next tab stop. The terminal's control bytes are those levers. Where the analogy breaks: paper cannot be erased, but a terminal cell can be repainted as often as you like, and the typist can be told to jump to any row and column directly. That difference is what makes animation possible.</p></div>
+
+<h3>Three control bytes you already own</h3>
+<p><code>'\n'</code> is byte 10, <strong>newline</strong> (also called line feed). The cursor goes to column 0 of the next line. <code>std::println</code> adds one for you after your text; <code>std::print</code> does not, which is exactly why <code>std::print</code> exists. (A purist's footnote: on its own, byte 10 only moves the cursor <em>down</em>. The operating system's terminal driver quietly adds a carriage return in front of every newline your program writes, so that "next line" also means "column 0". In week 3, Snake puts the terminal into raw mode, which switches that favour off, and you will see the staircase that results.)</p>
+<p><code>'\t'</code> is byte 9, <strong>tab</strong>. The cursor jumps right to the next tab stop, which in every terminal you will meet is the next column that is a multiple of 8. It is a cheap way to line up columns.</p>
+
+<pre class="code" data-lang="cpp" data-file="tabs.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int main() {
+    std::println("x\ty\tsum");
+    std::println("1\t2\t3");
+    std::println("10\t20\t30");
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="tabs.cpp"><code>x	y	sum
+1	2	3
+10	20	30
+</code></pre>
+<p>The output block above holds the raw tab bytes, so the browser shows them its own way. In the terminal you see <code>x</code> in column 0, <code>y</code> in column 8 and <code>sum</code> in column 16, with the numbers lined up under them. <code>10</code> takes two cells, but the tab after it still jumps to column 8, which is why the second column does not shift.</p>
+<p><code>'\r'</code> is byte 13, <strong>carriage return</strong>. The cursor goes back to column 0 of the <em>same</em> line, without moving down. Whatever you print next lands on top of what is already there. Try to predict what this shows before you run it.</p>
+
+<pre class="code" data-lang="cpp" data-file="carriage_return.cpp" data-check="compile"><code>#include &lt;print&gt;
+
+int main() {
+    std::print("12345");
+    std::print("\r");      // back to column 0 of the SAME line
+    std::print("AB");
+    std::print("\n");
+    return 0;
+}
+</code></pre>
+<pre class="shell"><code>$ clang++ -std=c++23 -Wall -Wextra carriage_return.cpp -o carriage_return
+$ ./carriage_return
+AB345
+</code></pre>
+<p>The program wrote nine bytes: <code>1 2 3 4 5 CR A B LF</code>. The terminal painted <code>12345</code>, slid the cursor back to the start, painted <code>A</code> over the <code>1</code> and <code>B</code> over the <code>2</code>, and the <code>345</code> stayed because nothing was written on top of it. You have just drawn two frames of an animation on one line. The rest of this chapter is more of the same, with better tools.</p>
+
+<div class="callout note"><span class="label">Why the book cannot show that as an output block</span><p>The book's checker compares the raw bytes a program writes, not what a terminal paints. For <code>carriage_return.cpp</code> the raw bytes are <code>12345\rAB\n</code>, which no text block can show honestly. So programs whose point is what the terminal <em>does</em> with the bytes are marked <code>compile</code> and the result is described in a shell block. Run them yourself; the whole chapter is meant to be watched.</p></div>
+
+<h2>Escape sequences: commands to the terminal</h2>
+<p>Newline, tab and carriage return were enough in 1970. People soon wanted more: clear the screen, move the cursor anywhere, change the colour. There are not enough spare byte values for all of that, so a scheme was agreed that is still what every terminal understands today. One control byte, byte 27, called <strong>escape</strong> (ESC), means "the next few bytes are a command, not text". The command's bytes follow, and the terminal performs it without painting any of them. The whole group is an <strong>escape sequence</strong>. The particular set of commands is the <strong>ANSI</strong> set, after the standards body that wrote them down.</p>
+<p>You cannot type byte 27 into a string literal (pressing the Escape key in an editor does something else entirely), so C++ lets you write it as a <strong>hex escape</strong>: <code>\x1b</code>. The <code>\x</code> says "a byte written in hexadecimal follows". <strong>Hexadecimal</strong> is counting in sixteens instead of tens: the digits are 0 to 9 and then <code>a</code> to <code>f</code> for ten to fifteen, so <code>1b</code> means one sixteen plus eleven, which is 27. (The sanitizer report in <a href="06-vector.html">chapter 6</a> was full of hexadecimal numbers; this is the first one you write yourself.) Almost every command you need then continues with <code>[</code>, zero or more ordinary decimal digits (separated by <code>;</code> when there are several), and one letter that says which command it is. Here is proof that <code>"\x1b[2J"</code> is just four bytes.</p>
+
+<pre class="code" data-lang="cpp" data-file="escape_bytes.cpp" data-check="run"><code>#include &lt;print&gt;
+#include &lt;string&gt;
+
+int main() {
+    std::string clear = "\x1b[2J";
+    std::println("the clear-screen command is {} bytes:", clear.size());
+    for (char c : clear) {
+        std::println("  byte {}", static_cast&lt;int&gt;(c));
+    }
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="escape_bytes.cpp"><code>the clear-screen command is 4 bytes:
+  byte 27
+  byte 91
+  byte 50
+  byte 74
+</code></pre>
+<p>27 is ESC, 91 is <code>[</code>, 50 is the digit <code>2</code>, 74 is <code>J</code>. When the terminal sees them in a row it clears every cell on the screen. These are the sequences this week needs:</p>
+
+<table>
+<thead><tr><th>Bytes you write</th><th>What the terminal does</th></tr></thead>
+<tbody>
+<tr><td><code>"\x1b[2J"</code></td><td>Clear the whole screen (every cell becomes a space). The cursor does not move.</td></tr>
+<tr><td><code>"\x1b[H"</code></td><td>Move the cursor to the top-left corner: row 1, column 1. ("Home".)</td></tr>
+<tr><td><code>"\x1b[{row};{col}H"</code></td><td>Move the cursor to a given row and column. Both count from 1, not 0. <code>"\x1b[H"</code> is the short form of <code>"\x1b[1;1H"</code>.</td></tr>
+<tr><td><code>"\x1b[?25l"</code></td><td>Hide the cursor. (The last character is a lower-case L.)</td></tr>
+<tr><td><code>"\x1b[?25h"</code></td><td>Show the cursor again.</td></tr>
+<tr><td><code>"\x1b[31m"</code></td><td>From here on, paint text in red. 30 to 37 are black, red, green, yellow, blue, magenta, cyan, white. <code>1;</code> in front means bold.</td></tr>
+<tr><td><code>"\x1b[0m"</code></td><td>Reset: back to the terminal's normal colour and weight.</td></tr>
+</tbody>
+</table>
+
+<p>The first two together are the heart of every terminal animation. Clear, go home, draw the picture. Clear, go home, draw the next picture. Because every frame starts at the same cell, each frame lands exactly on top of the one before, and the eye sees motion.</p>
+
+<pre class="code" data-lang="cpp" data-file="clear_and_home.cpp" data-check="compile"><code>#include &lt;print&gt;
+
+int main() {
+    std::println("This line was here before.");
+    std::println("So was this one.");
+
+    std::print("\x1b[2J");      // clear the whole screen
+    std::print("\x1b[H");       // cursor to row 1, column 1
+
+    std::println("#####");
+    std::println("#...#");
+    std::println("#####");
+    return 0;
+}
+</code></pre>
+<pre class="shell"><code>$ clang++ -std=c++23 -Wall -Wextra clear_and_home.cpp -o clear_and_home
+$ ./clear_and_home
+#####
+#...#
+#####
+</code></pre>
+<p>When you run it, the two "before" lines appear for a fraction of a second, too fast to see, and then the screen is wiped and the box sits alone in the top-left corner, with your shell prompt right under it. Everything that was in the window, including your earlier commands, is gone (most terminals keep it in the <strong>scrollback</strong>, the history of lines that have left the window; scroll up and it is still there). That is what <code>"\x1b[2J\x1b[H"</code> does, and from now on you will usually write the two commands as one string.</p>
+<p>Moving the cursor to a chosen cell uses the row-and-column form. Since <code>std::print</code> fills <code>{}</code> with values, you can put the row and column in with the usual braces.</p>
+
+<pre class="code" data-lang="cpp" data-file="move_cursor.cpp" data-check="compile"><code>#include &lt;print&gt;
+
+int main() {
+    std::print("\x1b[2J\x1b[H");           // clean slate, cursor top-left
+    std::print("\x1b[3;10H");              // row 3, column 10
+    std::print("A");
+    std::print("\x1b[5;20H");              // row 5, column 20
+    std::print("B");
+    std::print("\x1b[1;1H");               // back to the top-left corner
+    std::print("C");
+    std::print("\x1b[8;1H");               // row 8, so the shell prompt lands below
+    std::print("\n");
+    return 0;
+}
+</code></pre>
+<pre class="shell"><code>$ ./move_cursor
+C
+
+         A
+
+                   B
+</code></pre>
+<p>You see a <code>C</code> in the corner, an <code>A</code> on the third row nine cells in, a <code>B</code> on the fifth row nineteen cells in, and the prompt further down. Notice that the program printed them in the order A, B, C and the terminal does not care: the cursor was moved before each one. For Life you will not need this form, because printing the grid row by row from the home position is simpler, but it is good to know that any cell is reachable.</p>
+
+<div class="callout trap"><span class="label">Trap</span><p>Two things about <code>"\x1b[{row};{col}H"</code> fight the habits you built in <a href="07-flat-grid.html">chapter 7</a>. The terminal counts from 1, not 0: the top-left cell is row 1, column 1, and <code>"\x1b[0;0H"</code> is quietly treated as <code>"\x1b[1;1H"</code>, so an off-by-one here produces no error, only a picture one cell out of place. And the row comes first, then the column, which is the opposite order from <code>(x, y)</code>. If you ever want to place a cell that your code calls <code>(x, y)</code> in a 0-based grid, the sequence is row <code>y + 1</code>, column <code>x + 1</code>. Life does not need this form; Snake in week 3 does.</p></div>
+<p>Colour is optional and fun. A colour sequence changes a setting in the terminal that stays on until you reset it, so always pair a colour with <code>"\x1b[0m"</code>.</p>
+
+<pre class="code" data-lang="cpp" data-file="colours.cpp" data-check="compile"><code>#include &lt;print&gt;
+
+int main() {
+    std::println("\x1b[31mred\x1b[0m plain");
+    std::println("\x1b[32mgreen\x1b[0m plain");
+    std::println("\x1b[1;34mbold blue\x1b[0m plain");
+    return 0;
+}
+</code></pre>
+<pre class="shell"><code>$ ./colours
+red plain
+green plain
+bold blue plain
+</code></pre>
+<p>In your terminal the first word of each line is coloured and the word <code>plain</code> is not. If you forget the reset, everything the shell prints afterwards is red too, prompt included. Typing <code>reset</code> at the prompt fixes it.</p>
+
+<div class="callout trap"><span class="label">Trap</span><p>The <code>\x</code> escape is greedy: it keeps eating hexadecimal digits for as long as they continue. <code>[</code> is not a hex digit, so <code>"\x1b["</code> is safe. But the letters <code>a</code> to <code>f</code> and <code>A</code> to <code>F</code> are hex digits. If you ever write <code>"\x1bA"</code>, the compiler reads <code>1bA</code> as one three-digit number, which does not fit in a byte:</p>
+<pre class="code" data-lang="cpp" data-file="hex_trap.cpp" data-check="error"><code>#include &lt;print&gt;
+
+int main() {
+    std::print("\x1bAB\n");
+    return 0;
+}
+</code></pre>
+<pre class="output"><code>hex_trap.cpp:4:17: error: hex escape sequence out of range
+    4 |     std::print("\x1bAB\n");
+      |                 ^~~~~~
+1 error generated.
+</code></pre>
+<p>Every sequence in the table starts with <code>\x1b[</code>, so you will not hit this in Life. If you ever need ESC followed by a letter, split the string: <code>"\x1b" "A"</code>; two string literals side by side are glued into one.</p></div>
+
+<div class="callout note"><span class="label">The shell knows these bytes too</span><p>The shell command <code>tput</code> prints the escape sequence for a named action. <code>tput clear</code> writes <code>\x1b[H\x1b[2J</code>, <code>tput civis</code> writes <code>\x1b[?25l</code> (cursor invisible), <code>tput cnorm</code> writes <code>\x1b[?12l\x1b[?25h</code> (cursor normal: "stop blinking" followed by "show"). To see the bytes, feed one into <code>od -c</code>, a shell tool that prints every byte it receives: <code>tput civis | od -c</code> shows <code>033 [ ? 2 5 l</code>, where <code>033</code> is how <code>od</code> writes byte 27. (The <code>|</code> is a <strong>pipe</strong>: the shell connects the output of the program on its left to the input of the program on its right. You will use it again in the next section.) The shell's <code>clear</code> command writes <code>\x1b[3J</code> (wipe the scrollback too) and then the same two commands as <code>tput clear</code>. Your program and these commands are doing the exact same thing: writing bytes that the terminal obeys.</p></div>
+
+<div class="callout try"><span class="label">Try it</span><p>Before running anything, write down how many bytes <code>"\x1b[?25l"</code> is and what their values are, then change <code>escape_bytes.cpp</code> to print them and check. (Six: 27, 91, 63, 50, 53, 108.) Next, change <code>move_cursor.cpp</code> to draw a box of <code>#</code> three rows high and five wide with its top-left corner at row 4, column 6, using one cursor move per row. Finally run <code>colours.cpp</code> with the three <code>\x1b[0m</code> resets deleted and look at your prompt; type <code>reset</code> to recover.</p></div>
+
+<h2>Buffering: why nothing shows up</h2>
+<p>Here is a program that prints a dot every half second. Compile it and watch.</p>
+
+<pre class="code" data-lang="cpp" data-file="no_newline.cpp" data-check="compile"><code>#include &lt;chrono&gt;
+#include &lt;print&gt;
+#include &lt;thread&gt;
+
+int main() {
+    using namespace std::chrono_literals;
+    for (int i = 0; i &lt; 5; ++i) {
+        std::print(".");                            // no '\n': may sit in the buffer
+        std::this_thread::sleep_for(500ms);
+    }
+    std::println(" done");
+    return 0;
+}
+</code></pre>
+<p>(The two new lines, <code>using namespace std::chrono_literals;</code> and <code>sleep_for(500ms)</code>, are explained in the next section; for now read them as "wait half a second".) Watch closely. You would expect the first dot at once, because it is printed before the first sleep. On a terminal the dots do arrive one by one, but the first one shows up only after half a second, and the fifth dot appears together with <code> done</code> at the very end. Each dot is one sleep late. Now run it with its output going somewhere else: <code>./no_newline | cat</code>. That is the pipe from the <code>tput</code> note: your program's stdout now goes to <code>cat</code>, a program that copies whatever it reads to the terminal, so your program itself is no longer writing to a terminal. This time you see nothing at all for two and a half seconds, then <code>..... done</code> in one go. Same program, same bytes, different timing. Why?</p>
+<p>Writing to the operating system is slow compared with writing to memory, so <code>std::print</code> does not hand over each byte as you produce it. It appends your bytes to a <strong>buffer</strong>: a block of memory it owns. On this Mac, when the output is a pipe, the buffer holds 65,536 bytes. You can see the number: print 70,000 <code>x</code>s with no newline, sleep two seconds, then print <code>" end"</code>, and run it through <code>| cat</code>. Exactly 65,536 arrive at once, and the last 4,464 wait for the sleep. Only when the buffer is <strong>flushed</strong> are its contents actually sent on. The library flushes when the buffer fills up, when the program exits normally, and, if the output is a terminal, whenever a <code>'\n'</code> goes through. That last rule is called <strong>line buffering</strong>, and it is why <code>std::println</code> has always seemed instant: every line ends in a newline, and every newline flushes. When the output is a pipe or a file there is no line-buffering rule, only "full or exit", which is what you saw with <code>| cat</code>.</p>
+
+<div class="callout analogy"><span class="label">Analogy</span><p>The buffer is a post bag. Dropping a letter into the bag is cheap; the walk to the post office is the expensive part, so the carrier goes when the bag is full or the day ends, not once per letter. A flush is you telling the carrier "go now". Where the analogy breaks: a real post bag does not care what the letters say, but this one does. When the other end is a terminal, a newline in the text sends the carrier off at once, and so does the next <code>std::print</code>; when the other end is a pipe, neither does.</p></div>
+<p>There is one more rule, and it explains the late dots. When the output is a terminal, every call to <code>std::print</code> or <code>std::println</code> first flushes whatever is already waiting in the buffer, and <em>then</em> adds its own text to the buffer. So the first dot sat in the buffer during the first sleep and was pushed out by the second <code>std::print</code>; the fifth dot was pushed out by the <code>std::println(" done")</code>. Each frame of an animation written this way would show up one sleep late. (You can check this against the library's own source: the <code>&lt;print&gt;</code> header on your Mac has a function <code>__vprint_unicode_posix</code> whose first lines are "if this is a terminal, <code>fflush</code>".)</p>
+<p>An animation frame is a block of text that you want on screen <em>now</em>, before the sleep. Relying on those rules is fragile, for three reasons. The rules change with where the output goes, as you just saw. The last line of a frame may not end in a newline. And "flushed by the next print" means the frame shows up one sleep late, so what is on screen is always the previous frame. The fix is to flush yourself. <code>std::fflush(stdout)</code>, from the header <code>&lt;cstdio&gt;</code>, means "send everything in the buffer right now". <code>stdout</code> is the name of the standard output stream in that header.</p>
+
+<pre class="code" data-lang="cpp" data-file="flush_each_dot.cpp" data-check="compile"><code>#include &lt;chrono&gt;
+#include &lt;cstdio&gt;
+#include &lt;print&gt;
+#include &lt;thread&gt;
+
+int main() {
+    using namespace std::chrono_literals;
+    for (int i = 0; i &lt; 5; ++i) {
+        std::print(".");
+        std::fflush(stdout);                        // push the buffer out NOW
+        std::this_thread::sleep_for(500ms);
+    }
+    std::println(" done");
+    return 0;
+}
+</code></pre>
+<pre class="shell"><code>$ ./flush_each_dot | cat
+..... done
+</code></pre>
+<p>The final text is identical; the difference is that now each dot appears when it is printed, terminal or not. (You may meet <code>std::cout.flush()</code> in other books; it flushes the <code>&lt;iostream&gt;</code> output object, which this book does not use. <code>std::fflush(stdout)</code> is the one that pairs with <code>std::print</code>.)</p>
+
+<div class="callout principle"><span class="label">First principle</span><p>Output is batched. Bytes you print sit in a buffer until something flushes it. After each complete frame, call <code>std::fflush(stdout)</code> so the frame is on screen before you sleep. Do it once per frame, not once per character.</p></div>
+
+<h2>Time: durations and sleeping</h2>
+<p>Animation needs two things from the clock: a way to wait, and a way to measure. Both live in the header <code>&lt;chrono&gt;</code>, and both are built on one idea, the <strong>duration</strong>: an amount of time with its unit built into the type. <code>std::chrono::milliseconds</code> is a type whose values are whole numbers of milliseconds. <code>std::chrono::seconds</code> is whole seconds. You cannot accidentally add a seconds value to a milliseconds value and get nonsense, because the compiler knows the units and converts.</p>
+<p>Writing <code>std::chrono::milliseconds(100)</code> every time is tiresome, so the library offers <strong>duration literals</strong>: after the line <code>using namespace std::chrono_literals;</code> you can write <code>100ms</code>, <code>2s</code>, <code>500us</code> (microseconds) and they mean the same as the long form. The <code>using namespace</code> line is written inside <code>main</code> so the short names are only visible there. To get the plain number back out of a duration, call <code>.count()</code>.</p>
+
+<pre class="code" data-lang="cpp" data-file="durations.cpp" data-check="run"><code>#include &lt;chrono&gt;
+#include &lt;print&gt;
+
+int main() {
+    using namespace std::chrono_literals;
+
+    std::chrono::milliseconds a(100);          // the long way
+    std::chrono::milliseconds b = 100ms;       // the literal: the same value
+    std::println("a = {} ms, b = {} ms", a.count(), b.count());
+
+    std::chrono::milliseconds one_second = 1s; // seconds convert to ms exactly
+    std::println("1s is {} ms", one_second.count());
+
+    std::chrono::milliseconds frame = 1000ms / 60;
+    std::println("one frame at 60 fps is {} ms", frame.count());
+
+    auto total = 100ms + 250ms + 1s;
+    std::println("100ms + 250ms + 1s = {} ms", total.count());
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="durations.cpp"><code>a = 100 ms, b = 100 ms
+1s is 1000 ms
+one frame at 60 fps is 16 ms
+100ms + 250ms + 1s = 1350 ms
+</code></pre>
+<p>Three details. <code>1s</code> was assigned to a <code>milliseconds</code> variable and became 1000; the compiler did the conversion because seconds to milliseconds is exact. Going the other way, milliseconds to seconds, would lose information, and the compiler refuses to do it silently. <code>1000ms / 60</code> is 16, not 16.67: the duration holds whole milliseconds and the division is integer division (chapter 2). And <code>auto</code> on the sum let the compiler pick the finest unit involved, milliseconds, so nothing was lost.</p>
+<p>Here is the refusal. 1500 milliseconds is one and a half seconds, and a <code>seconds</code> value can only hold whole seconds, so the half would have to vanish:</p>
+
+<pre class="code" data-lang="cpp" data-file="lossy_duration.cpp" data-check="error"><code>#include &lt;chrono&gt;
+#include &lt;print&gt;
+
+int main() {
+    using namespace std::chrono_literals;
+    std::chrono::seconds s = 1500ms;    // 1.5 seconds does not fit in whole seconds
+    std::println("{} s", s.count());
+    return 0;
+}
+</code></pre>
+<pre class="output"><code>lossy_duration.cpp:6:26: error: no viable conversion from 'duration&lt;[...], ratio&lt;[...], 1000&gt;&gt;' to 'duration&lt;[...], ratio&lt;[...], 1&gt;&gt;'
+    6 |     std::chrono::seconds s = 1500ms;    // 1.5 seconds does not fit in whole seconds
+      |                          ^   ~~~~~~
+(several notes from the library follow)
+1 error generated.
+</code></pre>
+<p>Read the first line only. <code>ratio&lt;[...], 1000&gt;</code> is the library's spelling of "thousandths of a second" and <code>ratio&lt;[...], 1&gt;</code> is "whole seconds"; "no viable conversion" between them means the compiler will not drop the fraction behind your back. When you do want to round down on purpose, there is a tool for saying so, <code>duration_cast</code>; it appears in the section on measuring time below.</p>
+<p>To wait, call <code>std::this_thread::sleep_for</code> with a duration. It comes from the header <code>&lt;thread&gt;</code>. A <strong>thread</strong> is one sequence of instructions being run by the CPU. Your program is exactly one thread, so "this thread" means the running program itself (programs with several threads are week 11). It pauses your program for at least the duration asked; the operating system runs other programs meanwhile and wakes yours up when the time is up.</p>
+
+<pre class="code" data-lang="cpp" data-file="sleep_demo.cpp" data-check="compile"><code>#include &lt;chrono&gt;
+#include &lt;print&gt;
+#include &lt;thread&gt;
+
+int main() {
+    using namespace std::chrono_literals;
+    std::println("tick");
+    std::this_thread::sleep_for(500ms);
+    std::println("tock");
+    std::this_thread::sleep_for(500ms);
+    std::println("tick");
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    std::println("tock");
+    return 0;
+}
+</code></pre>
+<pre class="shell"><code>$ clang++ -std=c++23 -Wall -Wextra sleep_demo.cpp -o sleep_demo
+$ ./sleep_demo
+tick
+tock
+tick
+tock
+</code></pre>
+<p>Two seconds pass, one word every half second. (<code>std::println</code> ends each line with a newline, and this is a terminal, so each word shows immediately.) Two mistakes are common enough to see the compiler's reaction in advance. First, forgetting <code>#include &lt;thread&gt;</code>:</p>
+
+<pre class="code" data-lang="cpp" data-file="forgot_thread.cpp" data-check="error"><code>#include &lt;chrono&gt;
+#include &lt;print&gt;
+
+int main() {
+    using namespace std::chrono_literals;
+    std::this_thread::sleep_for(100ms);
+    std::println("done");
+    return 0;
+}
+</code></pre>
+<pre class="output"><code>forgot_thread.cpp:6:10: error: no member named 'this_thread' in namespace 'std'
+    6 |     std::this_thread::sleep_for(100ms);
+      |     ~~~~~^
+1 error generated.
+</code></pre>
+<p>"No member named <code>this_thread</code> in namespace <code>std</code>" nearly always means a missing include. Second, passing a bare number. What is 100? Seconds? Milliseconds? The library refuses to guess:</p>
+
+<pre class="code" data-lang="cpp" data-file="bare_number.cpp" data-check="error"><code>#include &lt;chrono&gt;
+#include &lt;print&gt;
+#include &lt;thread&gt;
+
+int main() {
+    std::this_thread::sleep_for(100);   // 100 what?
+    std::println("done");
+    return 0;
+}
+</code></pre>
+<pre class="output"><code>bare_number.cpp:6:5: error: no matching function for call to 'sleep_for'
+    6 |     std::this_thread::sleep_for(100);   // 100 what?
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~~
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__thread/this_thread.h:35:32: note: candidate function not viable: no known conversion from 'int' to 'const chrono::nanoseconds' (aka 'const duration&lt;long long, ratio&lt;1LL, 1000000000LL&gt;&gt;') for 1st argument
+   35 | _LIBCPP_EXPORTED_FROM_ABI void sleep_for(const chrono::nanoseconds&amp; __ns);
+      |                                ^         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__thread/this_thread.h:38:28: note: candidate template ignored: could not match 'chrono::duration&lt;_Rep, _Period&gt;' against 'int'
+   38 | _LIBCPP_HIDE_FROM_ABI void sleep_for(const chrono::duration&lt;_Rep, _Period&gt;&amp; __d) {
+      |                            ^
+1 error generated.
+</code></pre>
+<p>Read past the long library paths: "no known conversion from <code>int</code> to <code>chrono::nanoseconds</code>". The function wants a duration and you gave it an <code>int</code>. Write <code>100ms</code> and the units are part of the value.</p>
+
+<div class="callout principle"><span class="label">First principle</span><p>A duration is a number plus a unit, and the unit lives in the type. The compiler converts between units when no information is lost and refuses when it would be. You never pass a bare number of milliseconds anywhere in this book.</p></div>
+
+<h2>Your first animation: a bouncing #</h2>
+<p>You now have every piece. Put a <code>#</code> somewhere on a 40-column line, print the line, wait, move the <code>#</code> one cell, print the line again on top of the old one. Each printing is a <strong>frame</strong>; the wait between frames sets the speed. The line is a <code>std::string</code> of 40 dots, built with the <code>(n, value)</code> construction you saw for vectors in <a href="06-vector.html">chapter 6</a> and for a string of a million <code>x</code>s in <a href="05-references-and-const.html">chapter 5</a>. Because it is one line, <code>'\r'</code> is all the cursor movement needed. One small new thing: <code>std::println()</code> with nothing between the brackets prints just a newline. That is how the program leaves the finished line on screen and puts the prompt below it.</p>
+
+<pre class="code" data-lang="cpp" data-file="bounce.cpp" data-check="compile"><code>#include &lt;chrono&gt;
+#include &lt;cstdio&gt;
+#include &lt;print&gt;
+#include &lt;string&gt;
+#include &lt;thread&gt;
+
+int main() {
+    using namespace std::chrono_literals;
+    const int columns = 40;
+    int x = 0;          // where the # is
+    int dx = 1;         // +1 moving right, -1 moving left
+
+    for (int frame = 0; frame &lt; 60; ++frame) {
+        std::string line(static_cast&lt;std::size_t&gt;(columns), '.');
+        line[static_cast&lt;std::size_t&gt;(x)] = '#';
+
+        std::print("\r{}", line);        // '\r' = back to column 0, then overwrite
+        std::fflush(stdout);
+        std::this_thread::sleep_for(50ms);
+
+        x += dx;
+        if (x == columns - 1 || x == 0) {
+            dx = -dx;                    // hit a wall: turn around
+        }
+    }
+    std::println();
+    return 0;
+}
+</code></pre>
+<pre class="shell"><code>$ clang++ -std=c++23 -Wall -Wextra bounce.cpp -o bounce
+$ ./bounce
+...................#....................
+</code></pre>
+<p>For three seconds (60 frames of 50 ms) a <code>#</code> slides from the left edge to the right edge, turns, and slides back; the line above is where it stopped after sixty frames. Read the loop as the terminal sees it. Every frame's <code>std::print</code> begins with <code>'\r'</code>, so the cursor goes to column 0 first, and then forty printable bytes land on top of the forty from the frame before. Nothing is ever cleared; it is all overwriting. <code>std::fflush</code> makes sure the forty bytes are out before the sleep. The <code>dx</code> variable is a trick worth remembering: velocity as a signed number, and bouncing is nothing more than <code>dx = -dx</code>.</p>
+<p>Walk the first frames by hand to see the turn happen. Frame 0 draws <code>x = 0</code>, then <code>x</code> becomes 1. Frame 38 draws <code>x = 38</code>, then <code>x</code> becomes 39, which is <code>columns - 1</code>, so <code>dx</code> flips to -1. Frame 39 draws <code>x = 39</code>, the right edge, then <code>x</code> becomes 38. From there <code>x</code> falls by one per frame, so frame 59, the last, draws <code>x = 39 - 20 = 19</code>: nineteen dots, the <code>#</code>, twenty dots. Count the line above.</p>
+<p>A detail: <code>std::print("\r{}", line)</code> rather than <code>std::print(line)</code>. The first argument of <code>std::print</code> must be a pattern the compiler can check while compiling, which a <code>std::string</code> variable is not. To print a string you built at run time, pass it as the value for a <code>{}</code>. If you forget, the error is long and starts like this:</p>
+
+<pre class="code" data-lang="cpp" data-file="print_string.cpp" data-check="error"><code>#include &lt;print&gt;
+#include &lt;string&gt;
+
+int main() {
+    std::string screen = "###\n#.#\n###\n";
+    std::print(screen);
+    return 0;
+}
+</code></pre>
+<pre class="output"><code>print_string.cpp:6:16: error: call to consteval function 'std::basic_format_string&lt;char&gt;::basic_format_string&lt;std::string&gt;' is not a constant expression
+    6 |     std::print(screen);
+      |                ^
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/string:2095:12: note: read of non-constexpr variable 'screen' is not allowed in a constant expression
+(several more notes)
+1 error generated.
+</code></pre>
+<p>"Not a constant expression" about a <code>std::print</code> argument means: you passed a variable where a literal pattern was expected. Write <code>std::print("{}", screen)</code>.</p>
+
+<div class="callout try"><span class="label">Try it</span><p>Change <code>50ms</code> to <code>10ms</code> and to <code>200ms</code>. Make the line 20 columns wide. Add a second character <code>'o'</code> that starts at the right edge and moves left, with its own <code>dx</code>; what happens in the frame where they meet? Then try removing the <code>std::fflush</code> line and run with <code>| cat</code> to see the whole animation collapse into one line at exit.</p></div>
+
+<h2>Redrawing a whole frame: a countdown</h2>
+<p>One line was enough for <code>'\r'</code>. Life needs a block of rows, so the frame must start at the top-left corner every time: that is <code>"\x1b[2J\x1b[H"</code>. Here is a countdown clock that redraws a little box once a second. It also hides the cursor while it runs, because a blinking cursor sitting in the middle of a picture is distracting, and shows it again at the end.</p>
+
+<pre class="code" data-lang="cpp" data-file="countdown.cpp" data-check="compile"><code>#include &lt;chrono&gt;
+#include &lt;cstdio&gt;
+#include &lt;print&gt;
+#include &lt;thread&gt;
+
+int main() {
+    using namespace std::chrono_literals;
+    std::print("\x1b[?25l");                // hide the cursor
+    for (int seconds = 10; seconds >= 0; --seconds) {
+        std::print("\x1b[2J\x1b[H");        // clear, cursor home
+        std::println("+------------+");
+        std::println("|  T minus   |");
+        std::println("|     {:2}     |", seconds);
+        std::println("+------------+");
+        std::fflush(stdout);
+        if (seconds > 0) {
+            std::this_thread::sleep_for(1s);
+        }
+    }
+    std::println("Lift-off.");
+    std::print("\x1b[?25h");                // show the cursor again
+    return 0;
+}
+</code></pre>
+<pre class="shell"><code>$ clang++ -std=c++23 -Wall -Wextra countdown.cpp -o countdown
+$ ./countdown
++------------+
+|  T minus   |
+|      0     |
++------------+
+Lift-off.
+</code></pre>
+<p>The number in the box ticks from 10 to 0 while the box stays put. <code>{:2}</code> is <code>{}</code> with a width, the code from <a href="02-values-and-types.html">chapter 2</a>'s formatting table: "at least two characters, padded with spaces on the left", so the single digit <code>0</code> takes the same room as <code>10</code> and the box's right edge does not jump. Every frame is the same four lines written to the same four rows, so to the eye only the digits change.</p>
+<p>This is the shape of the Life game loop in <code>phase1-terminal/01-life/src/main.cpp</code>: home, print the grid, flush, compute the next generation and swap, sleep, repeat (<a href="14-build-life.html">chapter 14</a> explains why the clear happens only once, before the loop). You will put the Life pieces into it in chapter 14.</p>
+
+<div class="callout try"><span class="label">Try it</span><p>Make the countdown count up from 0 to 10 instead. Then change <code>{:2}</code> to <code>{}</code> and watch the box's right edge jump when the number goes from 10 to 9. Delete the hide-cursor line and run again: the cursor now sits blinking under the box between frames. Last, replace <code>"\x1b[2J\x1b[H"</code> with just <code>"\x1b[H"</code> (home, without clear). Does the picture still look right? Why does it in this program, and when would it not?</p></div>
+<details class="hint"><summary>Hint for the last one</summary><p>Every frame writes exactly the same cells, so painting over them without clearing leaves no leftovers. If a frame were ever shorter or narrower than the one before, the old cells outside it would stay on screen. Life's frames are always the same size, so for Life "home" alone works too, and it is one thing less for the terminal to do each frame.</p></details>
+
+<h2>Frame timing</h2>
+<p>Speed is normally stated as <strong>frames per second</strong> (fps). The sleep you need is the length of one frame, which is <code>1000 / fps</code> milliseconds:</p>
+
+<pre class="code" data-lang="cpp" data-file="frame_budget.cpp" data-check="run"><code>#include &lt;print&gt;
+#include &lt;vector&gt;
+
+int main() {
+    std::vector&lt;int&gt; fps_values = {1, 5, 10, 24, 30, 60, 120};
+    for (int fps : fps_values) {
+        int ms_per_frame = 1000 / fps;
+        std::println("{:3} fps  ->  {:4} ms per frame", fps, ms_per_frame);
+    }
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="frame_budget.cpp"><code>  1 fps  ->  1000 ms per frame
+  5 fps  ->   200 ms per frame
+ 10 fps  ->   100 ms per frame
+ 24 fps  ->    41 ms per frame
+ 30 fps  ->    33 ms per frame
+ 60 fps  ->    16 ms per frame
+120 fps  ->     8 ms per frame
+</code></pre>
+<p>(<code>{:3}</code> and <code>{:4}</code> are the same width trick as <code>{:2}</code> in the countdown. And <code>1000 / 24</code> printed 41, not 41.67: integer division, as in chapter 2.) Call that number the <strong>frame budget</strong>: the time one frame is allowed to take, from the start of one draw to the start of the next. Life's <code>--fps</code> argument will turn into exactly this division.</p>
+
+<h3>Why a fixed sleep drifts</h3>
+<p>The bouncing <code>#</code> slept 50 ms per frame. But a frame is not only the sleep: building the string, printing it and flushing it also take time. Call that the <strong>draw time</strong>. If you always sleep the full budget, every frame takes <em>draw time plus budget</em>, and the extra adds up. Here is the arithmetic for one minute at 10 fps with a 7 ms draw:</p>
+
+<pre class="code" data-lang="cpp" data-file="drift_math.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int main() {
+    const int frames = 600;          // one minute at 10 fps
+    const int budget_ms = 100;       // what you WANT each frame to take
+    const int draw_ms = 7;           // what drawing actually costs
+
+    // Plan A: draw, then always sleep the full budget.
+    const int plan_a_total = frames * (draw_ms + budget_ms);
+
+    // Plan B: draw, then sleep only what is left of the budget.
+    const int plan_b_total = frames * (draw_ms + (budget_ms - draw_ms));
+
+    std::println("wanted:  {} ms", frames * budget_ms);
+    std::println("plan A:  {} ms  (late by {} ms)", plan_a_total, plan_a_total - frames * budget_ms);
+    std::println("plan B:  {} ms  (late by {} ms)", plan_b_total, plan_b_total - frames * budget_ms);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="drift_math.cpp"><code>wanted:  60000 ms
+plan A:  64200 ms  (late by 4200 ms)
+plan B:  60000 ms  (late by 0 ms)
+</code></pre>
+<p>Plan A is more than four seconds late after a minute. For a 1000×1000 Life grid the draw time would be far more than 7 ms: the next section shows that merely building a one-million-character string, the size of such a frame, takes about 5 ms before a single byte has reached the terminal, and painting a million cells takes the terminal far longer still. The drift would be far worse. Plan B is the fix: measure how long the draw took, and sleep only for what is left of the budget.</p>
+
+<h3>Measuring time with steady_clock</h3>
+<p>Measuring needs a clock. <code>std::chrono::steady_clock</code> is a clock that only ever moves forward at a constant rate; it is not the wall clock, which can jump when the system adjusts the time. <code>steady_clock::now()</code> returns a <strong>time point</strong>, a moment. You cannot print a time point with <code>{}</code> (the compiler refuses: a moment on the steady clock is not a date or a time of day), but you can subtract two of them, and the result is a duration. <code>duration_cast&lt;milliseconds&gt;</code> converts a duration to the unit you want to print, rounding down.</p>
+
+<pre class="code" data-lang="cpp" data-file="measure.cpp" data-check="run"><code>#include &lt;chrono&gt;
+#include &lt;print&gt;
+#include &lt;string&gt;
+
+int main() {
+    using clock = std::chrono::steady_clock;
+
+    const auto start = clock::now();
+
+    std::string frame;
+    for (int i = 0; i &lt; 1000000; ++i) {
+        frame += '#';
+    }
+
+    const auto end = clock::now();
+    const auto elapsed = std::chrono::duration_cast&lt;std::chrono::microseconds&gt;(end - start);
+
+    std::println("built {} bytes in {} microseconds", frame.size(), elapsed.count());
+    return 0;
+}
+</code></pre>
+<pre class="shell"><code>$ clang++ -std=c++23 -Wall -Wextra measure.cpp -o measure
+$ ./measure
+built 1000000 bytes in 4868 microseconds
+$ ./measure
+built 1000000 bytes in 5225 microseconds
+</code></pre>
+<p>The number differs on every run and on every machine, which is why this program has no exact output block. The <code>using clock = ...;</code> line gives the long type a short name, the way <code>using Cells = ...;</code> does in <code>life.hpp</code> (<a href="07-flat-grid.html">chapter 7</a>). The pattern <code>start = now(); work; end = now(); end - start</code> is the whole of chapter 13, where you will point it at the Life step and get your first benchmark number. Here you point it at a frame.</p>
+
+<h3>A paced loop</h3>
+<p>Now combine the two: take the time at the start of the frame, draw, take the time again, and sleep for <code>budget - spent</code>. If the draw took longer than the whole budget, there is nothing left to sleep; the <code>if</code> guards that, because asking to sleep for a negative duration is meaningless (it returns at once, but it is clearer to skip it).</p>
+
+<pre class="code" data-lang="cpp" data-file="paced_loop.cpp" data-check="compile"><code>#include &lt;chrono&gt;
+#include &lt;cstdio&gt;
+#include &lt;print&gt;
+#include &lt;string&gt;
+#include &lt;thread&gt;
+
+int main() {
+    using namespace std::chrono_literals;
+    using clock = std::chrono::steady_clock;
+
+    const int fps = 10;
+    const std::chrono::milliseconds budget(1000 / fps);
+    const auto run_start = clock::now();
+
+    std::print("\x1b[?25l");
+    for (int frame = 0; frame &lt; 30; ++frame) {
+        const auto frame_start = clock::now();
+
+        // ---- draw: build the whole frame, print it once ----
+        std::string screen = "\x1b[2J\x1b[H";
+        for (int row = 0; row &lt; 8; ++row) {
+            for (int col = 0; col &lt; 32; ++col) {
+                char cell = '.';
+                if ((row + col + frame) % 4 == 0) {
+                    cell = '#';
+                }
+                screen += cell;
+            }
+            screen += '\n';
+        }
+        screen += "frame " + std::to_string(frame) + "\n";
+        std::print("{}", screen);
+        std::fflush(stdout);
+
+        // ---- pace: sleep only for what is left of the budget ----
+        const auto spent = clock::now() - frame_start;
+        if (spent &lt; budget) {
+            std::this_thread::sleep_for(budget - spent);
+        }
+    }
+    std::print("\x1b[?25h");
+
+    const auto total = std::chrono::duration_cast&lt;std::chrono::milliseconds&gt;(clock::now() - run_start);
+    std::println("30 frames took {} ms (wanted {} ms)", total.count(), 30 * budget.count());
+    return 0;
+}
+</code></pre>
+<pre class="shell"><code>$ clang++ -std=c++23 -Wall -Wextra paced_loop.cpp -o paced_loop
+$ ./paced_loop
+30 frames took 3130 ms (wanted 3000 ms)
+</code></pre>
+<p>Diagonal stripes scroll across an 8-by-32 box for three seconds. The last line is the honest part: 3130 ms, not 3000 (three runs on this Mac gave 3128, 3130 and 3136 ms; yours will differ a little). The draw time was subtracted correctly, so where did the extra 130 ms come from? From <code>sleep_for</code> itself. It promises to sleep <em>at least</em> as long as you ask; the operating system wakes your program up when it gets round to it, a few milliseconds late. Thirty frames, a little over four milliseconds late each here. For a game that is invisible. For a benchmark it is why chapter 13 never times a sleep.</p>
+<p>Two other things to notice in that program. The <code>spent &lt; budget</code> comparison works directly on durations; the compiler converts the units. And <code>budget</code> is declared as <code>const std::chrono::milliseconds budget(1000 / fps)</code>, an <code>int</code> turned into a typed duration once, at the top, so that the rest of the loop never sees a bare number.</p>
+
+<div class="callout try"><span class="label">Try it</span><p>Set <code>fps</code> to 30 and then to 2, and compare the "took" line with the "wanted" line each time. Then add an <code>int overran = 0;</code> before the loop, give the <code>if</code> an <code>else</code> branch that does <code>++overran;</code>, and print <code>overran</code> at the end; with <code>fps = 10</code> it should stay 0. Now set <code>fps</code> to 2000, so the budget is <code>1000 / 2000 = 0</code> ms, and run again: <code>overran</code> is 30 and the loop runs as fast as the terminal allows. That is the "draw took longer than the whole budget" case, and it is what a 1000×1000 Life grid would do to any sensible budget.</p></div>
+
+<div class="callout twin"><span class="label">Inference twin</span><p>When a language model streams its answer into a terminal, token by token, the tokens travel down this same stdout stream, through the same buffer, into the same grid of cells. The frame budget you just computed is the per-token latency budget an inference engine lives by: at 20 tokens per second, each token has 50 ms, and whatever the model's step takes is subtracted from it. A frame that overran its budget is a dropped frame in a game and a latency spike in a chat window; the user experiences both as a stutter. In week 18 you will measure your own SmolLM2-135M engine's tokens per second with exactly the <code>steady_clock</code> pattern from <code>measure.cpp</code>.</p></div>
+
+<h2>Flicker</h2>
+<p>There is one more thing <code>paced_loop.cpp</code> did on purpose: it built the whole frame, including the clear-and-home command, into one <code>std::string</code> and printed it with a single <code>std::print</code>. Here is what happens if you do not.</p>
+
+<pre class="code" data-lang="cpp" data-file="flicker_bad.cpp" data-check="compile"><code>#include &lt;chrono&gt;
+#include &lt;cstdio&gt;
+#include &lt;print&gt;
+#include &lt;thread&gt;
+
+int main() {
+    using namespace std::chrono_literals;
+    for (int frame = 0; frame &lt; 20; ++frame) {
+        std::print("\x1b[2J\x1b[H");
+        std::fflush(stdout);                 // the screen is now EMPTY ...
+        for (int row = 0; row &lt; 10; ++row) {
+            for (int col = 0; col &lt; 30; ++col) {
+                char cell = '.';
+                if ((row + col + frame) % 3 == 0) {
+                    cell = '#';
+                }
+                std::print("{}", cell);
+                std::fflush(stdout);         // ... and refills one cell at a time
+            }
+            std::println();
+        }
+        std::this_thread::sleep_for(100ms);
+    }
+    return 0;
+}
+</code></pre>
+<p>Run it and the picture shimmers, or shows a bright flash each frame, or paints visibly from top to bottom, depending on how fast your terminal is. The reason is in the comments. The clear command is sent and flushed on its own, so for a moment the terminal shows an empty screen. Then three hundred separate one-byte writes arrive, each one a round trip to the operating system and the terminal, and the terminal repaints after some of them. Your eye catches the blank screen and the half-drawn frames in between. That is <strong>flicker</strong>.</p>
+<p>The fix is to never let the terminal see a half-finished frame: build it all first, then hand it over in one go.</p>
+
+<pre class="code" data-lang="cpp" data-file="flicker_good.cpp" data-check="compile"><code>#include &lt;chrono&gt;
+#include &lt;cstdio&gt;
+#include &lt;print&gt;
+#include &lt;string&gt;
+#include &lt;thread&gt;
+
+int main() {
+    using namespace std::chrono_literals;
+    for (int frame = 0; frame &lt; 20; ++frame) {
+        std::string screen = "\x1b[2J\x1b[H";          // the command is part of the frame
+        for (int row = 0; row &lt; 10; ++row) {
+            for (int col = 0; col &lt; 30; ++col) {
+                char cell = '.';
+                if ((row + col + frame) % 3 == 0) {
+                    cell = '#';
+                }
+                screen += cell;
+            }
+            screen += '\n';
+        }
+        std::print("{}", screen);                      // ONE write for the whole frame
+        std::fflush(stdout);
+        std::this_thread::sleep_for(100ms);
+    }
+    return 0;
+}
+</code></pre>
+<p>Same picture, same speed, and now it is rock steady. The clear command and the 310 bytes of picture reach the terminal in a single write, so the terminal clears and repaints in one pass with no blank moment in between. This is also why <code>render</code> in <code>life.hpp</code> returns a <code>std::string</code> rather than printing: the string <em>is</em> the frame, and <code>main</code> prints it once.</p>
+
+<div class="callout trap"><span class="label">Trap</span><p>Never put a <code>sleep_for</code> or a <code>fflush</code> inside the loop that draws cells. One flush per frame, one sleep per frame, after the whole frame is out. A sleep inside the drawing loop is the most common cause of "my animation is slow and flickery" and it is a one-line fix.</p></div>
+
+<h2>Ctrl-C and the lost cursor</h2>
+<p>Every animation in this chapter runs for a fixed number of frames. Life will run until you stop it, and the way you stop a terminal program is <strong>Ctrl-C</strong>. Hold Control and press C, and the operating system's terminal driver sends your program an <strong>interrupt signal</strong>; a program that has made no arrangements for it (yours) is killed on the spot. "On the spot" is the problem: the program does not reach its last lines. If one of those lines was <code>std::print("\x1b[?25h")</code>, the cursor stays hidden, and your prompt comes back without a cursor.</p>
+
+<pre class="code" data-lang="cpp" data-file="cursor_guard.cpp" data-check="compile"><code>#include &lt;chrono&gt;
+#include &lt;cstdio&gt;
+#include &lt;print&gt;
+#include &lt;thread&gt;
+
+int main() {
+    using namespace std::chrono_literals;
+    std::print("\x1b[?25l");                  // hide
+    std::fflush(stdout);
+    std::println("cursor hidden for three seconds; try pressing Ctrl-C now");
+    std::this_thread::sleep_for(3s);
+    std::print("\x1b[?25h");                  // show: this line is skipped if you Ctrl-C
+    std::fflush(stdout);
+    std::println("cursor restored, exiting normally");
+    return 0;
+}
+</code></pre>
+<pre class="shell"><code>$ ./cursor_guard
+cursor hidden for three seconds; try pressing Ctrl-C now
+^C
+$ tput cnorm
+</code></pre>
+<p>Let it run to the end and the cursor comes back by itself. Interrupt it and the cursor is gone until you type <code>tput cnorm</code> (which, as you saw, writes the show-cursor sequence for you) or <code>reset</code>, which puts the whole terminal back to its starting state and clears the screen. Neither hurts anything; keep them in mind for the week.</p>
+<p>The proper fix has two halves, and both are week 3 material. First, C++ has a mechanism that ties a piece of clean-up to a variable. The clean-up runs by itself when the variable's scope ends, and it does not matter how the scope is left: a normal <code>return</code>, an early <code>return</code>, or a <code>break</code> out of the loop. This is RAII, which <a href="06-vector.html">chapter 6</a> named when the vector freed its own memory; week 3's Snake builds a terminal guard on it, where you will also have to restore the keyboard mode. Second, RAII alone does not survive Ctrl-C: a program killed by the interrupt signal runs no more of your code, clean-up included. So Snake also asks the operating system to deliver the signal to a small function of yours instead of killing the program; that function sets a flag, the game loop sees the flag and ends normally, and the RAII clean-up runs. For this week: hide the cursor at the start of the loop, print <code>"\x1b[?25h"</code> before the normal <code>return 0</code>, and when you Ctrl-C, type <code>tput cnorm</code>. Also consider a <code>--steps</code> argument so that the program can end normally after a given number of generations, which is both friendlier and easier to test.</p>
+
+<h2>How big is the terminal?</h2>
+<p>Your program draws into a grid it cannot see. If a frame has more rows than the terminal window, the top rows scroll off before you see them and the next frame's clear-and-home no longer lands where the previous one did; the picture jitters. If a row is wider than the window, the terminal wraps it onto the next line and every row after it is shifted. Both look like bugs in your code and neither is.</p>
+<p>The shell can tell you the size:</p>
+<pre class="shell"><code>$ tput cols
+120
+$ tput lines
+40
+</code></pre>
+<p>Those numbers are for one particular window; yours will differ, and they change when you resize. The rule for this week is simple: choose a grid that is smaller than the terminal. Life takes <code>--width</code> and <code>--height</code> on the command line (chapter 8), so leave at least two rows for the shell prompt and any status line you print, and a few columns of margin. A 1000×1000 grid is for the benchmark in chapter 13, not for drawing; nothing on your screen can show it, and at 1000 bytes per row the frame would be a megabyte.</p>
+
+<div class="callout note"><span class="label">Deferred</span><p>A program can also ask the operating system for the terminal size itself, and be told when the window is resized. That needs a system call and a signal handler, which are week 3 and later. For now, <code>tput</code> and sensible defaults are enough.</p></div>
+
+<h2>Check yourself</h2>
+<div class="quiz">
+<div class="q"><p>Your program calls <code>std::println("hi")</code>. Name the three programs involved in the letters appearing on screen, and say what each one does.</p><details class="answer"><summary>Answer</summary><p>Your program writes three bytes (<code>h</code>, <code>i</code>, newline) to stdout. The terminal reads those bytes and paints <code>h</code> and <code>i</code> into cells, then moves the cursor to the next line for the newline. The shell is the program that started yours with its output connected to that terminal, and prints the next prompt when yours ends. Your program draws nothing itself.</p></details></div>
+<div class="q"><p>What does the terminal show after <code>std::print("hello\rJ\n")</code>? And how many bytes did the program write?</p><details class="answer"><summary>Answer</summary><p>It shows <code>Jello</code>. The <code>\r</code> moves the cursor back to column 0 of the same line, <code>J</code> overwrites the <code>h</code>, and the rest stays. The program wrote 8 bytes: five letters, carriage return (13), <code>J</code>, newline (10).</p></details></div>
+<div class="q"><p>Which bytes make up <code>"\x1b[H"</code>, and what does the terminal do with them? Why does it not paint a <code>[</code> and an <code>H</code>?</p><details class="answer"><summary>Answer</summary><p>Three bytes: 27 (escape), 91 (<code>[</code>), 72 (<code>H</code>). The terminal moves the cursor to row 1, column 1. Byte 27 tells the terminal that what follows is a command, so it reads the <code>[</code> and <code>H</code> as the name of the command, not as text, and paints nothing.</p></details></div>
+<div class="q"><p>A program prints a frame with <code>std::print</code> (no trailing newline), then sleeps for a second, in a loop. On the terminal it looks fine. Run as <code>./prog | cat</code> it shows nothing until it exits. Explain, and give the one-line fix.</p><details class="answer"><summary>Answer</summary><p>Output goes into a buffer. On a terminal the library flushes at every newline, and each <code>std::print</code> first flushes what the previous one left behind, so the frame gets out (at worst one frame late); through a pipe it flushes only when the buffer is full or the program exits, so everything waits. Add <code>std::fflush(stdout);</code> (header <code>&lt;cstdio&gt;</code>) right after printing each frame, before the sleep.</p></details></div>
+<div class="q"><p>Why does <code>std::this_thread::sleep_for(100)</code> fail to compile, and what should you write instead?</p><details class="answer"><summary>Answer</summary><p><code>sleep_for</code> takes a duration, a value whose type carries its unit. A bare <code>100</code> is an <code>int</code> with no unit, and the library refuses to guess whether it means seconds or milliseconds. Write <code>std::this_thread::sleep_for(100ms)</code> after <code>using namespace std::chrono_literals;</code>, or <code>std::this_thread::sleep_for(std::chrono::milliseconds(100))</code>.</p></details></div>
+<div class="q"><p>You want 25 frames per second. Drawing a frame takes 12 ms. How long should you sleep after each frame, and what happens over 1000 frames if you simply sleep 40 ms every time?</p><details class="answer"><summary>Answer</summary><p>The budget is <code>1000 / 25 = 40</code> ms per frame, so sleep <code>40 - 12 = 28</code> ms. Sleeping the full 40 ms makes each frame take 52 ms; over 1000 frames that is 52 s instead of 40 s, 12 seconds of drift. Measure the draw with <code>steady_clock::now()</code> before and after, and sleep for <code>budget - spent</code> only if <code>spent &lt; budget</code>.</p></details></div>
+<div class="q"><p>Two programs draw the same 20×60 picture at the same speed. One flickers and one does not. What is the likely difference in their code?</p><details class="answer"><summary>Answer</summary><p>The flickering one sends the clear command and then prints cell by cell (and probably flushes or sleeps inside the drawing loop), so the terminal shows a blank screen and partial frames between writes. The steady one builds the whole frame, clear command included, into one <code>std::string</code> and prints it with a single <code>std::print("{}", screen)</code> followed by one <code>std::fflush(stdout)</code>.</p></details></div>
+<div class="q"><p>You pressed Ctrl-C during an animation and your prompt has no cursor. What happened, and what do you type?</p><details class="answer"><summary>Answer</summary><p>The program had sent <code>\x1b[?25l</code> (hide cursor) and was killed before it reached the line that sends <code>\x1b[?25h</code> (show cursor). Type <code>tput cnorm</code>, which sends the show-cursor sequence for you, or <code>reset</code>, which restores the whole terminal. The permanent fix is week 3's: an RAII guard that restores the cursor whenever its scope ends, plus a signal handler that turns Ctrl-C into "end the loop normally" so that the scope does end.</p></details></div>
+</div>
+
+<h2>What you can do now</h2>
+<ul>
+<li>Explain what a terminal is, what stdout is, and why your program never draws anything itself.</li>
+<li>Tell printable bytes from control bytes, and predict what <code>'\n'</code>, <code>'\r'</code> and <code>'\t'</code> do to the cursor.</li>
+<li>Write the escape sequences to clear the screen, go home, move to a cell, hide and show the cursor, and colour text, and say which bytes each one is made of.</li>
+<li>Explain buffering and put <code>std::fflush(stdout)</code> in the right place.</li>
+<li>Write durations with <code>std::chrono</code> and the <code>100ms</code> literal, and pause a program with <code>std::this_thread::sleep_for</code>.</li>
+<li>Turn frames per second into a frame budget, measure a frame with <code>steady_clock</code>, and sleep only for the remainder.</li>
+<li>Build a whole frame as one <code>std::string</code> and print it once, so it does not flicker.</li>
+<li>Recover a hidden cursor after Ctrl-C with <code>tput cnorm</code>, and pick a grid size that fits the window with <code>tput cols</code> and <code>tput lines</code>.</li>
+</ul>
+</main>
+</body>
+</html>

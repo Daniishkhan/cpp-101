@@ -1,0 +1,665 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>14 · Build the Game of Life — C++ from zero to Life</title>
+<link rel="stylesheet" href="assets/book.css?v=9">
+<link rel="stylesheet" href="assets/tutor.css?v=9">
+<script src="assets/theme.js?v=9"></script>
+<script defer src="assets/book.js?v=9"></script>
+<script defer src="assets/tutor.js?v=9"></script>
+</head>
+<body>
+<nav class="sidebar" aria-label="Chapters"></nav>
+<main>
+<p class="chapter-kicker">Chapter 14</p>
+<h1>Build the Game of Life</h1>
+<p class="lede">This is the chapter where you stop reading and start typing. At the end of it you will have written six functions and a <code>main</code> by hand, turned twelve red tests green (the thirteenth passes by accident, as you will see), watched your own grid breathe in the terminal, and written down your first benchmark number. Everything you need was taught in chapters 1 to 13. This chapter only tells you what to build, in which order, which tests prove it, and where to look when you are stuck. It never shows you the answer.</p>
+
+<div class="callout note"><span class="label">In this chapter</span>
+<ul>
+<li>The spec, restated, and the acceptance checklist you are working towards.</li>
+<li>Setup: build the project, run the tests, read the twelve failures (and the one accidental pass).</li>
+<li>Seven milestones, M1 to M7, each with its goal, the chapters to re-read, the tests that must turn green, a hint ladder, the common bugs and a definition of done.</li>
+<li>A debugging playbook for the moment a test fails and you do not know why.</li>
+<li>Stretch goals once the gate is passed, the review ritual with Claude, and the write-up.</li>
+<li>The inference twin, in depth: why this small grid program is the shape of an inference engine.</li>
+</ul>
+</div>
+
+<div class="callout principle"><span class="label">First principle</span><p>This chapter contains hints, not solutions. The rule in <code>CLAUDE.md</code> is that you hand-code the challenge and the tutor reviews afterwards. The hint ladders below go close: they say which loop goes where and what to compute, in words. They stop before the code. The gap between the words and the code is exactly the part that makes you a programmer, and nobody can cross it for you.</p></div>
+
+<h2>The spec, restated</h2>
+<p>You are building <code>life</code>, a terminal program that plays Conway's Game of Life. The full specification is in <code>phase1-terminal/01-life/README.md</code>; it was frozen before the week started, and this chapter does not change it. Here is what it says, in one place.</p>
+<p><strong>The world.</strong> A rectangular grid of <code>width</code> columns and <code>height</code> rows. Every cell is either alive (<code>1</code>) or dead (<code>0</code>). The grid is a <strong>torus</strong>: the left edge touches the right edge and the top edge touches the bottom edge, so every cell has exactly eight neighbours and there are no corners to treat specially. The whole grid is one flat <code>std::vector&lt;std::uint8_t&gt;</code> (the type is named <code>Cells</code> in <code>life.hpp</code>) in row-major order, so the cell at column <code>x</code>, row <code>y</code> lives at index <code>y * width + x</code>, exactly as in <a href="07-flat-grid.html">chapter 7</a>.</p>
+<p><strong>The rules.</strong> One generation is computed from the previous one. A live cell with 2 or 3 live neighbours stays alive. A dead cell with exactly 3 live neighbours becomes alive. Every other cell is dead in the next generation.</p>
+<p><strong>The program.</strong> It takes six optional arguments, each with a default:</p>
+<table>
+<thead><tr><th>Argument</th><th>Meaning</th><th>Default</th></tr></thead>
+<tbody>
+<tr><td><code>--width N</code></td><td>columns</td><td>60</td></tr>
+<tr><td><code>--height N</code></td><td>rows</td><td>20</td></tr>
+<tr><td><code>--seed N</code></td><td>seed for the random start; the same seed always gives the same grid</td><td>1</td></tr>
+<tr><td><code>--fill F</code></td><td>probability that a cell starts alive, a number from 0.0 (nobody) to 1.0 (everybody)</td><td>0.3</td></tr>
+<tr><td><code>--fps N</code></td><td>generations drawn per second</td><td>10</td></tr>
+<tr><td><code>--steps N</code></td><td>how many generations to run; 0 means forever, until Ctrl-C</td><td>0</td></tr>
+</tbody>
+</table>
+<p>Each frame, the program moves the cursor to the top-left corner and redraws the whole grid in place with ANSI escape codes (<a href="09-terminal.html">chapter 9</a>), a live cell as <code>#</code> and a dead cell as <code>.</code>, then sleeps so that <code>--fps</code> frames fit into a second. The cursor is hidden while the animation runs and shown again before the program exits, including when <code>--steps</code> runs out.</p>
+<p><strong>The proof.</strong> Thirteen doctest cases in <code>phase1-terminal/01-life/tests/life_test.cpp</code> must pass in a Debug build with the sanitizers on, and <code>phase1-terminal/01-life/BENCH.md</code> must contain real numbers from a Release build at 1000×1000.</p>
+
+<h3>The acceptance checklist</h3>
+<p>Copy this into your week log (<code>docs/log/2026-W46.md</code>) and tick the boxes as you go. The week is done when every box is ticked, not before, and not when "it basically works".</p>
+<ul>
+<li>☐ <code>./build/life_tests</code> reports <strong>13 passed, 0 failed</strong> in a Debug build, with no sanitizer report anywhere in the output.</li>
+<li>☐ <code>./build/life</code> animates with the defaults (60×20, seed 1, fill 0.3, 10 fps).</li>
+<li>☐ <code>./build/life --steps 50</code> stops after 50 generations and leaves the cursor visible.</li>
+<li>☐ Ctrl-C during the animation does not leave the terminal in a broken state (or you know the one-line fix from chapter 9, <code>tput cnorm</code>, and have written it in the log).</li>
+<li>☐ <code>BENCH.md</code> has a Debug row and a Release row at 1000×1000 with the date and the machine, plus one experiment and a sentence on what you expected.</li>
+<li>☐ One commit per milestone, M1 to M7, each passing the pre-commit format hook (the small script from <a href="00-start-here.html">chapter 0</a> that git runs just before it saves a commit, to check your formatting).</li>
+<li>☐ One review per milestone has been asked for (see "The review ritual" below), and the three questions from the final review are answered in the log.</li>
+<li>☐ A 300-word note in <code>docs/</code> titled "What a grid taught me about tensors".</li>
+</ul>
+
+<h2>Setup: build it and read the red</h2>
+<p>Everything is already in place. <code>life.hpp</code> declares the six functions, <code>life.cpp</code> contains a stub for each one (a body that compiles but does nothing useful: it returns a constant, or returns nothing at all), <code>main.cpp</code> prints one line and exits, and <code>CMakeLists.txt</code> builds three programs: <code>life</code>, <code>life_tests</code> and <code>life_bench</code>. <a href="11-cmake.html">Chapter 11</a> explained every line of that file. Configure once, build, run the tests:</p>
+
+<pre class="shell"><code>$ cd phase1-terminal/01-life
+$ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
+$ cmake --build build
+$ ./build/life_tests
+</code></pre>
+
+<p>The test program prints a long list of failures. Do not panic and do not scroll past it; this list is your to-do list for the week. Here is the very end of it, which is the part to read first:</p>
+
+<pre class="shell"><code>===============================================================================
+[doctest] test cases:    13 |     1 passed | 12 failed | 0 skipped
+[doctest] assertions: 10061 | 10010 passed | 51 failed |
+[doctest] Status: FAILURE!
+</code></pre>
+
+<p>Twelve test cases fail. That is correct and expected: you have not written anything yet. Look at the second line, though. 10,010 individual assertions passed. How can that be, when nothing works? Because one test case, <code>random_cells: size, determinism and fill extremes</code>, loops over 10,000 cells and checks that each one is 0 or 1, and the stub returns a vector of zeros, which are all valid cell values. Thousands of passing assertions, and the function is still wrong.</p>
+<p>Now the odd one out: one whole test case <em>passes</em>. Find out which one by listing the cases and running them one at a time with doctest's <code>-tc</code> filter (<a href="12-testing.html">chapter 12</a>). The quotes around the name are needed because the name contains spaces; without them the shell would hand doctest five separate words.</p>
+
+<pre class="shell"><code>$ ./build/life_tests -ltc
+[doctest] listing all test case names
+===============================================================================
+index_of: row-major flat index
+random_cells: size, determinism and fill extremes
+render: '#' alive, '.' dead, newline after every row
+wrap: like a clock face
+count_neighbours: interior cell
+count_neighbours: does not count the cell itself
+count_neighbours: edges wrap around (torus)
+step: a lone cell dies
+step: block is a still life
+step: blinker oscillates with period 2
+step: birth with exactly three neighbours
+step: wraps across the edges
+step: does not modify current
+===============================================================================
+[doctest] unskipped test cases passing the current filters: 13
+$ ./build/life_tests -tc="step: does not modify current"
+[doctest] doctest version is "2.5.3"
+[doctest] run with "--help" for options
+===============================================================================
+[doctest] test cases: 1 | 1 passed | 0 failed | 12 skipped
+[doctest] assertions: 1 | 1 passed | 0 failed |
+[doctest] Status: SUCCESS!
+</code></pre>
+
+<p>The passing case is <code>step: does not modify current</code>. It copies a grid, calls <code>step</code>, and checks that the original is unchanged. The stub <code>step</code> does nothing at all, so of course the original is unchanged. The test is satisfied by a function that is completely useless.</p>
+<p>This is the most important lesson of the setup, and <a href="12-testing.html">chapter 12</a> already explained the mechanics: why <code>step: does not modify current</code> passes with a stub, and why 10,010 of the assertions pass before you have written a line. The lesson, that a passing test is not proof, is the one to carry into your own tests.</p>
+
+<div class="callout principle"><span class="label">First principle</span><p>A passing test is not proof that the code is right. It is proof that the code is not wrong <em>in the one way that test checks</em>. That is why the test file has thirteen cases and fifty-one assertions and not one: each closes off a different way of being wrong. When all thirteen are green you still do not have proof, only a strong argument. Keep that humility; it is what the review ritual at the end of this chapter is for.</p></div>
+
+<p>Several individual assertions pass by the same accident. <code>index_of(0, 0, 10) == 0</code> passes because the stub returns 0. <code>wrap(0, 10)</code>, <code>wrap(10, 10)</code> and <code>wrap(-10, 10)</code> all expect 0, so they pass too. <code>random_cells</code> with fill <code>0.0</code> is expected to be all dead, and a vector of zeros is all dead. Whenever your own tests pass later in the week, ask the same question you just asked about the stub: <em>could a wrong function have passed this?</em></p>
+
+<h3>How to use the rest of this chapter</h3>
+<p>Each milestone below has a <strong>hint ladder</strong>: a short list of nudges, each more specific than the one before, and each stopping short of the code. One nudge is a <strong>rung</strong>. The rungs are hidden behind a <code>details</code> fold; click the grey summary line to open one. The rule, from <code>docs/methodology.md</code>, is: first re-read the failing test and the comment above the function in <code>life.hpp</code>; then reproduce the smallest version of the problem in <code>scratch/</code> with <code>tools/run.sh</code>; only then open <em>one</em> rung. Try again. Only then open the next. The ladder is the same one Claude gives when you ask it for a hint; the difference is that here you decide when to climb. If a rung does not help, that is information too: write down in the log what you expected the rung to say.</p>
+<p>After each milestone: run the full test binary (not only the filtered cases), make sure nothing that was green turned red, commit with the suggested message, and ask for a review (the ritual is described near the end). Then the next milestone.</p>
+
+<h2>Milestone 1: index_of</h2>
+<p><strong>Goal.</strong> Make <code>int index_of(int x, int y, int width)</code> return the position in the flat vector of the cell at column <code>x</code>, row <code>y</code>. This is the smallest function in the project and the one every other function depends on. Get it right and every later test that talks about positions is talking in your language.</p>
+<p><strong>Re-read.</strong> <a href="07-flat-grid.html">Chapter 7</a>, the section on row-major order, and the figure with the flat index written inside each cell. Also the comment at the top of <code>life.hpp</code>: the contract tells you the layout in its own words.</p>
+<p><strong>Tests that must turn green</strong>: <code>index_of: row-major flat index</code>. Run only that one:</p>
+
+<pre class="shell"><code>$ cmake --build build &amp;&amp; ./build/life_tests -tc="index_of*"
+</code></pre>
+
+<p>The <code>*</code> at the end is a wildcard: every test case whose name starts with <code>index_of</code>. Here it matches exactly one.</p>
+
+<div class="callout try"><span class="label">Try it</span><p>Before you write the real body, do what <a href="12-testing.html">chapter 12</a> had you do once: make the stub return <code>x</code> instead of <code>0</code>, rebuild, run the filtered test. Two of the five checks pass and three fail. For each failing one, read the <code>values:</code> line and say out loud what the stub got wrong, for example "it ignored the row". When you can say it for all three, you know what the formula has to add. Then put the stub back to <code>return 0;</code> and write the real line.</p></div>
+
+<details class="hint"><summary>Rung 1: where to look</summary><p>Read the five <code>CHECK</code> lines in the test. Write the five inputs and expected outputs in a table on paper: <code>(0, 0, 10) → 0</code>, <code>(9, 0, 10) → 9</code>, <code>(0, 1, 10) → 10</code>, <code>(3, 2, 10) → 23</code>, <code>(4, 4, 5) → 24</code>. Which of the three inputs, when it goes up by one, makes the answer go up by one? Which makes it go up by <code>width</code>?</p></details>
+<details class="hint"><summary>Rung 2: the idea in words</summary><p>Rows are laid down one after another. Before row <code>y</code> begins, <code>y</code> complete rows have already been laid down, each one <code>width</code> cells long. Then, inside the row, you walk <code>x</code> cells further. The answer is "the number of cells in the rows before mine, plus how far I am into my own row".</p></details>
+<details class="hint"><summary>Rung 3: the arithmetic in words</summary><p>Multiply the row by the width. Add the column. Return that. There is no loop, no <code>if</code>, no vector; the function is one line long, and the one mistake available is multiplying the wrong one of <code>x</code> and <code>y</code>. Check your line against <code>(3, 2, 10) → 23</code> by hand before you compile: 2 rows of 10 is 20, plus 3 is 23.</p></details>
+
+<p><strong>Common bugs.</strong> Multiplying <code>x</code> by <code>width</code> instead of <code>y</code>. The symptom is specific: <code>index_of(9, 0, 10)</code> returns 90 instead of 9, and the test prints <code>CHECK( 90 == 9 )</code>. Notice that <code>(4, 4, 5)</code> still passes with the bug, because when <code>x == y</code> the two formulas agree. That case is in the test precisely so you see it pass while the others fail and learn not to trust a square.</p>
+<p><strong>Definition of done.</strong> The filtered run says <code>1 passed | 0 failed</code>; the full run says 2 passed (this one plus the accidental one). Suggested commit message: <code>M1: index_of green</code>.</p>
+
+<h2>Milestone 2: random_cells and render</h2>
+<p><strong>Goal.</strong> Two functions that let you <em>see</em> a grid. <code>random_cells(width, height, seed, fill)</code> creates a grid of the right size in which each cell is alive with probability <code>fill</code>, and the same seed always gives the same grid. <code>render(cells, width, height)</code> turns a grid into a <code>std::string</code>: <code>#</code> for alive, <code>.</code> for dead, one row per line, and a <code>'\n'</code> after every row including the last.</p>
+<p><strong>Re-read.</strong> <a href="06-vector.html">Chapter 6</a> for constructing a vector of a given size filled with one value, and for range-for. <a href="08-strings-and-args.html">Chapter 8</a> for building a string with <code>+=</code>, and for <code>std::mt19937</code> and <code>std::uniform_real_distribution</code>. <a href="07-flat-grid.html">Chapter 7</a> for the two nested loops that walk a grid row by row.</p>
+<p><strong>Tests that must turn green</strong>: <code>random_cells: size, determinism and fill extremes</code> and <code>render: '#' alive, '.' dead, newline after every row</code>.</p>
+
+<pre class="shell"><code>$ cmake --build build &amp;&amp; ./build/life_tests -tc="random_cells*,render*"
+</code></pre>
+
+<p>Two things about <code>render</code> that the test is strict about. First, <strong>every row ends with <code>'\n'</code>, the last one too</strong>. The expected string for a 3×2 grid is <code>"#..\n..#\n"</code>, eight characters, two of them newlines. If you only put a newline <em>between</em> rows, you are one character short and the test prints the two strings so you can compare them. Second, the characters are exactly <code>'#'</code> and <code>'.'</code>, nothing else, no spaces between cells.</p>
+<p>Here is that newline rule on a different picture: a bar chart built as one string, one bar per row. Watch the character count at the end.</p>
+
+<pre class="code" data-lang="cpp" data-file="bars.cpp" data-check="run"><code>#include &lt;print&gt;
+#include &lt;string&gt;
+#include &lt;vector&gt;
+
+int main() {
+    const std::vector&lt;int&gt; heights = {3, 1, 4};
+    std::string picture;
+    for (int h : heights) {
+        for (int i = 0; i &lt; h; ++i) {
+            picture += '#';
+        }
+        picture += '\n';          // every row ends with a newline, the last one too
+    }
+    std::print("{}", picture);    // print, not println: the newlines are already inside
+    std::println("characters in the picture: {}", picture.size());
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="bars.cpp"><code>###
+#
+####
+characters in the picture: 11
+</code></pre>
+
+<p>Eight <code>#</code> characters and three newlines make eleven. When you later print a rendered grid in <code>main</code>, use <code>std::print</code> rather than <code>std::println</code>, for the reason in the comment.</p>
+<p>Two things about <code>random_cells</code>. The first is <strong>determinism</strong>: the test calls it twice with seed 42 and demands identical vectors. A <code>std::mt19937</code> seeded with the same number produces the same sequence of numbers every time, on every run, on every machine. Here are two engines with the same seed and one with a different seed, side by side:</p>
+
+<pre class="code" data-lang="cpp" data-file="seed_twins.cpp" data-check="run"><code>#include &lt;print&gt;
+#include &lt;random&gt;
+
+int main() {
+    std::mt19937 first(42);
+    std::mt19937 second(42);
+    std::mt19937 other(43);
+    for (int i = 0; i &lt; 3; ++i) {
+        std::println("draw {}: seed 42 -> {}   seed 42 again -> {}   seed 43 -> {}",
+                     i, first(), second(), other());
+    }
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="seed_twins.cpp"><code>draw 0: seed 42 -> 1608637542   seed 42 again -> 1608637542   seed 43 -> 494155588
+draw 1: seed 42 -> 3421126067   seed 42 again -> 3421126067   seed 43 -> 2134003008
+draw 2: seed 42 -> 4083286876   seed 42 again -> 4083286876   seed 43 -> 2615920895
+</code></pre>
+
+<p>The second thing is the <strong>fill extremes</strong>: with <code>fill</code> equal to <code>0.0</code> every cell must be dead, with <code>1.0</code> every cell must be alive, and with <code>0.5</code> on a 100×100 grid the test accepts anything between 4,000 and 6,000 live cells. A <code>std::uniform_real_distribution&lt;double&gt;(0.0, 1.0)</code> hands out numbers in the half-open range [0, 1): zero is possible, one never occurs. So a draw is never below <code>0.0</code>, and always below <code>1.0</code>. Count it:</p>
+
+<pre class="code" data-lang="cpp" data-file="fill_count.cpp" data-check="run"><code>#include &lt;print&gt;
+#include &lt;random&gt;
+
+int main() {
+    std::mt19937 gen(7);
+    std::uniform_real_distribution&lt;double&gt; unit(0.0, 1.0);   // draws are in [0, 1): 0 possible, 1 never
+    int below_zero = 0;
+    int below_30 = 0;
+    int below_one = 0;
+    for (int i = 0; i &lt; 1000; ++i) {
+        const double u = unit(gen);
+        if (u &lt; 0.0) {
+            ++below_zero;
+        }
+        if (u &lt; 0.3) {
+            ++below_30;
+        }
+        if (u &lt; 1.0) {
+            ++below_one;
+        }
+    }
+    std::println("of 1000 draws: {} below 0.0, {} below 0.3, {} below 1.0", below_zero, below_30, below_one);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="fill_count.cpp"><code>of 1000 draws: 0 below 0.0, 284 below 0.3, 1000 below 1.0
+</code></pre>
+
+<p>About 30% of the draws are below 0.3, as you would hope; the exact number, 284, is a property of seed 7 and will be the same every time you run this program. Not one draw was below 0.0 and every draw was below 1.0, which is the half-open range in action.</p>
+
+<div class="callout trap"><span class="label">Trap</span><p><strong><code>&lt;</code> or <code>&lt;=</code>?</strong> If you decide a cell is alive when its draw is <em>strictly below</em> <code>fill</code>, both extremes come out right for free: no draw is below 0.0, so <code>fill 0.0</code> gives no live cells; every draw is below 1.0, so <code>fill 1.0</code> gives all live cells. Decide "less than or equal" instead and <code>fill 0.0</code> produces a live cell on the rare draw of exactly zero. The test would catch that only once in a very long while, which is the worst kind of bug: it passes on your machine today and fails on someone else's next month. Chapter 8's section "Alive with probability fill means r &lt; fill" is the same rule.</p></div>
+
+<details class="hint"><summary>Rung 1: where to look</summary><p>For <code>render</code>: the test <code>render: '#' alive, '.' dead, newline after every row</code> shows the exact expected string for a 3×2 grid. Count its characters. For <code>random_cells</code>: the stub already returns a vector of the right <em>size</em>; look at how it computes that size and keep it. The chapter 8 section on randomness shows an engine, a distribution and a seed; which of those three does the <code>seed</code> parameter feed?</p></details>
+<details class="hint"><summary>Rung 2: the shape of the loops in words</summary><p><code>render</code>: start with an empty string. Two nested loops, the row loop outside and the column loop inside, so you visit the cells in the same order they sit in memory. Inside the inner loop, append one character depending on the cell. After the inner loop finishes a row, append a newline. Return the string. <code>random_cells</code>: make the vector of the right size, all dead. Create one engine from the seed and one distribution over [0, 1). One loop over every cell; for each, take a draw and compare it with <code>fill</code>; set the cell to 1 if the draw is below.</p></details>
+<details class="hint"><summary>Rung 3: the arithmetic in words</summary><p>Inside <code>render</code>'s inner loop you need the cell at column <code>x</code>, row <code>y</code>. You wrote the function for that in milestone 1; call it rather than repeating the formula. The index it returns is an <code>int</code> and the vector wants a <code>std::size_t</code>: <a href="06-vector.html">chapter 6</a> showed the <code>static_cast&lt;std::size_t&gt;</code> that makes the compiler stop warning. In <code>random_cells</code> you do not even need <code>x</code> and <code>y</code>: a single loop over the whole vector, visiting each cell once, is enough, because the fill does not care where a cell is.</p></details>
+<details class="hint"><summary>Rung 4: the engine and the seed</summary><p>The engine must be created <em>inside</em> <code>random_cells</code>, from the <code>seed</code> parameter, every time the function is called. If you create it once outside the function, or seed it from the clock, the second call with seed 42 continues the sequence instead of restarting it, and <code>a == b</code> fails even though both grids look random. The seed is the only thing the caller controls; honour it.</p></details>
+
+<p><strong>Common bugs and their symptoms.</strong></p>
+<ul>
+<li><strong>Missing final newline.</strong> The test prints <code>CHECK( #..\n..# == #..\n..#\n )</code>, but with each <code>\n</code> shown as a real line break, so the two strings are spread over several lines. Look for the empty line at the end of the expected one; your string does not have it.</li>
+<li><strong>Rows and columns swapped in <code>render</code>.</strong> If the loops are swapped, the 3×2 test grid comes out as 2 rows of 3 turned on its side. If the index formula is swapped, you read past the end of the vector and the sanitizer reports a heap-buffer-overflow (see the debugging playbook).</li>
+<li><strong>All 32 alive for <code>fill 0.0</code> and none for <code>fill 1.0</code>.</strong> You compared the wrong way round: "alive when the draw is above <code>fill</code>". <code>fill 0.5</code> cannot catch that, because half is half either way; the extremes can.</li>
+<li><strong>Live count exactly 0 or 10,000 for <code>fill 0.5</code>.</strong> Either you compared the draw with something other than <code>fill</code>, or every cell got the same draw because the engine is created <em>inside</em> the loop, so each pass starts the sequence again from the seed and takes the same first number. (Creating the distribution inside the loop is harmless, if wasteful: it has no memory of its own.)</li>
+</ul>
+<p><strong>Definition of done.</strong> Both filtered cases pass; the full run shows 4 passed, 9 failed. You can now also test <code>render</code> by eye in a scratch program: render a <code>random_cells(10, 4, 1, 0.3)</code> grid and look at it. Commit: <code>M2: random_cells and render green</code>.</p>
+
+<h2>Milestone 3: wrap and count_neighbours</h2>
+<p><strong>Goal.</strong> <code>wrap(v, n)</code> brings any integer <code>v</code>, including a negative one, into the range 0 to <code>n - 1</code>, like the hour hand of a clock: three hours before 2 o'clock is 11, not -1. The analogy breaks in one place: a clock face runs from 1 to 12 and has no 0, while <code>wrap</code> runs from 0 to <code>n - 1</code> and works for any <code>n</code>, not only 12. <code>count_neighbours(cells, width, height, x, y)</code> returns how many of the eight cells around <code>(x, y)</code> are alive, on a torus, never counting the cell itself. This is the heart of Life and the place where most bugs in this project live.</p>
+<p><strong>Re-read.</strong> <a href="07-flat-grid.html">Chapter 7</a>: the clock-face section on wrapping in one dimension, the negative-modulo trap, the "neighbours on a ring" section, and the section about the bug that only a non-square grid catches.</p>
+<p><strong>Tests that must turn green</strong>: <code>wrap: like a clock face</code>, <code>count_neighbours: interior cell</code>, <code>count_neighbours: does not count the cell itself</code>, <code>count_neighbours: edges wrap around (torus)</code>. Do <code>wrap</code> first and run its case alone, then the three others:</p>
+
+<pre class="shell"><code>$ cmake --build build &amp;&amp; ./build/life_tests -tc="wrap*"
+$ cmake --build build &amp;&amp; ./build/life_tests -tc="count_neighbours*"
+</code></pre>
+
+<p>Before you write <code>wrap</code>, see the trap once more with your own eyes. In C++, the remainder of a negative number is negative:</p>
+
+<pre class="code" data-lang="cpp" data-file="neg_mod.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int main() {
+    std::println("10 % 10 = {}", 10 % 10);
+    std::println("11 % 10 = {}", 11 % 10);
+    std::println("-1 % 10 = {}", -1 % 10);
+    std::println("-11 % 10 = {}", -11 % 10);
+    std::println("-1 / 10 = {}", -1 / 10);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="neg_mod.cpp"><code>10 % 10 = 0
+11 % 10 = 1
+-1 % 10 = -1
+-11 % 10 = -1
+-1 / 10 = 0
+</code></pre>
+
+<p>The test asks for <code>wrap(-1, 10) == 9</code> and <code>wrap(-11, 10) == 9</code>. Plain <code>%</code> gives -1 for both. A clock does not have an hour called -1; one hour before 0 is 9. The last line, <code>-1 / 10 = 0</code>, is the reason: C++ rounds a division towards zero, and the remainder is whatever is left over after that, so it carries the sign of <code>v</code>.</p>
+
+<div class="callout trap"><span class="label">Trap</span><p><strong>Three fixes that are almost right.</strong> The seven test cases are chosen to catch each of them.</p>
+<ul>
+<li>"If <code>v</code> is negative, add <code>n</code>." Gets -1 right (9) but turns -11 into -1.</li>
+<li>"Take the remainder, then always add <code>n</code>." Gets -1 right but turns 0 into 10 and 7 into 17.</li>
+<li>"Add <code>n</code> first, then take the remainder." Gets -1 and -10 right but turns -11 into -1 again.</li>
+</ul>
+<p>Each of those fails at least one of the seven. Check all seven cases by hand against your formula before you compile.</p></div>
+
+<div class="callout try"><span class="label">Try it</span><p>Copy <code>neg_mod.cpp</code> into <code>scratch/</code> and add one <code>std::println</code> per test value (0, 7, 10, 11, -1, -10, -11) that prints your candidate formula's result next to the expected answer. Run it with <code>tools/run.sh</code>. Only when all seven lines agree, move the formula into <code>life.cpp</code>. This is the smallest possible experiment, and it is faster than rebuilding the whole project to find out.</p></div>
+<p>Now the neighbours. A cell at <code>(x, y)</code> has eight neighbours, found by adding an offset between -1 and 1 to each coordinate and skipping the one offset pair that is <code>(0, 0)</code>, the cell itself:</p>
+
+<pre class="grid-figure">  dx:      -1       0       +1
+        +-------+-------+-------+
+ dy=-1  |(-1,-1)|( 0,-1)|(+1,-1)|     the row above
+        +-------+-------+-------+
+ dy= 0  |(-1, 0)| SKIP  |(+1, 0)|     left and right
+        +-------+-------+-------+
+ dy=+1  |(-1,+1)|( 0,+1)|(+1,+1)|     the row below
+        +-------+-------+-------+
+</pre>
+
+<p>On a torus, <code>x - 1</code> for <code>x = 0</code> is not -1 but <code>width - 1</code>, and <code>y + 1</code> for the bottom row is 0. That is exactly what <code>wrap</code> is for: wrap the column with <code>width</code>, and wrap the row with <code>height</code>. Both. Separately. The test <code>edges wrap around (torus)</code> uses a 5×3 grid, not a square, so that wrapping the row with <code>width</code> by mistake gives a wrong answer instead of a lucky one. <a href="07-flat-grid.html">Chapter 7</a>'s <code>wrong_formula.cpp</code> showed why: on a 7×3 grid the swapped formula draws the wrong picture, and when height is larger than width it indexes past the vector, so the sanitizer stops you. The 5×3 torus test exists for the same reason.</p>
+
+<details class="hint"><summary>Rung 1: where to look</summary><p><code>wrap</code>: the comment above it in <code>life.hpp</code> says "like the hands of a clock". Which of the seven test cases does plain <code>%</code> get wrong? Exactly the negative ones. <code>count_neighbours</code>: the test <code>interior cell</code> draws a ring of eight live cells around the centre of a 5×5 grid and also asks about the corner <code>(0, 0)</code>, which touches only <code>(1, 1)</code> of that ring directly. Draw the 5×5 grid on paper and count the corner's neighbours by hand, remembering that the corner's other neighbours wrap to the far side.</p></details>
+<details class="hint"><summary>Rung 2: the idea in words</summary><p><code>wrap</code>: take the remainder of <code>v</code> by <code>n</code>. If that remainder is negative, it is <code>n</code> too small; add <code>n</code>. Alternatively, take the remainder, add <code>n</code> (the number is now certainly positive), and take the remainder once more to bring it back under <code>n</code>. Either way, test it against all seven cases on paper, -11 included. <code>count_neighbours</code>: for each of the eight offsets, compute the neighbour's column by wrapping <code>x</code> plus the horizontal offset with <code>width</code>, and its row by wrapping <code>y</code> plus the vertical offset with <code>height</code>. Look up that cell. Add its value to a running total. Return the total.</p></details>
+<details class="hint"><summary>Rung 3: the shape of the loops in words</summary><p>Two tiny nested loops, one for the vertical offset from -1 to 1, inside it one for the horizontal offset from -1 to 1. At the top of the inner body, if both offsets are zero, <code>continue</code>: that is the cell itself. Otherwise wrap, index, add. The running total starts at 0 before the loops and is returned after them. A cell's value is a <code>std::uint8_t</code>, which is a small integer, so adding it to an <code>int</code> total works directly; alive is 1, dead is 0, so the sum is the count.</p></details>
+<details class="hint"><summary>Rung 4: the arithmetic, and the one line to get right</summary><p>The lookup is the same as in <code>render</code>: your <code>index_of</code> with the <em>wrapped</em> column and the <em>wrapped</em> row, cast to <code>std::size_t</code> for the vector. The classic mistake is to wrap one coordinate and not the other, or to wrap the row with <code>width</code>. Say the line out loud as you type it: "column wrapped by width, row wrapped by height". If you have eight nearly identical lines instead of two loops, that is allowed, but the review will ask why.</p></details>
+
+<p><strong>Common bugs and their symptoms.</strong></p>
+<ul>
+<li><strong>Counting the cell itself.</strong> The <code>does not count the cell itself</code> case reports <code>CHECK( 1 == 0 )</code> for the lone centre cell. The <code>interior cell</code> case stays green with this bug, because every cell it asks about is dead; that is exactly why the second case exists.</li>
+<li><strong>Forgetting to wrap.</strong> The <code>edges wrap around (torus)</code> case fails with <code>0 == 1</code>. If you also index without wrapping, the sanitizer stops the run with a heap-buffer-overflow, because <code>x - 1</code> became -1 and there is no cell -1.</li>
+<li><strong>Wrapping the row with <code>width</code>.</strong> The two square-grid cases pass. The 5×3 case stops with a sanitizer report on its very first check, <code>count_neighbours(g, 5, 3, 0, 0)</code>. The first neighbour it looks at is offset (-1, -1): column -1 wraps to 4, and row -1 wrapped by 5 instead of 3 is row 4. A 3-row grid has no row 4. Index 4 × 5 + 4 = 24 in a 15-cell vector, so the report says <code>9 bytes after 15-byte region</code>, with <code>count_neighbours</code> and its line number in the first stack frame.</li>
+<li><strong>Negative modulo in <code>wrap</code>.</strong> <code>wrap(-1, 10)</code> returns -1, and later every negative index makes the sanitizer shout.</li>
+</ul>
+<p><strong>Definition of done.</strong> All four cases pass; the full run shows 8 passed, 5 failed, and the five remaining failures all begin with <code>step:</code>. Commit: <code>M3: wrap and count_neighbours green</code>.</p>
+
+<h2>Milestone 4: step</h2>
+<p><strong>Goal.</strong> <code>step(current, next, width, height)</code> computes one generation. It reads only from <code>current</code>, writes every cell of <code>next</code>, and never modifies <code>current</code>. The two vectors already have <code>width * height</code> cells each when the function is called.</p>
+<p><strong>Re-read.</strong> <a href="05-references-and-const.html">Chapter 5</a> on <code>const Cells&amp;</code> versus <code>Cells&amp;</code>: the signature tells you which one you may write to. <a href="07-flat-grid.html">Chapter 7</a>, the Rule 90 section: the one-dimensional automaton that goes wrong when updated in place and right with two buffers. <code>step</code> is that program with one more dimension and eight neighbours instead of two.</p>
+<p><strong>Tests that must turn green</strong>: all six <code>step:</code> cases.</p>
+
+<pre class="shell"><code>$ cmake --build build &amp;&amp; ./build/life_tests -tc="step*"
+</code></pre>
+
+<p>The rules, as a table. Read the row for the cell's current state, then the column for its neighbour count:</p>
+<table>
+<thead><tr><th>Cell now</th><th>0 or 1 live neighbours</th><th>2</th><th>3</th><th>4 to 8</th></tr></thead>
+<tbody>
+<tr><td>alive</td><td>dies (loneliness)</td><td>stays alive</td><td>stays alive</td><td>dies (crowding)</td></tr>
+<tr><td>dead</td><td>stays dead</td><td>stays dead</td><td>is born</td><td>stays dead</td></tr>
+</tbody>
+</table>
+<p>Only two cells in that table come out alive: a live cell with 2 or 3, and a dead cell with 3. Everything else is dead. Notice what that means for how you write <code>next</code>: it is not enough to set the cells that become alive. <strong>Every cell of <code>next</code> must be written</strong>, dead ones included, because the test <code>a lone cell dies</code> hands you a <code>next</code> that is deliberately full of 1s and expects every one of them to become 0. A function that only writes births leaves that garbage in place.</p>
+<p>The test to believe first is the <strong>blinker</strong>, a row of three live cells. It is the smallest pattern that changes and comes back, and if it works, the rules, the neighbour count and the double buffering (two vectors: read from one, write into the other, then swap, as in chapter 7) are all right at once:</p>
+
+<pre class="grid-figure"> generation 0      generation 1      generation 2
+  .....             .....             .....
+  .....             ..#..             .....
+  .###.     -->     ..#..     -->     .###.
+  .....             ..#..             .....
+  .....             .....             .....
+</pre>
+
+<p>Why does it do that? Count by hand. The middle cell <code>(2, 2)</code> has two live neighbours (left and right): it survives. Each end cell has one live neighbour (the middle): it dies. The cell above the middle, <code>(2, 1)</code>, is dead and sees exactly three live cells below it: it is born. So does <code>(2, 3)</code>. Everything else sees at most two and stays dead. The result is the vertical bar, and by the same argument the vertical bar becomes the horizontal one again. The test <code>blinker oscillates with period 2</code> checks both halves of that argument.</p>
+
+<details class="hint"><summary>Rung 1: where to look</summary><p>Look at the signature. <code>current</code> is a <code>const Cells&amp;</code>: you can read it but the compiler will refuse an assignment into it. <code>next</code> is a <code>Cells&amp;</code>: the caller's vector, which you are meant to fill. Now look at the six tests and sort them: which ones test the rules, which one tests that <code>next</code> is fully overwritten, which one tests the torus, which one tests that <code>current</code> is left alone?</p></details>
+<details class="hint"><summary>Rung 2: the shape of the loops in words</summary><p>Two nested loops over the grid, row outside and column inside, the same walk as in <code>render</code>. For each cell: count its live neighbours in <code>current</code> with the function from milestone 3; read whether the cell itself is alive in <code>current</code>; decide, from the table, whether it is alive in the next generation; write that 0 or 1 into <code>next</code> at the same position. Nothing is read from <code>next</code> and nothing is written to <code>current</code>, ever.</p></details>
+<details class="hint"><summary>Rung 3: the decision in words</summary><p>The new value is 1 when either "the cell is alive and the count is 2 or 3" or "the cell is dead and the count is exactly 3", and 0 otherwise. That is one <code>if</code> with two conditions joined by <em>or</em>, or two <code>if</code>s, or a comparison whose result you store. Whichever you choose, the <em>otherwise</em> branch must actually write a 0, not do nothing.</p></details>
+<details class="hint"><summary>Rung 4: the arithmetic in words</summary><p>The position where you write into <code>next</code> is the position of the cell you are looking at: the same <code>index_of</code> you used to read it, cast to <code>std::size_t</code>. There is no wrapping in <code>step</code> itself: the loops only visit valid cells, and all the wrapping happens inside <code>count_neighbours</code>. If you find yourself calling <code>wrap</code> in <code>step</code>, stop and ask what for.</p></details>
+
+<p><strong>Common bugs and their symptoms.</strong></p>
+<ul>
+<li><strong>Updating in place.</strong> That is: copying <code>current</code> into <code>next</code> and then reading neighbours from <code>next</code>, so that you read cells you already overwrote this generation. The lone cell and the block still pass, because for them the new values happen to equal the old ones. <code>blinker oscillates with period 2</code> and <code>wraps across the edges</code> fail. The first <code>CHECK( next == vertical )</code> prints both vectors as lists of 25 numbers. Yours has four live cells in a lopsided shape where the vertical bar should be. Here is why: the cell above the middle is born first (correctly); its right-hand neighbour then sees that newborn plus two cells of the bar, counts three and is born too; the middle cell then counts four and dies. The Rule 90 section of chapter 7 shows exactly this corruption in one dimension.</li>
+<li><strong>Only writing births.</strong> <code>a lone cell dies</code> reports twenty-five <code>CHECK( 1 == 0 )</code> failures, one per leftover 1.</li>
+<li><strong>Writing to <code>current</code>.</strong> It will not compile. clang says <code>cannot assign to return value because function 'operator[]' returns a const value</code>. That is the compiler saving you: the <code>const</code> in the signature is a promise, and it is enforced.</li>
+<li><strong>Off-by-one in a loop bound.</strong> Either the last row is never written, and the test shows stale values in the last five positions, or you step past the end and the sanitizer reports it.</li>
+</ul>
+<p><strong>Definition of done.</strong> <code>./build/life_tests</code> reports <code>13 passed | 0 failed</code> and the word <code>SUCCESS</code>. Also, no line from the sanitizer anywhere in the output: a run can be green and still have printed a report for a read that happened to return the right value. Commit: <code>M4: step green, 13/13</code>.</p>
+
+<div class="callout try"><span class="label">Try it</span><p>Before moving on, write one scratch program (in <code>scratch/</code>, including <code>life.hpp</code>) that creates a 10×6 random grid, prints it with <code>render</code>, steps it into a second vector, swaps them, and prints again, five times. Do not animate yet; only print the frames one under another. You are checking that the pieces fit together before you add arguments and ANSI codes. This program needs two source files, so compile it with clang++ directly rather than <code>tools/run.sh</code>: list <code>scratch/try_life.cpp</code> and <code>phase1-terminal/01-life/src/life.cpp</code> both on the command line, and add <code>-Iphase1-terminal/01-life/src</code> so the <code>#include "life.hpp"</code> is found (<a href="10-headers-and-files.html">chapter 10</a>). From the repo root, the whole command is:</p>
+<pre class="shell"><code>$ clang++ -std=c++23 -Wall -Wextra -Iphase1-terminal/01-life/src scratch/try_life.cpp phase1-terminal/01-life/src/life.cpp -o scratch/try_life
+$ ./scratch/try_life
+</code></pre>
+<p>If the five frames look like Life (blinkers blink, blocks sit still, lone cells vanish), the pieces fit.</p></div>
+
+<h2>Milestone 5: main, static</h2>
+<p><strong>Goal.</strong> Replace the stub <code>main.cpp</code> with a program that parses the six arguments with their defaults, makes a random grid, prints <em>one</em> generation with <code>render</code>, and exits. No loop, no sleeping, no escape codes yet. The manual check: <code>./build/life --width 10 --height 5 --seed 3</code> prints a 10×5 grid of <code>#</code> and <code>.</code>.</p>
+<p><strong>Re-read.</strong> <a href="08-strings-and-args.html">Chapter 8</a>: program arguments, parsing a flag and its value, the complete parser with a usage message, <code>std::stoi</code> and <code>std::stod</code>. <a href="10-headers-and-files.html">Chapter 10</a>: <code>#include "life.hpp"</code> in <code>main.cpp</code> and why <code>life.cpp</code> is listed next to it in <code>CMakeLists.txt</code>.</p>
+<p><strong>Tests that must turn green</strong>: none. The thirteen doctest cases never call <code>main</code>; this milestone and the next are checked by eye, with the commands in "Definition of done".</p>
+<p><strong>Defaults</strong>: width 60, height 20, seed 1, fill 0.3, fps 10, steps 0. These are the defaults from <a href="08-strings-and-args.html">chapter 8</a>'s <code>args_demo.cpp</code> plus <code>--fps 10</code> and <code>--steps 0</code>. Set these before you look at any argument, so that a flag that is not given simply keeps its default. Here is the pattern on a different, two-flag program; the Life version has six flags and two of them are not integers.</p>
+
+<pre class="code" data-lang="cpp" data-file="repeat_args.cpp" data-check="compile"><code>#include &lt;print&gt;
+#include &lt;string&gt;
+
+int main(int argc, char* argv[]) {
+    // Defaults first: a flag that is not given keeps these.
+    int times = 2;
+    std::string word = "hello";
+
+    // Walk the arguments two at a time: a flag, then its value.
+    for (int i = 1; i + 1 &lt; argc; i += 2) {
+        const std::string flag = argv[i];
+        const std::string value = argv[i + 1];
+        if (flag == "--times") {
+            times = std::stoi(value);
+        } else if (flag == "--word") {
+            word = value;
+        } else {
+            std::println("unknown flag: {}", flag);
+            return 1;
+        }
+    }
+
+    for (int i = 0; i &lt; times; ++i) {
+        std::println("{}", word);
+    }
+    return 0;
+}
+</code></pre>
+<pre class="shell"><code>$ clang++ -std=c++23 -Wall -Wextra repeat_args.cpp -o repeat_args
+$ ./repeat_args
+hello
+hello
+$ ./repeat_args --times 3 --word yes
+yes
+yes
+yes
+$ ./repeat_args --times 1 --nope 4
+unknown flag: --nope
+</code></pre>
+
+<p><a href="08-strings-and-args.html">Chapter 8</a>'s parser checks <code>i + 1 &lt; argc</code> inside the loop and complains about a dangling flag; this one folds the check into the loop condition and ignores it. Either is acceptable for milestone 5; the review will ask which you chose and why. The loop condition <code>i + 1 &lt; argc</code> matters: it guarantees that <code>argv[i + 1]</code> exists before you read it, so <code>./life --width</code> with no number does not read past the end of the arguments. The seed parameter of <code>random_cells</code> is an <code>unsigned int</code> while <code>std::stoi</code> gives an <code>int</code>. The compiler converts silently here (<code>-Wall -Wextra</code> does not warn about this one), but a <code>static_cast&lt;unsigned int&gt;</code> (<a href="02-values-and-types.html">chapter 2</a>) makes the conversion visible, which matters because <code>--seed -1</code> quietly becomes 4294967295.</p>
+<p>The second non-integer flag is <code>--fill</code>, and it is the one that bites. <code>argv</code> holds text, and <code>std::stoi</code> reads an integer from the front of the text and stops at the first character that is not part of one. For <code>"0.3"</code> that is the dot:</p>
+
+<pre class="code" data-lang="cpp" data-file="fill_parse.cpp" data-check="run"><code>#include &lt;print&gt;
+#include &lt;string&gt;
+
+int main() {
+    const std::string text = "0.3";          // what argv holds after --fill 0.3
+    const int as_int = std::stoi(text);      // reads "0", stops at the '.'
+    const double as_double = std::stod(text);
+    std::println("std::stoi(\"{}\") = {}", text, as_int);
+    std::println("std::stod(\"{}\") = {}", text, as_double);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="fill_parse.cpp"><code>std::stoi("0.3") = 0
+std::stod("0.3") = 0.3
+</code></pre>
+
+<p>No error, no warning, only a 0 where 0.3 should be. A fill of 0 means every cell is dead, so the symptom is a grid of dots for every seed. <code>std::stod</code>, "string to double" from chapter 8, is the one you want for <code>--fill</code>.</p>
+
+<details class="hint"><summary>Rung 1: where to look</summary><p>The old stub <code>main.cpp</code> has a four-line plan in its comment. Step 1 of that plan is this milestone, plus "print once". Chapter 8's complete parser already handles <code>--width</code> and <code>--height</code>; what do you add for <code>--fill</code>, which is a <code>double</code>?</p></details>
+<details class="hint"><summary>Rung 2: the shape in words</summary><p>Six variables with their defaults. One loop over the arguments two at a time, with a chain of <code>if</code>/<code>else if</code> on the flag text, each branch converting the value and storing it; a final <code>else</code> that prints the unknown flag and returns 1. After the loop, call <code>random_cells</code> with the four values it needs, call <code>render</code> on the result, and <code>std::print</code> the string. Return 0.</p></details>
+<details class="hint"><summary>Rung 3: the details that bite</summary><p><code>std::print</code>, not <code>std::println</code>, for the rendered grid: it already ends in a newline. Check the output has exactly <code>height</code> lines with <code>wc -l</code> (a terminal command that counts lines): <code>./build/life --height 5 | wc -l</code> should print 5. The <code>|</code> is the pipe from chapter 9: it sends your program's output into <code>wc</code> instead of onto the screen. If the grid is 60 wide and your terminal is narrower, lines wrap and it looks like twice as many rows; widen the terminal or pass <code>--width 40</code> while testing.</p></details>
+
+<p><strong>Common bugs and their symptoms.</strong></p>
+<ul>
+<li><strong>Forgetting to rebuild.</strong> Run <code>cmake --build build</code> every time you edit, or the old stub keeps printing "not implemented yet".</li>
+<li><strong>Reading <code>argv[i + 1]</code> without the <code>i + 1 &lt; argc</code> guard.</strong> When a flag has no value, <code>argv[argc]</code> is the "nothing here" marker from chapter 8 (a null pointer). Turning it into a <code>std::string</code> makes the sanitizer stop the program with <code>AddressSanitizer: SEGV on unknown address 0x000000000000</code> and the hint <code>address points to the zero page</code>.</li>
+<li><strong>Passing <code>fill</code> through <code>std::stoi</code>.</strong> Every grid is empty, for every seed. You saw why in <code>fill_parse.cpp</code> above.</li>
+<li><strong>A width or height of 0.</strong> Decide what <code>--width 0</code> or <code>--height 0</code> should do; refusing with the usage message and <code>return 1</code> is simplest. A 0-wide grid makes every <code>%</code> in <code>wrap</code> a division by zero, which UBSan reports as <code>runtime error: division by zero</code> the moment <code>count_neighbours</code> runs.</li>
+</ul>
+<p><strong>Definition of done.</strong> <code>./build/life --width 10 --height 5 --seed 3</code> prints 5 lines of 10 characters, the same every time you run it, and a different picture for <code>--seed 4</code>. <code>./build/life</code> with no arguments prints a 60×20 grid. Commit: <code>M5: main parses args and prints one generation</code>.</p>
+
+<h2>Milestone 6: the animated loop</h2>
+<p><strong>Goal.</strong> Turn the one-frame print into an animation. The shape of the loop, from the comment in the old <code>main.cpp</code> and from chapter 9, is this:</p>
+<ol>
+<li>Hide the cursor. Clear the screen, once.</li>
+<li>For each frame: move the cursor home; print the frame; flush; compute the next generation into the second vector; swap the two vectors; sleep for one frame's worth of time.</li>
+<li>Stop after <code>--steps</code> generations if that is not zero; otherwise run until Ctrl-C.</li>
+<li>Show the cursor again before exiting.</li>
+</ol>
+<p><strong>Tests that must turn green</strong>: none; checked by eye, as in milestone 5.</p>
+<p><strong>Re-read.</strong> <a href="09-terminal.html">Chapter 9</a>, all of it: escape sequences, buffering and flushing, <code>sleep_for</code> and the <code>ms</code> literal, the bouncing <code>#</code>, the countdown that redraws a whole frame, frame timing, flicker, and the section on Ctrl-C and the lost cursor. <a href="07-flat-grid.html">Chapter 7</a> for <code>std::swap</code> on two vectors.</p>
+<p>Here is the loop skeleton on a different picture, a progress bar that fills over twenty frames. Every structural line of your Life loop has a counterpart here, and <em>only</em> the picture is different.</p>
+
+<pre class="code" data-lang="cpp" data-file="bar_anim.cpp" data-check="compile"><code>#include &lt;chrono&gt;
+#include &lt;cstdio&gt;
+#include &lt;print&gt;
+#include &lt;string&gt;
+#include &lt;thread&gt;
+
+int main() {
+    using namespace std::chrono_literals;
+    const int frames = 20;
+
+    std::print("\x1b[?25l");          // hide the cursor
+    std::print("\x1b[2J");            // clear the screen ONCE
+    for (int f = 1; f &lt;= frames; ++f) {
+        std::print("\x1b[H");         // cursor home: top-left, every frame
+        std::string bar;
+        for (int i = 0; i &lt; f; ++i) {
+            bar += '#';
+        }
+        for (int i = f; i &lt; frames; ++i) {
+            bar += '.';
+        }
+        std::print("[{}] frame {:2} of {}\n", bar, f, frames);
+        std::fflush(stdout);          // push the frame to the terminal now
+        std::this_thread::sleep_for(100ms);
+    }
+    std::print("\x1b[?25h");          // show the cursor again, always
+    std::println("done");
+    return 0;
+}
+</code></pre>
+
+<p>Run it and watch the bar fill in place without scrolling. Then run it with the output piped through <code>cat -v</code>, which shows the escape characters as <code>^[</code> instead of obeying them (if your shell has replaced <code>cat</code> with a fancier tool such as <code>bat</code>, write <code>/bin/cat -v</code>), and you can see the structure: hide, clear, then <code>^[[H</code> before every frame, nothing else. (<code>head -3</code> keeps only the first three lines, so the terminal is not flooded with twenty.)</p>
+
+<pre class="shell"><code>$ clang++ -std=c++23 -Wall -Wextra bar_anim.cpp -o bar_anim
+$ ./bar_anim | cat -v | head -3
+^[[?25l^[[2J^[[H[#...................] frame  1 of 20
+^[[H[##..................] frame  2 of 20
+^[[H[###.................] frame  3 of 20
+</code></pre>
+
+<p>Why clear only once? Chapter 9's flicker section explains it: clearing erases everything and the terminal shows a blank for an instant before the new frame arrives. Since every Life frame has exactly the same size as the previous one and overwrites every character, moving the cursor home and printing on top is enough. The sleep for a frame rate of <code>fps</code> is <code>1000 / fps</code> milliseconds, as in chapter 9's frame timing section; with <code>--fps 10</code> that is 100 milliseconds, which is what the bar above uses.</p>
+
+<details class="hint"><summary>Rung 1: where to look</summary><p>The bouncing <code>#</code> and the countdown in chapter 9 are both "frame loops"; the countdown is the closer one because it redraws a whole block of text. Which of its lines moves the cursor, which one makes the output appear, and which one waits? Those three lines, in that order, are the body of your loop too, with "compute the next generation and swap" inserted after the frame is on screen.</p></details>
+<details class="hint"><summary>Rung 2: the shape in words</summary><p>After parsing, you have <code>current</code> from <code>random_cells</code>; make a second vector <code>next</code> of the same size, all zero. Hide the cursor; clear. A counter of generations. A loop that runs while <code>steps</code> is zero <em>or</em> the counter is below <code>steps</code>. In the body: home, print <code>render(current, ...)</code>, flush, <code>step(current, next, ...)</code>, <code>std::swap(current, next)</code>, increase the counter, sleep. After the loop: show the cursor. Return 0.</p></details>
+<details class="hint"><summary>Rung 3: the arithmetic and the types</summary><p>The sleep length is a duration, not an <code>int</code>: chapter 9 showed how to make <code>std::chrono::milliseconds</code> from a computed number. <code>1000 / fps</code> is integer division, which is fine here (<code>1000 / 10 = 100</code>, <code>1000 / 30 = 33</code>). Guard against <code>fps</code> of zero before you divide. Dividing an integer by zero is undefined behaviour. In the Debug build UBSan prints <code>runtime error: division by zero</code> and carries on with a nonsense value. In a Release build there is no message at all: on this Mac the result happens to be 0, and on an Intel machine the same line kills the program. The stretch section below gives <code>--fps 0</code> a meaning; for now a sensible choice is to treat it as "do not sleep".</p></details>
+<details class="hint"><summary>Rung 4: the swap</summary><p>After <code>step</code> has filled <code>next</code>, the newest generation is in <code>next</code> and the old one is in <code>current</code>. You want to draw the newest one next time round and reuse the old vector as the scratch space. <code>std::swap(current, next)</code> does exactly that in constant time (chapter 6's term: the same handful of instructions whether the vectors hold 25 cells or a million), by exchanging the two vectors' insides rather than copying a million bytes (<a href="07-flat-grid.html">chapter 7</a>). If you copy instead, the program still works, but your benchmark in milestone 7 will show the cost.</p></details>
+
+<p><strong>Common bugs and their symptoms.</strong></p>
+<ul>
+<li><strong>The grid scrolls down the screen instead of staying put.</strong> The cursor-home sequence is missing, or is printed after the frame instead of before it.</li>
+<li><strong>The grid appears only when the program ends, or in bursts.</strong> No flush after the print; chapter 9's buffering section is the explanation.</li>
+<li><strong>The picture never changes.</strong> You stepped but did not swap, or you swapped but drew <code>next</code> instead of <code>current</code>.</li>
+<li><strong>The cursor is gone after the program ends.</strong> The show-cursor sequence is missing, or the <code>--steps</code> exit path skipped it. Type <code>tput cnorm</code> to get it back.</li>
+<li><strong>A doubled picture after resizing the terminal.</strong> Clearing once more when that happens is a stretch goal; for now, do not resize while it runs.</li>
+</ul>
+
+<div class="callout trap"><span class="label">Trap</span><p><strong>Ctrl-C and the invisible cursor.</strong> When you press Ctrl-C, the operating system stops your program immediately, between two of your lines, and the "show the cursor" line at the bottom of <code>main</code> never runs. Your terminal is left with an invisible cursor. Chapter 9's last section shows the terminal command that fixes it, <code>tput cnorm</code> (or <code>reset</code>, which also clears the screen), and explains why a real fix needs something from week 3: clean-up tied to a variable that runs no matter how the program leaves, which is called RAII. For this week: <code>--steps</code> is your clean exit. Test with <code>--steps 50</code>, and keep <code>tput cnorm</code> in your fingers.</p></div>
+
+<p><strong>Definition of done.</strong> <code>./build/life</code> animates smoothly at the defaults. <code>./build/life --steps 50</code> runs for about five seconds and returns you to a prompt with a visible cursor. <code>./build/life --width 80 --height 24 --seed 7 --fps 15</code> looks different from the defaults and faster. Commit: <code>M6: animated ANSI loop with --fps and --steps</code>.</p>
+
+<h2>Milestone 7: the benchmark</h2>
+<p><strong>Goal.</strong> Your first number. Build in Release, run <code>life_bench</code> at the default 1000×1000, run it in Debug too, write both rows into <code>BENCH.md</code>, then run one experiment of your choosing with a prediction written down before you run it.</p>
+<p><strong>Re-read.</strong> <a href="13-timing-and-benchmark.html">Chapter 13</a>: <code>steady_clock</code>, why warm-up runs exist, why you time many steps and divide, what Release changes compared with Debug, and the discipline of writing the prediction first.</p>
+<p><strong>Tests that must turn green</strong>: none new; the proof for this milestone is the filled-in table in <code>BENCH.md</code>. The thirteen cases must still be green in the Debug build, though: a benchmark of a wrong <code>step</code> is a number about nothing.</p>
+<p>The benchmark program is given; read <code>phase1-terminal/01-life/bench/bench_life.cpp</code> once, top to bottom. It makes a 1000×1000 grid with <code>random_cells</code>, runs three warm-up steps, times twenty steps with <code>steady_clock</code>, and prints milliseconds per step, nanoseconds per cell and cells per second. It uses only <code>random_cells</code> and <code>step</code>, so if your tests are green it will run.</p>
+
+<pre class="shell"><code>$ cmake -S . -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release
+$ cmake --build build-release
+$ ./build-release/life_bench
+$ ./build/life_bench
+</code></pre>
+
+<p>The first command configures a <em>second</em> build directory with a different build type; the Debug one in <code>build/</code> is untouched, so you can run both binaries back to back. The last line runs the Debug build, with the sanitizers on, for the Debug row in the table. It will be much slower, somewhere between twenty and a hundred times, the range chapter 13 gave. The exact ratio depends on how you wrote <code>step</code>, and finding it out is the first interesting thing you learn from this milestone.</p>
+<p>Fill in <code>BENCH.md</code>. One row per build type: date, machine (for instance "MacBook, Apple M5, macOS 26, Apple clang 21"), build type, grid, ms per step, ns per cell, a note. Then the experiment. Pick one:</p>
+<ul>
+<li><strong>Size.</strong> Run <code>./build-release/life_bench 2000</code>. Four times the cells. Prediction: four times the milliseconds per step and the same nanoseconds per cell? Write that down, then run it. If ns per cell went up, the grid stopped fitting somewhere in the processor's fast memory; week 6 is about exactly that, and this is your first measurement of it.</li>
+<li><strong>A change to <code>step</code>.</strong> Make one change you believe is faster (for instance, replacing a call with the arithmetic it does), predict the effect as a percentage, measure, and <em>put the code back</em> if it did not help, with the number in the note.</li>
+<li><strong>Warm-up.</strong> Set <code>warmup_steps</code> to 0 in a scratch copy of the benchmark and see whether the first measurement differs. This is why warm-up exists.</li>
+</ul>
+<details class="hint"><summary>Rung 1: where to look</summary><p>Read the five lines <code>life_bench</code> prints and chapter 13's "What to report, and in which units". Which of the five is the number for the table, and which two are the same number in different units? Chapter 13's "What number to expect" section gives a range for a straightforward <code>step</code>; if yours is ten times outside it in either direction, something is wrong with the build, not the code.</p></details>
+<details class="hint"><summary>Rung 2: the experiment in words</summary><p>Write the prediction as a number, not a direction: "about 4 times the milliseconds" is a prediction, "slower" is not. Run the benchmark three times and write the middle value, so one noisy run does not become the record. Then write one sentence on the difference between the prediction and the result, even if the sentence is "I do not know why yet".</p></details>
+
+<p><strong>Common bugs and their symptoms.</strong></p>
+<ul>
+<li><strong>The "Release" number is as slow as the Debug one.</strong> You ran <code>./build/life_bench</code> (Debug) twice, or you configured <code>build-release</code> without <code>-DCMAKE_BUILD_TYPE=Release</code> and got the Debug default from <code>CMakeLists.txt</code>. Run <code>cmake -S . -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release</code> again and watch for the build type in its output.</li>
+<li><strong>The number changed after you edited <code>step</code>, but you did not rebuild Release.</strong> Both build directories need their own <code>cmake --build</code>; editing <code>life.cpp</code> does not rebuild anything by itself.</li>
+<li><strong>The numbers jump around between runs.</strong> Close the browser and anything else heavy, run three times, keep the middle value. Chapter 13's variance section says how much spread is normal.</li>
+<li><strong>Comparing numbers from different grid sizes.</strong> <code>ms per step</code> at 2000×2000 is not comparable with 1000×1000; <code>ns per cell</code> is. Write the grid size in every row.</li>
+</ul>
+<p><strong>Definition of done.</strong> <code>BENCH.md</code> has a Debug row, a Release row and an experiment row, each with a machine and a date, and a sentence per experiment on what you expected versus what happened. Copy the two main numbers into the week log's benchmark table too. Commit: <code>M7: benchmark, BENCH.md filled in</code>.</p>
+
+<div class="callout twin"><span class="label">Inference twin</span><p>The number you just wrote down is in the same unit, "work per second", as the tokens-per-second table you will write for SmolLM2-135M in week 19. Both are a loop over a flat array that does a fixed small amount of arithmetic per element. The Life benchmark is tiny, but the habits are the real thing: warm up, time many iterations, divide, state the machine and the build, predict before you measure.</p></div>
+
+<h2>The debugging playbook</h2>
+<p>A test fails and the message does not make it obvious why. Work through these in order; stop as soon as you understand the bug.</p>
+<p><strong>1. Print the grid inside the test.</strong> You can. The test file is yours to edit for debugging (put it back afterwards), and it already includes <code>life.hpp</code>, so <code>render</code> is available. Add a print just before the failing <code>CHECK</code>:</p>
+
+<pre class="code" data-lang="cpp" data-file="print_in_test_fragment.cpp" data-check="fragment"><code>// inside a TEST_CASE, before the CHECK that fails:
+std::print("current:\n{}", render(cur, 5, 5));
+std::print("next:\n{}", render(next, 5, 5));
+</code></pre>
+
+<p>A picture of five rows tells you more than a vector of twenty-five numbers. You see at once whether a bar is one cell too far to the right, whether a whole row is missing, whether the edge wrapped. You will need <code>#include &lt;print&gt;</code> at the top of the test file for this.</p>
+<p><strong>2. Shrink to 3×3.</strong> If a 5×5 case fails, write a scratch program with a 3×3 grid and one live cell, and call the failing function by hand on each position, printing the result. Nine cells is few enough to check every one on paper. Bugs that hide in a big grid stand naked in a small one.</p>
+<p><strong>3. Check x/y order with a non-square grid.</strong> Make the scratch grid 4×2, not 3×3. Any place where you multiplied <code>x</code> by <code>width</code>, wrapped <code>y</code> by <code>width</code>, or swapped the two loop bounds now produces an index outside the vector or a visibly wrong picture. You saw the table in milestone 3.</p>
+<p><strong>4. A sanitizer report means an index is wrong.</strong> When the test output contains <code>AddressSanitizer: heap-buffer-overflow</code>, do not read the rest of the test output; read the report. Here is what it looks like, produced by a one-dimensional program that forgets to wrap the right-hand neighbour of the last cell in a ring of eight:</p>
+
+<pre class="code" data-lang="cpp" data-file="asan_demo.cpp" data-check="compile"><code>#include &lt;cstdint&gt;
+#include &lt;print&gt;
+#include &lt;vector&gt;
+
+int main() {
+    const int n = 8;
+    std::vector&lt;std::uint8_t&gt; ring(n, 0);
+    ring[7] = 1;
+    // Count how many of the two neighbours of cell 7 are alive, forgetting to wrap:
+    const int left = 7 - 1;
+    const int right = 7 + 1;          // 8: there is no cell 8
+    int alive = ring[static_cast&lt;std::size_t&gt;(left)] + ring[static_cast&lt;std::size_t&gt;(right)];
+    std::println("alive neighbours: {}", alive);
+    return 0;
+}
+</code></pre>
+<pre class="shell"><code>$ clang++ -std=c++23 -Wall -Wextra -g -fsanitize=address,undefined asan_demo.cpp -o asan_demo
+$ ./asan_demo
+=================================================================
+==68040==ERROR: AddressSanitizer: heap-buffer-overflow on address 0x6020000000d8 at pc 0x000104cecc30 bp 0x00016b111c30 sp 0x00016b111c28
+READ of size 1 at 0x6020000000d8 thread T0
+    #0 0x000104cecc2c in main asan_demo.cpp:12
+    #1 0x000186c214e0 in start+0x1b4c (dyld:arm64e+0x204e0)
+
+0x6020000000d8 is located 0 bytes after 8-byte region [0x6020000000d0,0x6020000000d8)
+allocated by thread T0 here:
+</code></pre>
+
+<p>Three facts in that report are the whole diagnosis. <code>READ of size 1</code>: a read of one byte, so a <code>std::uint8_t</code> cell. <code>in main asan_demo.cpp:12</code>: the file and line of the read, which is the line with the index. <code>0 bytes after 8-byte region</code>: the vector has 8 bytes and you read the byte just past its end, so the index was exactly <code>n</code>. In your project the line will be inside <code>count_neighbours</code> or <code>step</code>, and the question is always the same: which coordinate was not wrapped, or which formula was swapped? The process number between the <code>==</code> signs (<code>68040</code> here) and the long hexadecimal addresses such as <code>0x6020000000d8</code> will differ between runs and between machines; the three facts will not.</p>
+<p><strong>5. "It looks alive but wrong."</strong> The animation runs, patterns move, but blinkers smear and blocks dissolve. Nearly always one of two things: in-place update (you read a neighbour that this generation already overwrote, which the Rule 90 program in chapter 7 demonstrates) or self-counting (the cell counts itself as a neighbour, so every count is one too high). The <code>step</code> tests catch both, so if the tests are green and the animation is wrong, the bug is in <code>main</code>: are you drawing <code>current</code> after the swap?</p>
+<p><strong>6. Read the test, not just its name.</strong> Open <code>life_test.cpp</code> at the failing line. The helper <code>grid_with</code> at the top builds a grid from a list of <code>(x, y)</code> pairs; draw the grid it builds on paper, then do by hand what the function should do, then compare with what yours did. Fifteen minutes with paper beats an hour of guessing.</p>
+
+<h2>Make it yours</h2>
+<p>Only after every box in the acceptance checklist is ticked. These are the stretch goals from <code>goal.md</code> and the README, with a note on what each one teaches.</p>
+<ul>
+<li><strong>1000×1000 from the game itself.</strong> <code>--width 1000 --height 1000 --steps 20 --fps 0</code>, with <code>--fps 0</code> meaning "do not sleep", printing the milliseconds per step at the end with <code>steady_clock</code>. Compare with <code>life_bench</code>; the difference is the cost of <code>render</code> and of the terminal, which is often larger than the cost of <code>step</code>. That is a real lesson about where time goes.</li>
+<li><strong><code>--pattern glider</code> and <code>--pattern rpentomino</code>.</strong> Start from a known pattern placed in the middle instead of a random fill. The glider is five cells that walk diagonally across the torus forever; the R-pentomino is five cells that explode into chaos for over a thousand generations. You will need a function that writes a list of <code>(x, y)</code> pairs into a grid, which the test helper <code>grid_with</code> already shows the shape of. On a torus the glider comes back to where it started; count how many generations that takes for your grid size and explain the number.</li>
+<li><strong>Pause with a key.</strong> You cannot do this cleanly yet: reading a key without waiting for Enter needs the terminal's raw mode, which is week 3's first lesson. For now, <code>--steps</code> is your pause button. Write the idea in the log so you recognise it when week 3 hands you the tool.</li>
+<li><strong>Colours.</strong> Chapter 9 showed the colour sequences. Draw cells that were born this generation in one colour and cells that have survived several generations in another. This needs an <em>age</em> per cell instead of a 0 or 1; think about what changes in the type <code>Cells</code> and what that does to the tests before you touch anything. Do it on a branch.</li>
+<li><strong>A generation counter in a title line.</strong> Print <code>generation 42</code> above the grid each frame. Harmless-sounding, but it changes the frame height by one line and every escape sequence still has to land in the right place. A good small exercise in keeping the frame layout in one place.</li>
+</ul>
+
+<h2>The review ritual</h2>
+<p>After each milestone, with the tests green and the commit made, ask Claude for a review according to <code>CLAUDE.md</code>. Make the request narrow and name the function:</p>
+<blockquote><p>Review <code>life.cpp</code> <code>index_of</code> for correctness and style; do not rewrite it.</p></blockquote>
+<p>The "do not rewrite it" is not politeness; it is the rule, and saying it keeps both of you honest. A good review does not produce code. It asks questions and makes observations in six parts, in the order <code>CLAUDE.md</code> lists: correctness, clarity and style, idioms, performance ideas, the inference twin, and three questions you should be able to answer without looking at the code. Here is what a good review of this week's functions tends to ask about, so you can pre-empt it:</p>
+<ul>
+<li><strong><code>const</code>.</strong> Is every variable that never changes after it is set marked <code>const</code>? Is every reference parameter you only read a <code>const T&amp;</code>? Chapter 5 made the case; the review checks you took it.</li>
+<li><strong><code>size_t</code> casts.</strong> The vector index is a <code>std::size_t</code> and your coordinates are <code>int</code>s. Every <code>[]</code> needs a <code>static_cast&lt;std::size_t&gt;</code>, and the review will ask whether it belongs at each call site or in one place. There is no single right answer; there is a right answer for <em>your</em> code, and you should be able to say why.</li>
+<li><strong>Naming.</strong> Is the horizontal offset called something a reader recognises (<code>dx</code> is the convention)? Is the neighbour count called <code>count</code>, <code>alive</code>, <code>n</code>? Does <code>neighbour</code> keep its British spelling everywhere, to match <code>count_neighbours</code>?</li>
+<li><strong>Off-by-one.</strong> Every loop bound: <code>&lt;</code> or <code>&lt;=</code>? Every offset range: does it include both -1 and 1? The review will name a concrete input (a 1×1 grid, a 2×2 grid, width 1) and ask what your code does with it. A 1×1 torus is a wonderful edge case: the single cell is its own neighbour eight times over, and the spec says to count the eight neighbours, so the right answer is eight times its own value. Does yours do that?</li>
+<li><strong>Repetition.</strong> If the index formula appears in three functions as arithmetic instead of as a call to <code>index_of</code>, the review will ask what happens if the layout ever changes (week 4's Tetris has you write transpose and flip, which is where that question stops being theoretical).</li>
+</ul>
+<p>Write the three questions and your answers into the review table in the week log. Do not act on the review's suggestions before the next milestone is done; let them sit, then revisit. Acting immediately turns review into dictation.</p>
+
+<h2>The write-up</h2>
+<p>The phase gate asks for a short note in <code>docs/</code> titled "What a grid taught me about tensors". Write it on Sunday, about 300 words, in your own words, before you re-read the inference twin section below so that it is yours and not a paraphrase. Prompts to answer, pick four or five:</p>
+<ul>
+<li>What is a tensor, in one sentence, using only words you could explain to a friend who has never programmed?</li>
+<li>What was the one bug this week that a square grid would have hidden?</li>
+<li>Why does <code>step</code> need two vectors, and what would go wrong with one? Describe the wrong picture you would see.</li>
+<li>What does "the same seed gives the same grid" guarantee, and what does it not guarantee (about different machines, different compilers, different distributions)?</li>
+<li>What was the ratio of your Debug time to your Release time, and what do you think the sanitizers were doing with the difference?</li>
+<li>Where did the time go when you animated a 1000×1000 grid: in <code>step</code>, in <code>render</code>, or in the terminal? How do you know?</li>
+<li>Which milestone took longest, and was that because the idea was hard or because the bug was hard to see?</li>
+</ul>
+
+<h2>The inference twin, in depth</h2>
+<p>The README says this week secretly teaches tensors. Here is the whole correspondence, now that you have built the thing. Keep this section; you will reread it in week 15 with a different kind of recognition.</p>
+<p><strong>Flat array plus shape equals tensor.</strong> Your grid is one <code>std::vector&lt;std::uint8_t&gt;</code> of <code>width * height</code> bytes, plus two integers that say how to read it. The vector alone is meaningless: a million bytes could be a 1000×1000 grid or a 500×2000 one. The <em>shape</em>, carried alongside, gives it meaning. A tensor in PyTorch, in ggml, in every inference engine, is exactly this: one unbroken block of numbers plus a shape and a <em>stride</em> per dimension, where the stride is how many elements you skip to move by one along that dimension. Your <code>index_of</code> is a stride computation: the stride of <code>y</code> is <code>width</code>, the stride of <code>x</code> is 1. A tensor with three dimensions (a <em>rank-3</em> tensor) adds one more term to the formula; a transposed view changes the strides without touching the bytes. When you write the <code>Tensor</code> class in week 15, <code>index_of</code> grows to any number of dimensions, and nothing else about it changes.</p>
+<p><strong>The 3×3 stencil is a convolution kernel.</strong> <code>count_neighbours</code> reads a small window around a cell and combines the values; <code>step</code> does that for every cell and writes one output per input position. That shape, "each output depends on a fixed small neighbourhood of the input", is a <strong>stencil</strong>, and a convolution layer in a neural network is a stencil whose combining function is a weighted sum instead of a count. Even the elementwise operations in a transformer, where each output depends only on the matching input (a 1×1 stencil), have the same loop structure: walk every position, read a neighbourhood, write one value. The CUDA kernel you write in week 22 for Life is, line for line, the shape of every elementwise and stencil kernel in ggml-cuda, with a different body.</p>
+<p><strong>Current and next are ping-pong buffers.</strong> You cannot compute generation <code>t + 1</code> into the same memory that holds generation <code>t</code>, because the cell to your right still needs the old value of the cell you just overwrote. So you have two buffers and swap them. An inference engine running one layer of a language model (a <em>transformer layer</em>: one of the repeated stages the numbers pass through) has the same problem: the layer's output is computed from the layer's input, and the input must stay intact until every output is written. Engines keep two buffers for those numbers (the <em>activations</em>) and ping-pong between them exactly as you did. The KV cache in week 18, a store of earlier results that later tokens read, is a bigger version of the same discipline: never let a reader see a half-written result.</p>
+<p><strong>The step loop cost is tokens times dimension.</strong> One <code>step</code> visits <code>width * height</code> cells and does a fixed amount of work (about nine reads and one write) per cell, so the cost is proportional to the number of cells. One token through one transformer layer visits every element of an activation vector of size <code>dim</code> and does a fixed amount of work per element; generating <code>N</code> tokens is <code>N</code> steps of that. Your <code>ms per step</code> at 1000×1000 and a model's <code>ms per token</code> are the same kind of number from the same kind of loop, and the benchmark you ran is the same experiment: fixed work per element, measured many times, divided.</p>
+<p><strong>The test suite is a numerical reference test.</strong> The blinker test says: given this exact input, the output must be this exact grid. Week 15 tests your <code>matmul</code> the same way, except that the "exact grid" comes from PyTorch, dumped to a file by a Python script, and the comparison allows a tolerance because floating-point arithmetic rounds. The habit is identical: a known input, a reference output computed some other way, a check. Your <code>grid_with</code> helper is the ancestor of the <code>load_reference_tensor</code> helper you will write then.</p>
+<p><strong><code>BENCH.md</code> is the tokens-per-second table.</strong> The phase 4 gate asks for tokens per second at fp32, Q8_0 and Q4_0 at 1, 4 and 8 threads. That table is <code>BENCH.md</code> with more columns: the same machine line, the same build type, the same "ms per unit of work", the same note on what you expected. Start writing that table well now, with the date and the machine every time, and the week-17 version will take you ten minutes.</p>
+
+<div class="callout analogy"><span class="label">Analogy</span><p>Life is to an inference engine what a scale model is to a building. Every structural element is present: the flat storage, the stride arithmetic, the stencil loop, the two buffers, the reference tests, the benchmark. The proportions are right and you can walk through it in a week. <em>Where the analogy breaks:</em> a scale model does not have to stand up. Your Life has to actually run, and it has to be correct, and the sanitizer and the tests enforce that. The model is load-bearing.</p></div>
+
+<h2>Check yourself</h2>
+<div class="quiz">
+<div class="q"><p>Why does <code>step</code> take two vectors, <code>current</code> and <code>next</code>, instead of updating one grid in place? Describe what you would see on the blinker if it updated in place.</p><details class="answer"><summary>Answer</summary><p>Every cell's new value depends on the <em>old</em> values of its eight neighbours. If you overwrite a cell as you go, the cells to its right and below read the new value instead of the old one, and the rules are applied to a mixture of two generations. On the blinker, walking row by row, the cell above the middle is born first (correctly), but then the cell to its right sees that newborn plus two cells of the bar, counts three and is wrongly born too; the middle cell then counts four and wrongly dies. The vertical bar never forms; after one more generation the pattern has settled into a 2×2 block that never changes again. Two buffers keep one generation fully intact while the other is written, and <code>std::swap</code> exchanges them in constant time.</p></details></div>
+<div class="q"><p>The torus test uses a 5×3 grid and the index test uses <code>(4, 4, 5)</code> among its cases. Why are non-square grids and an <code>x == y</code> case both in the test file?</p><details class="answer"><summary>Answer</summary><p>On a square grid, swapping <code>x</code> and <code>y</code> in the index formula, or wrapping the row with <code>width</code> instead of <code>height</code>, still produces valid indices and symmetric patterns look right, so the bug hides. On a 5×3 grid the wrong formula points outside the vector or at the wrong cell and the test fails. The <code>(4, 4, 5)</code> case is the opposite lesson: it <em>passes</em> with the swapped formula, so you see one green assertion next to four red ones and learn that a passing case on a square is not evidence.</p></details></div>
+<div class="q"><p>What does the seed guarantee about <code>random_cells</code>, and what does it not guarantee?</p><details class="answer"><summary>Answer</summary><p>It guarantees that the same seed, same width, same height and same fill produce an identical grid every run, on the same machine with the same compiler and standard library, because <code>std::mt19937</code> is a fixed arithmetic sequence and the standard specifies its output exactly. It does not guarantee a particular <em>number</em> of live cells (only a probability per cell), and it does not guarantee the same grid across different standard libraries, because <code>std::uniform_real_distribution</code> may turn the engine's integers into doubles differently. The test therefore checks "same seed twice gives equal grids" and "fill 0.5 gives roughly half", never an exact live count for a non-extreme fill.</p></details></div>
+<div class="q"><p>The stub <code>step</code> does nothing and the test <code>step: does not modify current</code> passes. What does that tell you about tests in general, and what does the test <code>a lone cell dies</code> do about it?</p><details class="answer"><summary>Answer</summary><p>A test can only prove the absence of the specific bug it looks for; a useless function can pass a test that happens to accept "nothing happened". That is why there are thirteen cases, each closing off a different wrong behaviour. <code>a lone cell dies</code> defends against the opposite laziness: it fills <code>next</code> with 1s before calling <code>step</code>, so a <code>step</code> that only writes births and leaves everything else alone fails on all twenty-five cells. Together, the two tests force <code>step</code> to write every cell of <code>next</code> and to leave <code>current</code> alone.</p></details></div>
+<div class="q"><p>Why does the animation clear the screen once, before the loop, and then only move the cursor home for each frame?</p><details class="answer"><summary>Answer</summary><p>Clearing wipes the whole screen, and for an instant the terminal shows blank space before the new frame arrives, which you see as flicker. Every Life frame has exactly the same size as the one before and overwrites every character, so moving the cursor to the top-left and printing on top replaces the old frame completely with no blank instant. Clearing is only needed once, to remove whatever was on the screen before the program started.</p></details></div>
+<div class="q"><p>Your <code>main</code> computes the sleep as <code>1000 / fps</code>. What happens when someone passes <code>--fps 0</code>, in Debug and in Release, and what should the program do instead?</p><details class="answer"><summary>Answer</summary><p>Dividing an integer by zero is undefined behaviour. In the Debug build UBSan prints <code>runtime error: division by zero</code> and continues with a nonsense value; in Release there is no message, and the result depends on the machine (0 on this Mac, a crash on Intel). The program must check <code>fps</code> before dividing: either refuse it with a usage message and <code>return 1</code>, or give 0 a meaning such as "do not sleep", which the stretch goals use for timing a 1000×1000 run from the game itself.</p></details></div>
+<div class="q"><p>In the sanitizer report, what do <code>READ of size 1</code> and <code>0 bytes after 8-byte region</code> tell you, and what is the first thing to check in your code?</p><details class="answer"><summary>Answer</summary><p><code>READ of size 1</code> says a one-byte value was read, which is a <code>std::uint8_t</code> cell. <code>0 bytes after 8-byte region</code> says the vector is 8 bytes long and the read was at index 8, exactly one past the end. So an index equal to the size was used, which on a grid means a coordinate that should have been wrapped back to 0 was not, or a loop bound used <code>&lt;=</code> instead of <code>&lt;</code>. Check the line the report names, and in it the coordinate that was not passed through <code>wrap</code>.</p></details></div>
+</div>
+
+<h2>What you can do now</h2>
+<ul>
+<li>Build a multi-file C++ project with CMake and Ninja in Debug and Release, run its tests, and read a doctest failure report down to the values it saw.</li>
+<li>Implement a flat 2D grid with row-major indexing, toroidal wrap-around on both axes, and an eight-neighbour stencil, and know which test catches which mistake.</li>
+<li>Compute one generation of a cellular automaton with double buffering and <code>std::swap</code>, without ever reading a half-written result.</li>
+<li>Write a <code>main</code> that parses <code>--flag value</code> arguments with defaults, renders a grid as text, and animates it in place in the terminal at a chosen frame rate with the cursor hidden and restored.</li>
+<li>Produce a reproducible random grid from a seed and explain exactly what reproducibility does and does not promise.</li>
+<li>Measure a program in Release and Debug, record the result with the machine and date, and run one experiment with a prediction written first.</li>
+<li>Debug a failing test by printing the grid, shrinking the case, switching to a non-square grid and reading a sanitizer report.</li>
+<li>Ask for a code review that improves your code without replacing it, and explain to anyone why a Life grid and a tensor are the same object.</li>
+</ul>
+</main>
+</body>
+</html>

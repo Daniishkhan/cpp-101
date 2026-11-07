@@ -1,0 +1,604 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>13 · Timing and your first benchmark — C++ from zero to Life</title>
+<link rel="stylesheet" href="assets/book.css?v=9">
+<link rel="stylesheet" href="assets/tutor.css?v=9">
+<script src="assets/theme.js?v=9"></script>
+<script defer src="assets/book.js?v=9"></script>
+<script defer src="assets/tutor.js?v=9"></script>
+</head>
+<body>
+<nav class="sidebar" aria-label="Chapters"></nav>
+<main>
+<p class="chapter-kicker">Chapter 13</p>
+<h1>Timing and your first benchmark</h1>
+<p class="lede">At the end of this chapter you can measure how long a piece of your program takes, say what the number means in milliseconds per step and nanoseconds per cell, explain why the same code runs twenty to a hundred times slower in a Debug build, and write a benchmark table that another person could reproduce.</p>
+
+<div class="callout note"><span class="label">In this chapter</span>
+<ul>
+<li>Why you measure at all, and why correctness comes first.</li>
+<li>Clocks and durations: <code>std::chrono::steady_clock::now()</code>, subtracting two time points, converting to a <code>double</code> number of milliseconds.</li>
+<li>Debug versus Release: the same program, two very different numbers, and where the difference comes from.</li>
+<li>Variance: why five runs give five numbers, warm-up, and what to report.</li>
+<li>Units: ms per step, ns per cell, cells per second, and how to sanity-check them.</li>
+<li>A line-by-line reading of <code>phase1-terminal/01-life/bench/bench_life.cpp</code>, and how to build and run it in Release.</li>
+<li>The expected range for a plain, correct <code>step()</code> on this machine, and how to fill in <code>BENCH.md</code> with real experiments.</li>
+<li>A first feel for whether a loop is limited by memory or by arithmetic.</li>
+</ul>
+</div>
+
+<h2>Why measure</h2>
+<p>Everything you have built so far has had one question attached: <em>does it give the right answer?</em> The tests from <a href="12-testing.html">chapter 12</a> answer that. From this chapter on there is a second question that will follow you through the whole second half of the curriculum: <em>how long does it take?</em></p>
+<p>A Game of Life grid of 1,000 by 1,000 cells has one million cells. One generation looks at every cell and its eight neighbours. If that takes 5 milliseconds, you can animate 200 generations per second. If it takes 500 milliseconds, you get two. Same program, same answer, a completely different experience. And in week 18, when the "grid" is a SmolLM2-135M weight matrix and the "step" is producing one token of text, the time per step <em>is</em> the product: a model that answers in 20 milliseconds per token is usable, one that needs 2 seconds per token is not.</p>
+<p>Here is the uncomfortable truth that every experienced programmer eventually accepts: <strong>guesses about speed are usually wrong</strong>. You will be sure that a change made your code faster and the clock will say it did not. You will be sure that one loop is the slow part and the clock will point at a different one. The only defence is to measure, and to write the number down. The number is your <strong>evidence trail</strong>: a record of what you ran, on which machine, and what you saw. The <code>BENCH.md</code> files in this repository are that trail, one per challenge, for the full 26 weeks.</p>
+<div class="callout principle"><span class="label">First principle</span><p>Correct first, fast second. A fast program that gives the wrong answer is worth nothing, and speeding up code you may still have to change is wasted work. In Week 1 the order is fixed: all 13 tests green, then and only then the benchmark. The benchmark program <code>bench_life.cpp</code> never checks the answer; it trusts the tests to have done that.</p></div>
+
+<h2>Reading a clock from C++</h2>
+<p>To measure how long something takes you do what you would do with a stopwatch: look at the time before, look at the time after, subtract. In C++ the stopwatch lives in the header <code>&lt;chrono&gt;</code>, which you met in <a href="09-terminal.html">chapter 9</a> when you wrote <code>sleep_for(100ms)</code>. Now you use the other half of it.</p>
+<p><code>std::chrono::steady_clock::now()</code> is a function call. It asks the operating system for the current reading of a clock and returns it. What it returns is a <strong>time point</strong>: a value that means "this instant". On its own a time point is not useful to print; it counts from some arbitrary starting moment that the operating system chose (often the moment the computer booted). What is useful is the <em>difference</em> between two time points. Subtracting two time points gives a <strong>duration</strong>: an amount of elapsed time, with a unit attached. Here is the smallest complete program that does it.</p>
+
+<pre class="code" data-lang="cpp" data-file="first_timing.cpp" data-check="run"><code>#include &lt;chrono&gt;
+#include &lt;print&gt;
+
+int main() {
+    const auto start = std::chrono::steady_clock::now();
+
+    long long sum = 0;
+    for (int i = 0; i &lt; 1000000; ++i) {
+        sum += i;
+    }
+
+    const auto end = std::chrono::steady_clock::now();
+    const auto elapsed = end - start;
+
+    const double ms = std::chrono::duration&lt;double, std::milli&gt;(elapsed).count();
+    std::println("sum = {}", sum);
+    std::println("the loop took {:.3f} ms", ms);
+    return 0;
+}
+</code></pre>
+<pre class="shell"><code>$ tools/run.sh scratch/first_timing.cpp
+sum = 499999500000
+the loop took 1.835 ms
+</code></pre>
+
+<p>Your number for the second line will differ from this one. That is expected, and most of this chapter is about why. Read the program from the top.</p>
+<p><code>const auto start = std::chrono::steady_clock::now();</code> takes the first reading. You write <code>auto</code> because the real type name of a time point is long and you never need to spell it; the compiler knows it. <code>start</code> is <code>const</code> because a reading, once taken, should not change.</p>
+<p>Then comes the work you want to time: a loop that adds up the numbers from 0 to 999,999. The result is stored in a <code>long long</code>, a type you have not met yet: a whole number like <code>int</code>, but 8 bytes wide instead of 4, so it holds values up to about 9.2 × 10<sup>18</sup>. You need it here because 499,999,500,000 does not fit in the ±2.1 billion of a 4-byte <code>int</code> (<a href="02-values-and-types.html">chapter 2</a>); in an <code>int</code> the sum would overflow, which is undefined behaviour. Do not take the 8 bytes on trust; ask <code>sizeof</code>, as you did in chapter 2.</p>
+
+<pre class="code" data-lang="cpp" data-file="long_long.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int main() {
+    std::println("sizeof(int)       = {} bytes", sizeof(int));
+    std::println("sizeof(long long) = {} bytes", sizeof(long long));
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="long_long.cpp"><code>sizeof(int)       = 4 bytes
+sizeof(long long) = 8 bytes
+</code></pre>
+
+<p><code>bench_life.cpp</code> uses the same type when it prints its cell count. The sum is printed afterwards for a reason you will see in a moment.</p>
+<p><code>const auto end = ...now();</code> takes the second reading, and <code>end - start</code> subtracts them. The result, <code>elapsed</code>, is a duration. On this machine its unit is the nanosecond, one billionth of a second, and its value is a whole number of them. For a benchmark report you want milliseconds with decimals, which is what the next line does.</p>
+<p><code>std::chrono::duration&lt;double, std::milli&gt;(elapsed)</code> builds a new duration from the old one. The shape is <code>Type(value)</code>: make a value of this type out of that one. You have seen the same shape when you built a vector with <code>std::vector&lt;int&gt; v(5, 0)</code> in chapter 6. The two things in angle brackets say what kind of duration: the number is stored as a <code>double</code>, and one tick means one milli-second (<code>std::milli</code> is the name for one thousandth). Because the new duration has a different unit, the conversion does the division by one million for you, and because the storage is a <code>double</code>, the fraction is kept. Finally <code>.count()</code> pulls the bare number out of the duration so you can print it or do arithmetic with it. The formatting <code>{:.3f}</code> prints three decimals.</p>
+<div class="callout analogy"><span class="label">Analogy</span><p>A time point is a reading on a clock face: "it says 14:03:27". A duration is what you get when you subtract two readings: "4 minutes 12 seconds". You never ask what time it was when the race started in absolute terms; you only care about the gap. <em>Where it breaks:</em> a wall clock shows the time of day, and <code>steady_clock</code> does not. Its readings are meaningless on their own and only differences between them mean anything. That is on purpose, as the next section explains.</p></div>
+<div class="callout try"><span class="label">Try it</span><p>Before you touch anything, write down a prediction: if the loop in <code>first_timing.cpp</code> runs ten million times instead of one million, how many milliseconds will it take? Then change <code>1000000</code> to <code>10000000</code>, run it with <code>tools/run.sh</code> three times, and compare. The sum will be 49,999,995,000,000, which is another reason it needed a <code>long long</code>.</p></div>
+<details class="answer"><summary>What this machine showed</summary><p>One million iterations took 1.5 ms on each of three runs. Ten million took 24.5 ms, then 17.9 ms, then 16.1 ms. Ten times the work took between eleven and sixteen times as long, and the first run was the slowest by a wide margin. Both of those facts are the subject of the variance section below; if your numbers also refuse to be a clean 10×, nothing is wrong.</p></details>
+
+<h3>Why steady_clock and not system_clock</h3>
+<p>There are two clocks you will see in C++ code. <code>std::chrono::system_clock</code> is the wall clock: the time of day, the one your menu bar shows. <code>std::chrono::steady_clock</code> is a stopwatch: it only ever moves forward, at a steady rate, and nobody can set it.</p>
+<p>The wall clock gets adjusted. Your Mac quietly synchronises it with a time server, and when it does, the reading can jump forward or backward, usually by milliseconds, by much more if the clock had drifted; you can also set it by hand in System Settings. (Daylight-saving time does <em>not</em> move it: <code>system_clock</code> counts in universal time, and only the displayed local hour changes.) If you time a loop with <code>system_clock</code> and an adjustment happens in the middle, your "elapsed" could be too long, too short, or negative. For measurement you want the clock that is guaranteed never to go backwards. The standard library tells you which is which.</p>
+
+<pre class="code" data-lang="cpp" data-file="clock_facts.cpp" data-check="run"><code>#include &lt;chrono&gt;
+#include &lt;print&gt;
+
+int main() {
+    using steady = std::chrono::steady_clock;
+    using system = std::chrono::system_clock;
+
+    std::println("steady_clock is steady: {}", steady::is_steady);
+    std::println("system_clock is steady: {}", system::is_steady);
+
+    // One tick of each clock, as a fraction of a second.
+    std::println("steady_clock tick: {}/{} s", steady::period::num, steady::period::den);
+    std::println("system_clock tick: {}/{} s", system::period::num, system::period::den);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="clock_facts.cpp"><code>steady_clock is steady: true
+system_clock is steady: false
+steady_clock tick: 1/1000000000 s
+system_clock tick: 1/1000000 s
+</code></pre>
+
+<p>The <code>using steady = ...</code> lines are the "give a long type a short name" trick from <a href="07-flat-grid.html">chapter 7</a>; they save typing and nothing more. The <code>::</code> after the short name means "look inside", exactly as in <code>std::println</code>: <code>steady::is_steady</code> is the thing called <code>is_steady</code> that lives inside the clock type. It is a built-in yes/no fact about each clock. <code>period</code> is another built-in fact: the length of one tick, written as a fraction of a second with a top (<code>num</code>, the numerator) and a bottom (<code>den</code>, the denominator). The last two lines print that fraction: one nanosecond for the stopwatch, one microsecond for the wall clock on this system. A nanosecond tick does <em>not</em> mean the clock is accurate to a nanosecond; reading it costs about 18 nanoseconds itself on this machine (timing a million calls to <code>now()</code> in a row shows that). It means you will never lose precision by rounding in the clock, which is all you need.</p>
+<p>The rule is simple: <strong>for measuring elapsed time, always <code>steady_clock</code></strong>. The only reason to touch <code>system_clock</code> is to print today's date, which you will do once, by hand, when you fill in <code>BENCH.md</code>.</p>
+
+<h3>Durations and their units</h3>
+<p>You have already used two kinds of duration without stopping to look at them: <code>100ms</code> in chapter 9 and <code>duration&lt;double, std::milli&gt;</code> above. A duration is a number plus a unit, and the unit is part of its type. This is the one thing that makes <code>&lt;chrono&gt;</code> feel heavier than a plain <code>double</code>, and also the one thing that makes it safer: you cannot accidentally add milliseconds to seconds and get nonsense, because the library converts for you. Here is the whole set of conversions you will need this week. This program does no timing, so its output is the same on every run and on every machine, and you can check each line by hand.</p>
+
+<pre class="code" data-lang="cpp" data-file="durations.cpp" data-check="run"><code>#include &lt;chrono&gt;
+#include &lt;print&gt;
+
+int main() {
+    using namespace std::chrono_literals;
+
+    // A duration knows its own unit. 1500ms is "1500 ticks of one millisecond".
+    std::chrono::milliseconds d = 1500ms;
+    std::println("d.count() = {} (in milliseconds)", d.count());
+
+    // Converting to a bigger unit with integers throws away the remainder...
+    std::chrono::seconds whole = std::chrono::duration_cast&lt;std::chrono::seconds&gt;(d);
+    std::println("as whole seconds: {}", whole.count());
+
+    // ...so for reporting, convert to a duration that counts in double.
+    std::chrono::duration&lt;double&gt; seconds = d;
+    std::println("as double seconds: {}", seconds.count());
+
+    std::chrono::duration&lt;double, std::milli&gt; millis = d;
+    std::println("as double milliseconds: {}", millis.count());
+
+    std::chrono::duration&lt;double, std::micro&gt; micros = d;
+    std::println("as double microseconds: {}", micros.count());
+
+    // Arithmetic on durations keeps the units straight for you.
+    auto total = 1500ms + 2s;
+    std::println("1500ms + 2s = {} ms", std::chrono::duration&lt;double, std::milli&gt;(total).count());
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="durations.cpp"><code>d.count() = 1500 (in milliseconds)
+as whole seconds: 1
+as double seconds: 1.5
+as double milliseconds: 1500
+as double microseconds: 1500000
+1500ms + 2s = 3500 ms
+</code></pre>
+
+<p>Two things to take from this. First, converting to a <em>coarser</em> integer unit (milliseconds to whole seconds) loses information, and the library makes you say so explicitly with <code>duration_cast</code>; 1500 ms became 1 s, not 1.5 s. Second, converting to a <code>double</code>-based duration never loses anything and needs no cast, which is why the benchmark uses <code>duration&lt;double, std::milli&gt;</code>. If <code>duration</code> is given no second argument the unit is one second, so <code>duration&lt;double&gt;</code> means "seconds as a double". <code>std::micro</code> is one millionth, <code>std::nano</code> one billionth. That is the entire vocabulary.</p>
+
+<h2>Debug versus Release: the same program, two numbers</h2>
+<p>Now a measurement that matters. The program below fills a vector of ten million <code>std::uint8_t</code> cells, the same element type as your Life grid, with alternating 0 and 1, then times how long it takes to add them all up. The filling is <em>outside</em> the timed region on purpose: you are measuring the sum, not the setup. The last line uses <code>1e6</code>, which is how you write one million as a <code>double</code>: a 1 followed by six zeros, "1 times 10 to the 6". <code>1e9</code> is a billion.</p>
+
+<pre class="code" data-lang="cpp" data-file="sum_timing.cpp" data-check="run"><code>#include &lt;chrono&gt;
+#include &lt;cstdint&gt;
+#include &lt;print&gt;
+#include &lt;vector&gt;
+
+int main() {
+    const std::size_t n = 10000000;              // ten million
+    std::vector&lt;std::uint8_t&gt; cells(n, 0);
+    for (std::size_t i = 0; i &lt; n; ++i) {
+        cells[i] = static_cast&lt;std::uint8_t&gt;(i % 2);   // 0 1 0 1 0 1 ...
+    }
+
+    const auto start = std::chrono::steady_clock::now();
+
+    long long alive = 0;
+    for (std::size_t i = 0; i &lt; n; ++i) {
+        alive += cells[i];
+    }
+
+    const auto end = std::chrono::steady_clock::now();
+    const double ms = std::chrono::duration&lt;double, std::milli&gt;(end - start).count();
+
+    std::println("alive cells: {}", alive);
+    std::println("summing {} cells took {:.3f} ms", n, ms);
+    std::println("that is {:.3f} ns per cell", ms * 1e6 / static_cast&lt;double&gt;(n));
+    return 0;
+}
+</code></pre>
+
+<p>Run it the way you have run everything so far, with <code>tools/run.sh</code>. Then compile it a second way, by hand, with the flag <code>-O2</code> and <em>without</em> the sanitizers, and run that. The <code>-o /tmp/sum_rel</code> part puts the finished program in the <code>/tmp</code> folder, which is where <code>tools/run.sh</code> puts its programs too, so that <code>scratch/</code> stays free of compiled files. <code>-O2</code> rather than the <code>-O3</code> CMake uses for Release is deliberate: both are "optimised", the gap between them is tiny next to the gap from Debug, and chapter 11 promised you will measure them against each other in week 6. Here are both runs on this machine (Apple M5, macOS 26, Apple clang 21):</p>
+
+<pre class="shell"><code>$ tools/run.sh scratch/sum_timing.cpp
+alive cells: 5000000
+summing 10000000 cells took 41.187 ms
+that is 4.119 ns per cell
+$ clang++ -std=c++23 -Wall -Wextra -O2 scratch/sum_timing.cpp -o /tmp/sum_rel
+$ /tmp/sum_rel
+alive cells: 5000000
+summing 10000000 cells took 0.440 ms
+that is 0.044 ns per cell
+</code></pre>
+
+<p>Same source file. Same answer, 5,000,000. One run took 41 milliseconds and the other took less than half a millisecond. That is a factor of more than ninety. Nothing about the program changed. What changed is <em>how the compiler translated it</em>.</p>
+<p>In <a href="11-cmake.html">chapter 11</a> you set up two build types. A <strong>Debug</strong> build is what <code>tools/run.sh</code> makes and what your <code>build/</code> directory contains: compiled with <code>-g</code> so a debugger can map machine code back to your lines, with <code>-fsanitize=address,undefined</code> so every memory access is checked, and with <em>no optimisation</em>. The compiler translates your code almost line by line: every <code>cells[i]</code> really does compute an address, really does ask the sanitizer "is this address allowed?", really does load one byte, really does add it to <code>alive</code> in memory, and really does increment <code>i</code> and compare it against <code>n</code>. Ten million times.</p>
+<p>A <strong>Release</strong> build, which is what <code>-O2</code> (or CMake's <code>-DCMAKE_BUILD_TYPE=Release</code>, which uses <code>-O3</code>) gives you, lets the compiler <strong>optimise</strong>: rewrite your program into any other program that produces the same observable output. Three things happen to this loop. First, there are no sanitizer checks to pay for. Second, <code>alive</code> and <code>i</code> live in <strong>registers</strong> instead of memory. A register is one of a few dozen tiny storage slots inside the CPU itself; the CPU can read or change a register in a fraction of a nanosecond, while a trip to memory takes far longer. Third, the compiler notices that adding sixteen neighbouring bytes can be done with one wide instruction instead of sixteen narrow ones, so the loop body handles sixteen cells per iteration. That last trick is called <strong>vectorisation</strong>, and you will write it by hand in week 12. For now it is enough to know that it is why 0.04 nanoseconds per cell is possible. The CPU ticks about four billion times a second, so one tick is roughly a quarter of a nanosecond. Getting through several cells per tick is only possible when one instruction handles many cells at once.</p>
+<div class="callout principle"><span class="label">First principle</span><p>A compiler is a translator, and a translator can be literal or fluent. Debug is the literal translation: slow, but every line of your source corresponds to machine code you can step through, and every memory access is checked. Release is the fluent translation: fast, but the correspondence is gone, which is why debugging a Release build is miserable. You develop in Debug and you <em>measure</em> in Release. Never the other way round.</p></div>
+<div class="callout trap"><span class="label">Trap</span><p>Never compare a Debug number with a Release number and conclude anything about your code. "I changed the loop and it went from 40 ms to 2 ms" is meaningless if the first run was from <code>tools/run.sh</code> and the second from <code>-O2</code>. Same build type, same inputs, same machine, or the comparison is noise. Write the build type in every row of your table so you cannot fool yourself later.</p></div>
+<div class="callout note"><span class="label">Why print the answer?</span><p>The programs in this chapter all print the sum they computed. This is not decoration. An optimising compiler is allowed to delete any work whose result is never used. If you timed the loop and then threw <code>alive</code> away, <code>-O2</code> could legally remove the entire loop and report 0.000 ms, and you would be timing nothing. Printing the result (or otherwise using it) forces the work to happen. One honest caveat: printing protects the <em>answer</em>, not your loop. Compile <code>first_timing.cpp</code> with <code>-O2</code> and it reports <code>0.000 ms</code> with the correct sum: clang recognised the sum of 0 to 999,999 as something it could work out at compile time with a formula, and no loop ran at all. That is why every program from here on sums data that only exists once the program is running, read from a vector. The Life benchmark is protected in a different way: <code>step</code> is defined in <code>life.cpp</code>, a separate source file (<a href="10-headers-and-files.html">chapter 10</a>), so while the compiler translates <code>bench_life.cpp</code> it cannot see inside <code>step</code>. It has to assume the call does something that matters, and it must keep every one of them.</p></div>
+<div class="callout try"><span class="label">Try it</span><p>The Debug number above pays for two things at once: the sanitizer checks and the missing optimisation. Separate them. Compile <code>sum_timing.cpp</code> a third way, with <code>-O0</code> (no optimisation) and no sanitizer flags: <code>clang++ -std=c++23 -Wall -Wextra -O0 scratch/sum_timing.cpp -o /tmp/sum_o0</code>. Predict first: will it be closer to the 41 ms or to the 0.44 ms? Then run it a few times.</p></div>
+<details class="answer"><summary>What this machine showed</summary><p>Six runs of the <code>-O0</code> program took between 9.4 and 9.7 ms. So on this loop the sanitizers cost about 4× (41 ms against 9.5 ms) and the optimiser is worth about 20× (9.5 ms against 0.44 ms). Together they make the 90× you saw. The split is different for every program; the point is that "Debug" is two separate costs, and you can measure each.</p></details>
+
+<h2>Variance: five runs, five numbers</h2>
+<p>Run the Release version of <code>sum_timing</code> three times in a row. Here is what that gave on this machine. The <code>| tail -2</code> after each command is a shell trick, not C++: it keeps only the last two lines of whatever the program printed, so the unchanging <code>alive cells</code> line is left out.</p>
+
+<pre class="shell"><code>$ /tmp/sum_rel | tail -2
+summing 10000000 cells took 0.440 ms
+that is 0.044 ns per cell
+$ /tmp/sum_rel | tail -2
+summing 10000000 cells took 0.444 ms
+that is 0.044 ns per cell
+$ /tmp/sum_rel | tail -2
+summing 10000000 cells took 0.439 ms
+that is 0.044 ns per cell
+</code></pre>
+
+<p>Three runs, three numbers. They agree to about one percent here, which is as good as a laptop gets, but they are not identical, and on another day, or with a browser open, the spread is far larger. Nothing is broken. A measurement of time is not like a measurement of <code>sizeof(int)</code>, which is 4 every single time. It is a measurement of a physical system that is doing many other things at the same moment. Your terminal is redrawing. A browser tab is running a timer. The operating system is deciding which of the CPU's cores your program should run on, and on an M-series chip some cores are fast and some are built to save energy. Each of those shows up as noise in the number.</p>
+<p>Some of the noise is systematic, and the first run pays most of it. When a program touches a region of memory for the first time, the operating system has to actually hand that memory over, in chunks called <strong>pages</strong>, and that costs time the second touch does not pay. The CPU's small, fast memories (the <strong>caches</strong>; much more in week 6) start empty and fill up as the program runs. And a CPU that was idling runs slowly to save power and takes a moment to speed up. (That is the CPU's own working speed, how many instructions it executes per second; it has nothing to do with the clock you read with <code>now()</code>, which ticks at the same rate regardless.) All of this means <strong>the first iteration of anything is slower than the rest</strong>, and if you time only the first one you measure the warm-up, not the work.</p>
+<p>The fix is to do the work a few times before you start the clock. That is a <strong>warm-up</strong>. Then run the timed part several times and look at the spread. The program below does both inside one run of one program, and reports every run plus the fastest.</p>
+
+<pre class="code" data-lang="cpp" data-file="variance.cpp" data-check="run"><code>#include &lt;chrono&gt;
+#include &lt;cstdint&gt;
+#include &lt;print&gt;
+#include &lt;vector&gt;
+
+int main() {
+    const std::size_t n = 10000000;
+    std::vector&lt;std::uint8_t&gt; cells(n, 0);
+    for (std::size_t i = 0; i &lt; n; ++i) {
+        cells[i] = static_cast&lt;std::uint8_t&gt;(i % 2);
+    }
+
+    const int runs = 5;
+    std::vector&lt;double&gt; times;              // one entry per run, in ms
+    long long alive = 0;
+
+    for (int run = 0; run &lt; runs; ++run) {
+        const auto start = std::chrono::steady_clock::now();
+        alive = 0;
+        for (std::size_t i = 0; i &lt; n; ++i) {
+            alive += cells[i];
+        }
+        const auto end = std::chrono::steady_clock::now();
+        times.push_back(std::chrono::duration&lt;double, std::milli&gt;(end - start).count());
+    }
+
+    double fastest = times[0];
+    for (double t : times) {
+        std::println("run: {:.3f} ms", t);
+        if (t &lt; fastest) {
+            fastest = t;
+        }
+    }
+    std::println("alive = {}", alive);
+    std::println("fastest of {} runs: {:.3f} ms", runs, fastest);
+    return 0;
+}
+</code></pre>
+<pre class="shell"><code>$ clang++ -std=c++23 -Wall -Wextra -O2 scratch/variance.cpp -o /tmp/variance
+$ /tmp/variance
+run: 1.103 ms
+run: 1.028 ms
+run: 0.938 ms
+run: 0.944 ms
+run: 0.939 ms
+alive = 5000000
+fastest of 5 runs: 0.938 ms
+</code></pre>
+
+<p>Look at the shape of that: the first two runs are the slowest, by almost 20%, and then the number settles. That is the warm-up, made visible. Two more things to notice. Between separate launches of this same program, the fastest run moved between 0.57 ms and 0.97 ms on this machine. And this loop takes about twice as long as the same loop in <code>sum_timing.cpp</code>. The loop is character for character the same; what changed is the program around it, and the optimiser made a different choice when translating the two. From the outside you cannot tell which choice without reading the machine code. The lesson is practical: measure the exact program you care about, not a lookalike. All of this is normal on a laptop. Which number do you write down?</p>
+<p>Two sensible choices. The <strong>minimum</strong> is the best the machine can do: every slower run is "the real speed plus some interference", so the smallest number is closest to the truth about your code. The <strong>median</strong>, the middle value when you sort the runs, is a better picture of what a user would experience, because interference is part of real life. For a code-versus-code comparison ("is loop order B faster than loop order A?") use the minimum of several runs; it is the most stable. For "how fast is my game?" use the median. Whichever you choose, say which one it is, and never report the <strong>mean</strong> (the sum of the runs divided by their count): a single slow outlier drags a mean far from anything you actually observed. In the five runs above the mean is 0.990 ms, a value no run produced.</p>
+<p>And keep the machine quiet. Close the browser, stop the music, let a build finish before you start, and plug the laptop in: on battery, macOS may slow the CPU down to save power. You cannot remove the noise, but you can shrink it.</p>
+<div class="callout try"><span class="label">Try it</span><p>Change <code>variance.cpp</code> to also print the median. For five runs the median is the third smallest. You do not have a sorting function yet (that is week 5), but you can find the third smallest with the tools from <a href="03-control-flow.html">chapter 3</a> and <a href="06-vector.html">chapter 6</a>: for each candidate value, count how many values are smaller than it. Then run the program five times and compare how much the minimum moves between runs with how much the median moves.</p></div>
+<details class="hint"><summary>Stuck? First nudge</summary><p>The median of five values is the one that has exactly two values smaller than it (ignore ties for now). Loop over every <code>times[i]</code>; for each one, loop over every <code>times[j]</code> and count those strictly smaller. When the count is 2, you have found it.</p></details>
+
+<h2>What to report, and in which units</h2>
+<p>The benchmark program prints three versions of the same measurement, and you should understand all three well enough to convert between them in your head.</p>
+<ul>
+<li><strong>Milliseconds per step</strong>: the raw measurement divided by the number of steps timed. This is what a player feels: at 5 ms per step you could draw 200 generations a second.</li>
+<li><strong>Nanoseconds per cell</strong>: ms per step, times a million (to get nanoseconds), divided by the number of cells. This is the number you compare <em>across grid sizes</em>. A 2000×2000 grid has four times the cells of a 1000×1000 grid and should take about four times as long per step, so ms per step changes but ns per cell should stay flat. If it does not stay flat, something interesting is happening and you have found your first real question.</li>
+<li><strong>Cells per second</strong>: cells divided by seconds per step. The same fact as ns per cell, upside down, in the unit that people in this field like to quote ("300 million cells a second"). It is a <strong>throughput</strong>: how much work gets done per unit of time.</li>
+</ul>
+<p>Here is the arithmetic done by a program, with a made-up 4.0 ms so that the output is fixed and you can check every line by hand.</p>
+
+<pre class="code" data-lang="cpp" data-file="units.cpp" data-check="run"><code>#include &lt;print&gt;
+
+int main() {
+    const double width = 1000;
+    const double height = 1000;
+    const double cells = width * height;          // 1,000,000 cells
+    const double ms_per_step = 4.0;               // a made-up measurement
+
+    // 1 ms = 1,000,000 ns, so ns per cell = (ms * 1e6) / cells.
+    const double ns_per_cell = ms_per_step * 1e6 / cells;
+
+    // cells per second = cells / seconds per step.
+    const double seconds_per_step = ms_per_step / 1000.0;
+    const double cells_per_second = cells / seconds_per_step;
+
+    // Bytes moved per step: about 9 reads and 1 write per cell.
+    const double bytes_per_step = cells * 10;
+    const double gb_per_second = bytes_per_step / seconds_per_step / 1e9;
+
+    std::println("ms per step:      {:.3f}", ms_per_step);
+    std::println("ns per cell:      {:.3f}", ns_per_cell);
+    std::println("cells per second: {:.1f} million", cells_per_second / 1e6);
+    std::println("steps per second: {:.1f}", 1.0 / seconds_per_step);
+    std::println("bytes touched per step: {:.0f} MB", bytes_per_step / 1e6);
+    std::println("memory traffic:   {:.1f} GB/s", gb_per_second);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="units.cpp"><code>ms per step:      4.000
+ns per cell:      4.000
+cells per second: 250.0 million
+steps per second: 250.0
+bytes touched per step: 10 MB
+memory traffic:   2.5 GB/s
+</code></pre>
+
+<p>Notice the coincidence in the first two lines: for a grid of exactly one million cells, ms per step and ns per cell are the same number, because a millisecond is exactly a million nanoseconds. That is a handy sanity check for the 1000×1000 case and a trap for every other size; at 500×500 the ns-per-cell figure is four times the ms-per-step figure.</p>
+<p>The unit check you should do every time is the "does it fit on a napkin" check. Steps per second times ms per step must equal 1000. Cells per second divided by cells per step must equal steps per second. If your table says 4 ms per step and 2,500 million cells per second, one of them is wrong, and it is usually a factor of a thousand in a conversion. The program above also computes two more lines you will come back to at the end of the chapter: how many bytes a step touches, and how many gigabytes per second that is.</p>
+<p>Beyond the three numbers, a benchmark row needs the facts that make it reproducible: <strong>the machine</strong> (Apple M5, 2026), <strong>the date</strong>, <strong>the build type</strong> (Debug or Release), <strong>the grid size</strong>, and <strong>what changed</strong> since the previous row. A number with no machine and no build type is a rumour.</p>
+<div class="callout twin"><span class="label">Inference twin</span><p>Every language model benchmark you have ever seen quotes "tokens per second". That is cells per second with a different unit: work items divided by elapsed time. Underneath it is always ms per step, where a step is producing one token. In week 18 you will measure tokens per second for your own SmolLM2-135M, and by the end of week 19 you will build this exact table (fp32, Q8_0 and int8 W8A8 rows instead of Debug and Release rows, with Q4_0 as a stretch); the arithmetic will be identical. The one new idea there is that producing a token has two phases: reading the whole prompt at once, which is limited by arithmetic, and producing each new token, which is limited by how fast weights can be read from memory. You will measure both and they will land on different lines of the same table.</p></div>
+
+<h2>Reading bench_life.cpp line by line</h2>
+<p>You did not write <code>phase1-terminal/01-life/bench/bench_life.cpp</code>; it was given to you. But you should be able to read every line, because in the coming weeks you will write the same kind of program for other challenges, and from week 6 you will use a benchmarking library (Google Benchmark) that automates most of it. Open the file next to this page. Here is its top half, as a fragment: the five <code>#include</code> lines at the top of the real file (<code>&lt;chrono&gt;</code>, <code>&lt;print&gt;</code>, <code>&lt;string&gt;</code>, <code>&lt;utility&gt;</code> for <code>std::swap</code>, and <code>"life.hpp"</code>) are left out here, so this block is not a complete program on its own.</p>
+
+<pre class="code" data-lang="cpp" data-file="bench_life_part1.cpp" data-check="fragment"><code>int main(int argc, char* argv[]) {
+    int size = 1000;
+    if (argc > 1) size = std::stoi(argv[1]);
+    const int width = size;
+    const int height = size;
+    const int warmup_steps = 3;
+    const int timed_steps = 20;
+
+    Cells current = random_cells(width, height, 12345, 0.35);
+    Cells next(current.size(), 0);
+
+    for (int i = 0; i &lt; warmup_steps; ++i) {
+        step(current, next, width, height);
+        std::swap(current, next);
+    }
+</code></pre>
+
+<p><strong>Arguments.</strong> The program takes one optional command-line argument, the grid size, and defaults to 1000. <code>argc</code> and <code>argv</code> and <code>std::stoi</code> are from <a href="08-strings-and-args.html">chapter 8</a>: if you ran <code>./life_bench 2000</code> then <code>argc</code> is 2 and <code>argv[1]</code> is the text <code>"2000"</code>, which <code>std::stoi</code> turns into the number 2000. The grid is always square; width and height are both <code>size</code>. Two more constants fix the shape of the experiment: 3 warm-up steps and 20 timed steps.</p>
+<p><strong>Setup.</strong> <code>random_cells</code> is your function from milestone 2. The seed is fixed at 12345 and the fill at 0.35, so every run of the benchmark starts from the <em>same</em> grid. That matters: a grid that is nearly all dead could, in a cleverer implementation, be faster than a busy one, and you want to compare like with like. <code>next</code> is a second vector of the same size, all zeros, for <code>step</code> to write into.</p>
+<p><strong>Warm-up.</strong> Three steps are run and thrown away, for the reasons from the variance section: first-touch memory costs, cold caches, clock speed. Each step reads <code>current</code> and writes <code>next</code>, and then <code>std::swap(current, next)</code> exchanges the two vectors (chapter 7) so that what was just written becomes the input to the following step. This is double buffering from <a href="07-flat-grid.html">chapter 7</a>, the same shape you used for the one-dimensional automaton, and the swap costs nothing measurable: it exchanges the vectors' bookkeeping, not their million bytes.</p>
+
+<pre class="code" data-lang="cpp" data-file="bench_life_part2.cpp" data-check="fragment"><code>    using clock = std::chrono::steady_clock;
+    const auto start = clock::now();
+    for (int i = 0; i &lt; timed_steps; ++i) {
+        step(current, next, width, height);
+        std::swap(current, next);
+    }
+    const auto end = clock::now();
+
+    const double total_ms = std::chrono::duration&lt;double, std::milli&gt;(end - start).count();
+    const double ms_per_step = total_ms / timed_steps;
+    const double cells = static_cast&lt;double&gt;(width) * height;
+    const double ns_per_cell = ms_per_step * 1e6 / cells;
+</code></pre>
+
+<p><strong>The timed loop.</strong> It is exactly the warm-up loop again, between two clock readings. Twenty steps rather than one, because one step is a few milliseconds and the noise you saw earlier is a sizeable fraction of that; averaging over twenty steps smooths it. (A moment ago you were told never to report the mean. There is no contradiction: that advice was about separate runs of a whole measurement, where one slow run is an outlier. Here twenty steps are timed as one block, and dividing the block by twenty is simply how you get the per-step figure. If you want the minimum, run the whole benchmark several times and take the smallest result.) Note that the clock is read <em>twice in total</em>, not twice per step. Reading the clock is cheap but not free, and keeping it outside the loop means its cost is divided by twenty.</p>
+<p><strong>The arithmetic.</strong> <code>total_ms</code> is the conversion you know. Dividing by <code>timed_steps</code> gives ms per step. The number of cells is computed in <code>double</code>, and look at the cast: <code>static_cast&lt;double&gt;(width) * height</code> converts the first operand <em>before</em> the multiplication, so the product is done in floating point. For 1000×1000 this does not matter, but for a 50,000×50,000 grid the <code>int</code> product would overflow and you would get a nonsense cell count with no warning. Converting first is a habit worth copying. Then ns per cell is the formula from the units section.</p>
+
+<pre class="code" data-lang="cpp" data-file="bench_life_part3.cpp" data-check="fragment"><code>    std::println("grid: {}x{} ({} cells)", width, height, static_cast&lt;long long&gt;(cells));
+    std::println("steps timed: {} (after {} warm-up)", timed_steps, warmup_steps);
+    std::println("ms per step:  {:.3f}", ms_per_step);
+    std::println("ns per cell:  {:.3f}", ns_per_cell);
+    std::println("cells per second: {:.1f} million", cells / (ms_per_step / 1000.0) / 1e6);
+    return 0;
+}
+</code></pre>
+
+<p><strong>The prints.</strong> The first two lines restate the experiment so that the output alone, pasted into a note, is enough to know what was measured. Look at the <code>static_cast&lt;long long&gt;(cells)</code> in the first line. <code>cells</code> is a <code>double</code>, and <code>std::println</code> prints a large <code>double</code> in scientific notation: <code>1e+06</code> for a million, <code>4e+06</code> for four million. Converting it back to a whole number first makes it print as <code>1000000</code>, which is what you want to read in a grid description. The last three lines are the three units. Cells per second is computed inline: cells divided by seconds per step, divided by a million to print in millions.</p>
+<p>What the benchmark does <em>not</em> do: it never calls <code>render</code>, never prints the grid, never sleeps, and never checks the answer. Rendering a million-character string and pushing it through the terminal would take longer than the step itself and would bury the thing you want to measure. The animation loop in your <code>main.cpp</code> does all of that, and that is exactly why you never time the game loop to learn about <code>step</code>.</p>
+
+<h3>Building and running it in Release</h3>
+<p>Your <code>build/</code> directory is a Debug build, with sanitizers. Every number you write into <code>BENCH.md</code> must come from a separate Release build directory. The configure command is the one from chapter 11 with two changes: a different directory name and a different build type.</p>
+
+<pre class="shell"><code>$ cd phase1-terminal/01-life
+$ cmake -S . -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release
+-- The CXX compiler identification is AppleClang 21.0.0.21000101
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: /usr/bin/c++ - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Configuring done (0.2s)
+-- Generating done (0.0s)
+-- Build files have been written to: /Users/dan/Desktop/projects/cpp-101/phase1-terminal/01-life/build-release
+$ cmake --build build-release
+[1/9] Building CXX object CMakeFiles/life_tests.dir/src/life.cpp.o
+[2/9] Building CXX object CMakeFiles/life_bench.dir/src/life.cpp.o
+[3/9] Building CXX object CMakeFiles/life.dir/src/life.cpp.o
+[4/9] Building CXX object CMakeFiles/life.dir/src/main.cpp.o
+[5/9] Linking CXX executable life
+[6/9] Building CXX object CMakeFiles/life_bench.dir/bench/bench_life.cpp.o
+[7/9] Linking CXX executable life_bench
+[8/9] Building CXX object CMakeFiles/life_tests.dir/tests/life_test.cpp.o
+[9/9] Linking CXX executable life_tests
+$ ./build-release/life_bench
+$ ./build-release/life_bench 2000
+</code></pre>
+
+<p>The last two commands run the benchmark at the default 1000×1000 and at 2000×2000. Their output is left out here on purpose: the next section shows what the reference <code>step</code> printed, and yours comes from your own. Because the <code>CMakeLists.txt</code> only adds the sanitizer flags when the build type is Debug, the Release directory has none of them, and CMake adds <code>-O3 -DNDEBUG</code> on its own. You can confirm what it actually ran by looking for <code>-O3</code> in <code>build-release/compile_commands.json</code>. The two directories live side by side; <code>build/</code> is where you develop and run the tests, <code>build-release/</code> is where you measure. Rebuilding one does not touch the other.</p>
+<p>Before you fill anything in, one instructive detour. Run the benchmark <em>from the Debug directory</em> once, <code>./build/life_bench</code>, but first write down your prediction for the ratio between the two. You have seen roughly 90× for a plain sum. A Life step does far more work per cell: eight neighbour reads, and two <code>wrap</code> calls for each of those reads, one for x and one for y. Every one of those memory accesses gets a sanitizer check, but the <code>wrap</code> arithmetic does not touch memory at all. Will the ratio come out above 90× or below it? Then compare. Running it once teaches you what the sanitizers cost; writing that number in the table as if it were your result would be the mistake.</p>
+<div class="callout trap"><span class="label">Trap</span><p>If the benchmark prints <code>ms per step: 0.000</code> and an absurd cells-per-second figure (with the stub <code>step</code> this machine printed <code>cells per second: 476190476.2 million</code>, which would be 476 million million cells a second), your <code>step</code> is still the stub, or does nothing. The benchmark cannot tell; it only measures time. That is what the tests are for, and it is why the order is tests first, benchmark second.</p></div>
+
+<h2>What number to expect</h2>
+<p>You should know roughly what to expect before you look, so that a wildly wrong number registers as wrong. The reference <code>step</code> used to calibrate this chapter is the most direct, unoptimised one possible: a loop over y, a loop over x, a call to <code>count_neighbours</code> that itself loops over the eight offsets and calls <code>wrap</code> twice for each, measured on this machine with the exact <code>bench_life.cpp</code> above.</p>
+
+<pre class="shell"><code>$ ./build-release/life_bench
+grid: 1000x1000 (1000000 cells)
+steps timed: 20 (after 3 warm-up)
+ms per step:  2.761
+ns per cell:  2.761
+cells per second: 362.2 million
+$ ./build/life_bench
+grid: 1000x1000 (1000000 cells)
+steps timed: 20 (after 3 warm-up)
+ms per step:  120.760
+ns per cell:  120.760
+cells per second: 8.3 million
+</code></pre>
+
+<p>So on an Apple M5 a plain, correct <code>step</code> lands in the range of roughly <strong>2 to 6 ms per 1000×1000 step in Release</strong>, which is 2 to 6 ns per cell, and roughly <strong>45 times slower in Debug</strong> with sanitizers; the Debug factor can be anywhere from 20× to 100× depending on how many memory accesses your version makes. Across several Release runs this machine gave 2.7 ms to 3.4 ms, a 25% spread, which is the variance you have already met.</p>
+<p>If you are inside that range, good. If you are far outside it, think before you celebrate or despair. Faster than 1 ns per cell with a straightforward implementation almost certainly means the work is not being done: check the tests are green <em>in this build</em> with <code>./build-release/life_tests</code>. Over 20 ms per step in Release usually means something per cell that should not be there: building a <code>std::string</code>, creating a new vector inside <code>step</code> or <code>count_neighbours</code>, or calling <code>render</code>. Over 100 ms per step means you are looking at the Debug build, <code>./build/life_bench</code> instead of <code>./build-release/life_bench</code>. Each of these is a one-line fix once you know which it is, and the number is what tells you to look.</p>
+
+<h2>Filling in BENCH.md</h2>
+<p>Open <code>phase1-terminal/01-life/BENCH.md</code>. It is a Markdown file with one table, and each row is one experiment.</p>
+
+<pre class="code" data-lang="text" data-file="BENCH.md"><code>| Date | Machine | Build | Grid | ms / step | ns / cell | Notes |
+|------|---------|-------|------|-----------|-----------|-------|
+|      |         |       |      |           |           |       |
+</code></pre>
+
+<p>The discipline that turns this from a list of numbers into a record of learning is one sentence <em>before</em> each experiment: what you expect and why. Write it in the Notes column, or in a line above the table, before you run anything. A prediction that turns out right confirms a mental model; one that turns out wrong is where you learn something. A number without a prediction is just a number.</p>
+<p>Here are the experiments to run, in order. The first two are required; do at least one of the rest.</p>
+<ul>
+<li><strong>Debug versus Release at 1000×1000.</strong> Prediction first: by what factor? Then run both and record two rows. You now know why they differ.</li>
+<li><strong>500 versus 1000 versus 2000.</strong> Pass the size as the argument. Prediction: does ns per cell stay flat when the grid is four times larger, or sixteen times larger? On this machine the reference step gave 2.737, 2.722 and 2.717 ns per cell for the three sizes: flat to within one percent. If yours grows at 2000, your <code>step</code> is doing something whose cost depends on the grid size in a way it should not.</li>
+<li><strong>Loop order swapped.</strong> Change <code>step</code> so the outer loop is over x and the inner loop over y, keep everything else the same, and check the tests still pass (they will; the order of visiting cells does not change the answer). Prediction before you run it: in <a href="07-flat-grid.html">chapter 7</a> you learnt that cells of one row sit next to each other in memory, so y-outer walks the vector front to back while x-outer jumps by a whole row between neighbouring reads. How much slower do you expect? Then measure. The result on this machine is discussed below, and it may surprise you.</li>
+<li><strong>Optional: <code>std::vector&lt;bool&gt;</code> instead of <code>std::uint8_t</code>.</strong> You would have to change the <code>Cells</code> alias in <code>life.hpp</code>, which the tests also use, so do this on a copy of the project. Chapter 6 warned you that <code>vector&lt;bool&gt;</code> packs eight cells into each byte, so it uses one eighth of the memory but every read has to extract one bit from a byte. Prediction: smaller is faster, or extraction is slower? Measure.</li>
+</ul>
+<p>A filled-in row looks like this: <code>| 2026-11-07 | Apple M5, macOS 26, Apple clang 21 | Release (-O3) | 1000×1000 | 2.722 | 2.722 | plain step, min of 3 runs |</code>. Date, machine, build, size, the two numbers, and what it was.</p>
+
+<h3>The loop-order experiment, on a grid that is not Life</h3>
+<p>To show you the shape of the loop-order experiment without writing your <code>step</code> for you, here is the same comparison on a simpler job: summing a 4096×4096 checkerboard, once with y outside and x inside, once the other way round. Both orders visit every cell exactly once and compute the same total.</p>
+
+<pre class="code" data-lang="cpp" data-file="loop_order.cpp" data-check="run"><code>#include &lt;chrono&gt;
+#include &lt;cstdint&gt;
+#include &lt;print&gt;
+#include &lt;vector&gt;
+
+int main() {
+    const int width = 4096;
+    const int height = 4096;
+    std::vector&lt;std::uint8_t&gt; grid(static_cast&lt;std::size_t&gt;(width) * height, 0);
+
+    // A checkerboard: alive where x + y is odd.
+    for (int y = 0; y &lt; height; ++y) {
+        for (int x = 0; x &lt; width; ++x) {
+            grid[static_cast&lt;std::size_t&gt;(y * width + x)] = static_cast&lt;std::uint8_t&gt;((x + y) % 2);
+        }
+    }
+
+    // Order A: y outer, x inner. Walks the flat vector from front to back.
+    auto start = std::chrono::steady_clock::now();
+    long long alive_a = 0;
+    for (int y = 0; y &lt; height; ++y) {
+        for (int x = 0; x &lt; width; ++x) {
+            alive_a += grid[static_cast&lt;std::size_t&gt;(y * width + x)];
+        }
+    }
+    auto end = std::chrono::steady_clock::now();
+    const double ms_a = std::chrono::duration&lt;double, std::milli&gt;(end - start).count();
+
+    // Order B: x outer, y inner. Same cells, same sum, jumps 4096 bytes between reads.
+    start = std::chrono::steady_clock::now();
+    long long alive_b = 0;
+    for (int x = 0; x &lt; width; ++x) {
+        for (int y = 0; y &lt; height; ++y) {
+            alive_b += grid[static_cast&lt;std::size_t&gt;(y * width + x)];
+        }
+    }
+    end = std::chrono::steady_clock::now();
+    const double ms_b = std::chrono::duration&lt;double, std::milli&gt;(end - start).count();
+
+    std::println("alive (y outer, x inner): {}", alive_a);
+    std::println("alive (x outer, y inner): {}", alive_b);
+    std::println("y outer, x inner: {:.3f} ms", ms_a);
+    std::println("x outer, y inner: {:.3f} ms", ms_b);
+    std::println("ratio: {:.1f}x", ms_b / ms_a);
+    return 0;
+}
+</code></pre>
+<pre class="shell"><code>$ tools/run.sh scratch/loop_order.cpp
+alive (y outer, x inner): 8388608
+alive (x outer, y inner): 8388608
+y outer, x inner: 86.154 ms
+x outer, y inner: 115.569 ms
+ratio: 1.3x
+$ clang++ -std=c++23 -Wall -Wextra -O2 scratch/loop_order.cpp -o /tmp/loop_order
+$ /tmp/loop_order
+alive (y outer, x inner): 8388608
+alive (x outer, y inner): 8388608
+y outer, x inner: 0.742 ms
+x outer, y inner: 28.782 ms
+ratio: 38.8x
+</code></pre>
+
+<p>Here <code>start</code> and <code>end</code> are not <code>const</code>, because they are reused for the second timing; everything else is the pattern you know. In Release, the wrong loop order is <strong>almost forty times slower</strong> (between 30× and 40× across runs on this machine) for an identical amount of arithmetic. The only difference is the sequence of addresses the CPU visits. Front to back, each byte it fetches is next to the previous one. The hardware never fetches a single byte from memory; it fetches a block of 128 bytes at a time on this chip (64 on most Intel and AMD chips) and keeps the block in a cache. So one fetch serves the next 128 reads for free. The CPU also notices the front-to-back pattern and starts fetching the following blocks before you ask for them. Now order B. One row is 4096 cells of one byte each, so moving down one row means jumping 4096 bytes. Every single read lands in a different block, so every read needs its own fetch, nothing useful is fetched ahead, and by the time the loop comes back round for the next column, the fastest cache has long since thrown those blocks out to make room. In Debug the ratio is only 1.3×, because the sanitizer overhead on every access is so large that the memory system is never the thing being waited for.</p>
+<p>Now the surprise promised above. When the loop order of that reference <code>step</code> was swapped, the Release number went from 2.76 ms to between 3.1 and 3.7 ms across runs: <strong>1.1× to 1.4× slower, not 35×</strong>. Why so little, when the sum above lost a factor of more than thirty? Because a Life step does far more work per cell than a sum. Each cell costs eight neighbour reads, sixteen <code>wrap</code> calls each with a <code>%</code>, and a couple of comparisons; that arithmetic takes about 2.7 ns per cell, and at that pace the memory system can keep up with either visiting order. In the sum, the arithmetic is a fraction of a nanosecond per cell, so memory is the only thing that matters and the order dominates. The lesson is not "loop order does not matter" (it does, and it will matter enormously in week 6). The lesson is that <em>what bounds a loop depends on how much work it does per byte</em>, and you cannot know which case you are in without measuring. Your prediction may well have been 10× or more. Write down what it actually was.</p>
+
+<h2>Is the step waiting on memory or on arithmetic?</h2>
+<p>You can get a first feel for this with the napkin arithmetic from the units program. One Life step over a million cells reads each cell about nine times (itself and its eight neighbours) and writes it once. That is about 10 bytes of memory traffic per cell, 10 megabytes per step. At 3 ns per cell a step takes 3 ms, and 10 MB in 3 ms is a little over 3 gigabytes per second.</p>
+<p>Now compare that to what the machine can do. The memory system of an Apple M-series chip can deliver over 100 GB/s to a program that asks for memory in the friendly, front-to-back pattern, and the caches closer to the CPU are faster still. Your step is asking for 3 GB/s. It is using a few percent of the available memory bandwidth. So memory is not what the step is waiting for. It is waiting for the arithmetic: the <code>%</code> in <code>wrap</code>, the index multiplication, the eight additions, the branch that decides alive or dead. That is also why the loop-order swap barely hurt.</p>
+<p>This kind of reasoning, compare the bytes moved per second with what the memory system can deliver, and the operations per second with what the CPU can execute, is the basis of a model you will learn properly in week 12 and use on every kernel after that. For now, take the habit: when you get a number, ask "how many bytes per second is that?" and "how many operations per second is that?", and see which one is close to a limit. Only the one that is close to a limit is worth optimising.</p>
+<div class="callout twin"><span class="label">Inference twin</span><p>In a language model, producing one new token means reading <em>every</em> weight in the model once to do a small amount of arithmetic with it. For GPT-2 that is about 500 MB of weights read for roughly one multiply-add per weight, 124 million of them (for SmolLM2-135M, about 540 MB and 135 million): bytes dominate, and the step is memory-bound. Processing a long prompt in one go reuses each weight across many tokens: arithmetic dominates, and the step is compute-bound. Your Life step, at 10 bytes and perhaps 30 operations per cell, sits on the compute-bound side. Same question, same napkin, different answer.</p></div>
+
+<h2>Traps</h2>
+<p>Four mistakes that produce confident, wrong numbers. You will make at least one of them this year; the aim is to recognise it quickly.</p>
+<div class="callout trap"><span class="label">Trap: timing the game loop</span><p>Your <code>main.cpp</code> loop does step, render, print, <em>sleep</em>. If you put the clock around that loop you measure the sleep. The program below times ten "frames" of a trivial sum with a 100 ms sleep in each; the sum itself takes well under a millisecond.</p></div>
+
+<pre class="code" data-lang="cpp" data-file="sleep_trap.cpp" data-check="compile"><code>#include &lt;chrono&gt;
+#include &lt;cstdint&gt;
+#include &lt;print&gt;
+#include &lt;thread&gt;
+#include &lt;vector&gt;
+
+int main() {
+    using namespace std::chrono_literals;
+    const std::size_t n = 1000000;
+    std::vector&lt;std::uint8_t&gt; cells(n, 1);
+
+    const auto start = std::chrono::steady_clock::now();
+    long long alive = 0;
+    for (int frame = 0; frame &lt; 10; ++frame) {
+        for (std::size_t i = 0; i &lt; n; ++i) {
+            alive += cells[i];
+        }
+        std::this_thread::sleep_for(100ms);     // the frame delay from your game loop
+    }
+    const auto end = std::chrono::steady_clock::now();
+
+    const double ms = std::chrono::duration&lt;double, std::milli&gt;(end - start).count();
+    std::println("alive = {}", alive);
+    std::println("10 frames took {:.1f} ms, so {:.1f} ms per frame", ms, ms / 10);
+    return 0;
+}
+</code></pre>
+<pre class="shell"><code>$ clang++ -std=c++23 -Wall -Wextra -O2 scratch/sleep_trap.cpp -o /tmp/sleep_trap
+$ /tmp/sleep_trap
+alive = 10000000
+10 frames took 1069.1 ms, so 106.9 ms per frame
+</code></pre>
+
+<p>106.9 ms per frame, of which 100 are the sleep and about 7 are the operating system being slightly late waking the program up each time. The actual work is invisible in that number. The benchmark program exists precisely so that <code>step</code> is timed alone. Put the clock around exactly the thing you want to know about, and nothing else.</p>
+<div class="callout trap"><span class="label">Trap: timing only the first iteration</span><p>The first iteration pays for memory being handed over page by page, for empty caches, and for a CPU that is still speeding up. On this machine the very first Life step read about 30% slower than the eighth, and the first run inside <code>variance.cpp</code> was almost 20% slower than the rest; with a cold machine or a grid that does not fit in the caches the gap is larger. Always warm up, always time several iterations, and divide.</p></div>
+<div class="callout trap"><span class="label">Trap: optimising before the tests are green</span><p>Every change you make to go faster is a chance to break the rules of Life in a way you will not see on a random grid, because a random grid looks like noise whether or not it is right. The blinker and block tests will see it. Run <code>./build/life_tests</code> after <em>every</em> experiment in your table, before you believe the number.</p></div>
+<div class="callout trap"><span class="label">Trap: comparing across build types</span><p>Said once already, worth saying twice: a Debug number and a Release number cannot be compared to each other, and neither can two Release numbers from different machines, or from the same machine on a hot day with a video rendering in the background. Change one thing at a time, keep every other column of the table identical, and the number means something.</p></div>
+
+<h2>Check yourself</h2>
+<div class="quiz">
+<div class="q"><p>You call <code>std::chrono::steady_clock::now()</code> twice and subtract. What kind of value do you get, and why can you not simply print the result of a single <code>now()</code> as a time of day?</p><details class="answer"><summary>Answer</summary><p>You get a duration: an amount of elapsed time with a unit (nanoseconds on this machine). A single <code>now()</code> is a time point measured from an arbitrary starting moment that the operating system chose, such as boot time, so on its own it is not a time of day. Only differences between two time points are meaningful.</p></details></div>
+<div class="q"><p>Why does the benchmark use <code>steady_clock</code> instead of <code>system_clock</code>?</p><details class="answer"><summary>Answer</summary><p><code>system_clock</code> is the wall clock, and it gets adjusted (the operating system synchronises it with a time server, and you can set it by hand), so two readings can be a wrong distance apart or even go backwards. <code>steady_clock</code> only moves forward at a constant rate and is never set; <code>is_steady</code> is <code>true</code> for it and <code>false</code> for the wall clock.</p></details></div>
+<div class="q"><p>A step on a 1000×1000 grid takes 4 ms. What is that in ns per cell, in cells per second, and in steps per second? Now the same step on a 2000×2000 grid takes 17 ms. What is the ns per cell, and is that what you would expect?</p><details class="answer"><summary>Answer</summary><p>4 ms × 1,000,000 ns/ms ÷ 1,000,000 cells = 4 ns per cell; 1,000,000 cells ÷ 0.004 s = 250 million cells per second; 1000 ÷ 4 = 250 steps per second. For 2000×2000: 17 ms × 1e6 ÷ 4,000,000 cells = 4.25 ns per cell. Roughly flat, about 6% higher, which is within normal variance; a plain step should give the same ns per cell at every size.</p></details></div>
+<div class="q"><p>Your Release build reports 0.000 ms per step. What has happened, and which tool tells you?</p><details class="answer"><summary>Answer</summary><p><code>step</code> is doing nothing: it is still the stub, or the Release build was made from a <code>life.cpp</code> without the implementation. The benchmark cannot detect this, because it only measures time. <code>./build-release/life_tests</code> (or the Debug tests) is what checks that the work is actually done. Tests first, benchmark second.</p></details></div>
+<div class="q"><p>You time the same loop five times inside one run of a program and get 1.18, 0.87, 0.47, 0.82 and 0.97 ms. Which number do you report for a code-versus-code comparison, and why not the mean?</p><details class="answer"><summary>Answer</summary><p>The minimum, 0.47 ms, because every slower run is the real cost plus some interference from the rest of the machine, so the smallest value is closest to what your code itself costs and is the most stable between runs. The mean (0.86 ms here) is dragged around by outliers that have nothing to do with your code. The median is a reasonable alternative when you want "what a user experiences".</p></details></div>
+<div class="q"><p>Summing a 4096×4096 grid with the wrong loop order was over 30× slower in Release, but swapping the loop order in a Life step cost well under 2×. Explain the difference in one or two sentences.</p><details class="answer"><summary>Answer</summary><p>The sum does almost no arithmetic per byte, so its speed is set entirely by how fast memory can be fetched, and the visiting order changes that enormously. A Life step does dozens of operations per cell (neighbour reads, wrap calls, comparisons), so the CPU's arithmetic is the thing everything else waits for, and the memory system has slack to absorb a worse access pattern. What bounds a loop depends on work per byte.</p></details></div>
+<div class="q"><p>Why does every timing program in this chapter print the sum it computed, even when nobody cares about the sum?</p><details class="answer"><summary>Answer</summary><p>An optimising compiler may delete any work whose result is never used. If the sum were never printed or otherwise used, <code>-O2</code> could remove the whole loop and the timing would report nearly zero. Using the result forces the work to really happen.</p></details></div>
+<div class="q"><p>Why must the numbers in <code>BENCH.md</code> come from <code>build-release/</code> and not from <code>build/</code>, and why is running the Debug benchmark once still worthwhile?</p><details class="answer"><summary>Answer</summary><p><code>build/</code> is a Debug build: no optimisation and sanitizer checks on every memory access, so its numbers measure the sanitizers and the literal translation, not your code; on this machine the gap was about 45×. Running it once, with a prediction written down first, teaches you what those checks cost and makes you recognise a Debug number instantly when you see one by mistake.</p></details></div>
+</div>
+
+<h2>What you can do now</h2>
+<ul>
+<li>Time any region of a program with two <code>steady_clock::now()</code> readings and convert the difference to milliseconds, microseconds or seconds as a <code>double</code>.</li>
+<li>Explain the difference between a time point and a duration, and why only differences between time points mean anything.</li>
+<li>Say why the same source runs 20× to 100× slower in a Debug build with sanitizers, and why you develop in one and measure in the other.</li>
+<li>Recognise variance, warm up before timing, time several iterations, and report the minimum or the median with the build type, machine, date and grid size.</li>
+<li>Convert between ms per step, ns per cell and cells per second, and sanity-check a table row with napkin arithmetic.</li>
+<li>Read every line of <code>bench_life.cpp</code>, build it from a separate Release directory, run it at several grid sizes, and know the range a plain correct <code>step</code> should land in on this machine.</li>
+<li>Fill in <code>BENCH.md</code> with a hypothesis before each experiment and a row after it, and avoid the four traps: sleeping inside the timed region, timing a cold first iteration, optimising before the tests are green, and comparing across build types.</li>
+<li>Estimate, from bytes per cell and ns per cell, whether a loop is closer to its memory limit or its arithmetic limit.</li>
+</ul>
+</main>
+</body>
+</html>

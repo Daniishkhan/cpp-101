@@ -1,0 +1,759 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>15 · Appendix: errors, glossary, cheat sheet — C++ from zero to Life</title>
+<link rel="stylesheet" href="assets/book.css?v=9">
+<link rel="stylesheet" href="assets/tutor.css?v=9">
+<script src="assets/theme.js?v=9"></script>
+<script defer src="assets/book.js?v=9"></script>
+<script defer src="assets/tutor.js?v=9"></script>
+</head>
+<body>
+<nav class="sidebar" aria-label="Chapters"></nav>
+<main>
+<p class="chapter-kicker">Chapter 15</p>
+<h1>Appendix: errors, glossary, cheat sheet</h1>
+<p class="lede">This is the chapter you keep open in a second tab. It decodes the error messages you will actually meet this week (every one of them produced by the real compiler on this Mac, not typed from memory), defines every term the book has used, and compresses the syntax and the commands of chapters 1 to 13 into a few screens you can scan. Nothing here is new; everything here is findable.</p>
+
+<div class="callout note"><span class="label">In this chapter</span>
+<ul>
+<li>How to read any error message: the four places a program can fail, and the anatomy of one clang line.</li>
+<li>The error decoder: about fifty real messages from clang, the linker, the sanitizers, zsh, CMake and Ninja, each with its cause and its fix.</li>
+<li>A glossary of about eighty terms from chapters 1 to 14, alphabetical, one sentence each.</li>
+<li>The syntax cheat sheet: one compact block per topic, exactly as the book taught it.</li>
+<li>The commands cheat sheet: compile, run, configure, build, test, benchmark, and the shell lines around them.</li>
+<li>Further reading that is worth your time, and a one-page preview of week 3.</li>
+</ul>
+</div>
+
+<h2>How to read any error message</h2>
+<p>Before the tables, one skill that makes every row of them easier. A program can fail in four different places, and the first thing to decide when something goes wrong is <em>which</em> place you are in. Each place has its own voice.</p>
+
+<table>
+<tr><th>Stage</th><th>Who speaks</th><th>What the message looks like</th><th>When</th></tr>
+<tr><td>1. Compiling</td><td>clang, the compiler (<a href="01-what-a-program-is.html">chapter 1</a>)</td><td><code>file.cpp:LINE:COL: error: ...</code> or <code>warning: ...</code>, then the offending line with a caret <code>^</code> under the exact spot</td><td>Your text is not valid C++, or is suspicious</td></tr>
+<tr><td>2. Linking</td><td>ld, the linker (<a href="10-headers-and-files.html">chapter 10</a>)</td><td><code>Undefined symbols for architecture arm64:</code> or <code>duplicate symbol</code>, followed by <code>clang++: error: linker command failed</code></td><td>Every file compiled, but a function is missing or exists twice</td></tr>
+<tr><td>3. Starting</td><td>zsh, the shell, or the build tool</td><td><code>zsh: no such file or directory: ./life</code>, <code>ninja: error: ...</code>, <code>CMake Error: ...</code></td><td>The program or the build folder is not where you think</td></tr>
+<tr><td>4. Running</td><td>Your program, the sanitizers, or the C++ library</td><td><code>==1234==ERROR: AddressSanitizer: ...</code>, <code>runtime error: ...</code>, <code>libc++abi: terminating ...</code></td><td>The program built, started, and then did something it must not</td></tr>
+</table>
+
+<p>The messages in the first row have a fixed shape, and once you can read it you can read all of them. Here is a complete program with one character missing, and what clang says about it.</p>
+
+<pre class="code" data-lang="cpp" data-file="missing_semicolon.cpp" data-check="error"><code>#include &lt;print&gt;
+
+int main() {
+    int count = 3
+    std::println("{}", count);
+    return 0;
+}
+</code></pre>
+<pre class="output"><code>missing_semicolon.cpp:4:18: error: expected ';' at end of declaration
+    4 |     int count = 3
+      |                  ^
+      |                  ;
+1 error generated.
+</code></pre>
+
+<p>Read it piece by piece. <code>missing_semicolon.cpp</code> is the file. <code>4</code> is the line, <code>18</code> is the column (the character position on that line, counting from 1). <code>error</code> is the severity: an <strong>error</strong> stops the compiler from producing a program, a <strong>warning</strong> does not stop it but tells you something looks wrong. After the colon comes the message itself. Then clang reprints the line, puts a caret <code>^</code> under the place it was looking at when it gave up, and, when it can, suggests the fix on the line below: here, a <code>;</code>. Finally it counts: <code>1 error generated</code>.</p>
+
+<p>Some messages are followed by lines that begin with <code>note:</code>. A note is not a second problem. It is extra information about the first one: "the previous definition is here", "candidate function not viable because...", "to match this <code>{</code>". Read the error, then read its notes, then stop. The second error in a list is often a consequence of the first (a missing brace confuses everything after it), so fix the first, recompile, and look again.</p>
+
+<div class="callout principle"><span class="label">First principle</span><p>The compiler reads your file from top to bottom and reports the first place where what it read could not be C++. The location it gives is where it <em>noticed</em>, which is at or just after where you <em>made</em> the mistake. When a message points at a line that looks fine, look at the line above it.</p></div>
+
+<div class="callout analogy"><span class="label">Analogy</span><p>A compiler error is a proofreader's mark in the margin: page, line, what is wrong, and often the correction. The analogy breaks in one way that matters. A human proofreader marks every mistake on the page; the compiler, after the first real mistake, is guessing about what you meant, and its later marks can be wrong. Trust the first mark fully, the rest only after you have fixed the first.</p></div>
+
+<p>Warnings deserve one more word, because this book compiles everything with <code>-Wall -Wextra</code> and asks you to keep the output empty. A warning means "this is legal C++ and I will build it, but programs that look like this are usually wrong". The sign-comparison warning and the uninitialised-variable warning in the tables below have each caused real bugs in real programs. Treat a warning as an error you are allowed to fix tomorrow, and then fix it today.</p>
+
+<p>In square brackets at the end of a warning you will see the flag that turned it on, such as <code>[-Wsign-compare]</code>. You never need to type these; they tell you which family the warning belongs to, and they are what to search for if the message itself is unclear.</p>
+
+<div class="callout try"><span class="label">Try it</span><p>Take any working program from <a href="03-control-flow.html">chapter 3</a> and break it on purpose, one change at a time: delete a semicolon, delete a closing brace, delete a closing quote, misspell a variable, remove an <code>#include</code>. Compile after each change and find the message in the tables below before you fix it. Ten minutes of deliberate breakage now saves an hour of panic later, because every message will already be one you have met.</p></div>
+
+<h2>Error decoder</h2>
+<p>Each table lists the message as clang (or the linker, or the tool) prints it on this machine, trimmed to the part that carries the meaning. Names like <code>totl</code>, <code>width</code> and <code>area</code> are from the broken programs the messages were generated from; in your own output they will be your names. The <em>fix</em> column tells you what to change. The chapter column tells you where the idea was taught.</p>
+
+<h3>Compiler errors</h3>
+<table>
+<tr><th>Message</th><th>Cause</th><th>Fix</th><th>Ch.</th></tr>
+<tr><td><code>error: expected ';' at end of declaration</code><br><code>error: expected ';' after expression</code></td><td>A statement does not end with a semicolon. The caret points just after the last thing on the line that lacks it, as in the example above.</td><td>Add <code>;</code> at the end of the line the caret is on. If the reported line looks complete, the missing <code>;</code> belongs to the nearest non-empty line above it: the compiler only notices the gap when it reads the next word.</td><td><a href="01-what-a-program-is.html">1</a></td></tr>
+<tr><td><code>error: use of undeclared identifier 'totl'; did you mean 'total'?</code></td><td>A name is used that was never declared in this scope. Nine times out of ten it is a typo, and clang guesses the right name.</td><td>Take the suggestion if it is right; otherwise declare the variable above its first use.</td><td><a href="02-values-and-types.html">2</a></td></tr>
+<tr><td><code>error: use of undeclared identifier 'println'; did you mean 'std::println'?</code></td><td>A standard-library name was written without <code>std::</code>.</td><td>Write <code>std::println</code>. Everything from the standard library starts with <code>std::</code> in this book.</td><td><a href="01-what-a-program-is.html">1</a></td></tr>
+<tr><td><code>error: use of undeclared identifier 'twice'</code> (and <code>twice</code> is a function you did write)</td><td>The function is defined <em>below</em> the place where it is called. The compiler has not seen it yet.</td><td>Move the definition above <code>main</code>, or put a declaration <code>int twice(int n);</code> above <code>main</code>.</td><td><a href="04-functions.html">4</a></td></tr>
+<tr><td><code>error: no member named 'mt19937' in namespace 'std'</code></td><td>The header that declares the name was not included. Any <code>std::</code> name can trigger this: <code>std::mt19937</code> needs <code>&lt;random&gt;</code>, <code>std::vector</code> needs <code>&lt;vector&gt;</code>, <code>std::string</code> needs <code>&lt;string&gt;</code>.</td><td>Add the matching <code>#include</code> at the top (see the includes table in the cheat sheet).</td><td><a href="01-what-a-program-is.html">1</a>, <a href="08-strings-and-args.html">8</a></td></tr>
+<tr><td><code>error: implicit instantiation of undefined template 'std::vector&lt;int>'</code></td><td>The same mistake in a different coat. Another header (here <code>&lt;print&gt;</code>) mentioned that <code>std::vector</code> exists, but nobody included its definition, so you cannot make one. Take the word <strong>template</strong> on trust until week 8: it is the mechanism that lets one <code>std::vector</code> recipe work for <code>int</code>, <code>std::uint8_t</code> and every other element type, and "instantiation" is the compiler filling that recipe in for the type you asked for.</td><td>Add <code>#include &lt;vector&gt;</code>.</td><td><a href="06-vector.html">6</a></td></tr>
+<tr><td><code>error: no matching function for call to 'twice'</code><br><code>note: candidate function not viable: no known conversion from 'std::string' (aka 'basic_string&lt;char>') to 'int' for 1st argument</code></td><td>The function exists but you passed an argument of the wrong type. The note names the type you gave and the type it wanted.</td><td>Pass the right type, or convert first: <code>std::stoi(text)</code> to get an <code>int</code> from a <code>std::string</code>.</td><td><a href="04-functions.html">4</a></td></tr>
+<tr><td><code>error: no matching function for call to 'area'</code><br><code>note: candidate function not viable: requires 2 arguments, but 1 was provided</code></td><td>Wrong number of arguments.</td><td>Check the declaration and pass exactly that many.</td><td><a href="04-functions.html">4</a></td></tr>
+<tr><td><code>error: cannot assign to variable 'width' with const-qualified type 'const int'</code></td><td>You wrote <code>=</code> to a variable declared <code>const</code>.</td><td>If the value must change, it is not a constant: remove <code>const</code>. If it must not change, the assignment is the bug.</td><td><a href="02-values-and-types.html">2</a></td></tr>
+<tr><td><code>error: no matching function for call to 'clear'</code><br><code>note: candidate function not viable: 1st argument ('const std::vector&lt;int>') would lose const qualifier</code></td><td>You passed a <code>const</code> vector to a function whose parameter is a plain <code>std::vector&lt;int>&amp;</code>. The function promises nothing about leaving it alone, so the compiler refuses.</td><td>If the function only reads, change its parameter to <code>const std::vector&lt;int>&amp;</code>. If it writes, the caller must not pass a <code>const</code> object.</td><td><a href="05-references-and-const.html">5</a></td></tr>
+<tr><td><code>error: binding reference of type 'int' to value of type 'const int' drops 'const' qualifier</code></td><td>A non-const reference to a const thing, often <code>for (int&amp; x : v)</code> over a <code>const</code> vector.</td><td>Write <code>const int&amp; x</code> (or plain <code>int x</code> for a copy) if you only read; otherwise the vector should not be <code>const</code>.</td><td><a href="05-references-and-const.html">5</a>, <a href="06-vector.html">6</a></td></tr>
+<tr><td><code>error: invalid operands to binary expression ('std::string' (aka 'basic_string&lt;char>') and 'int')</code></td><td><code>text + 10</code>: you cannot add a number to a string. The long list of notes after it is the compiler listing every <code>+</code> it knows and why each did not fit; ignore it.</td><td><code>text + std::to_string(10)</code>.</td><td><a href="08-strings-and-args.html">8</a></td></tr>
+<tr><td><code>error: no viable conversion from 'std::string' (aka 'basic_string&lt;char>') to 'int'</code></td><td><code>int n = text;</code> where <code>text</code> is a <code>std::string</code>. The characters <code>"7"</code> are not the number 7.</td><td><code>int n = std::stoi(text);</code></td><td><a href="08-strings-and-args.html">8</a></td></tr>
+<tr><td><code>error: no viable overloaded '='</code></td><td>Assigning something of the wrong type to a vector or string, such as <code>v = 5;</code>.</td><td>Assign to an element (<code>v[i] = 5</code>) or build a vector (<code>v = std::vector&lt;int>(3, 5)</code>).</td><td><a href="06-vector.html">6</a></td></tr>
+<tr><td><code>error: redefinition of 'x'</code><br><code>note: previous definition is here</code></td><td>Two declarations of the same name in the same scope, often <code>int x = ...</code> typed twice, or a header included twice in one file without <code>#pragma once</code>.</td><td>Remove the second <code>int</code> (assign instead of redeclare), or add <code>#pragma once</code> to the header.</td><td><a href="02-values-and-types.html">2</a>, <a href="10-headers-and-files.html">10</a></td></tr>
+<tr><td><code>error: expected '}'</code><br><code>note: to match this '{'</code></td><td>More opening braces than closing ones. The note shows which <code>{</code> is still open.</td><td>Add the missing <code>}</code>. Indent consistently and the pair will be visible.</td><td><a href="03-control-flow.html">3</a></td></tr>
+<tr><td><code>error: extraneous closing brace ('}')</code></td><td>More closing braces than opening ones.</td><td>Delete the extra <code>}</code>.</td><td><a href="03-control-flow.html">3</a></td></tr>
+<tr><td><code>warning: missing terminating '"' character [-Winvalid-pp-token]</code><br><code>error: expected expression</code></td><td>A string literal without its closing quote. Everything to the end of the line was swallowed into the string.</td><td>Close the quote.</td><td><a href="01-what-a-program-is.html">1</a></td></tr>
+<tr><td><code>error: expected '(' after 'if'</code></td><td>An <code>if</code> or <code>else if</code> with no condition in brackets.</td><td>Write the condition: <code>else if (n &lt; 3) {</code>. A bare <code>else</code> takes no condition.</td><td><a href="03-control-flow.html">3</a></td></tr>
+<tr><td><code>error: void function 'greet' should not return a value [-Wreturn-mismatch]</code></td><td><code>return 0;</code> inside a function declared <code>void</code>.</td><td>Write plain <code>return;</code> or remove it; or change the return type if the function really produces a value.</td><td><a href="04-functions.html">4</a></td></tr>
+<tr><td><code>error: 'main' must return 'int'</code></td><td><code>void main()</code>.</td><td><code>int main()</code>. Always.</td><td><a href="01-what-a-program-is.html">1</a></td></tr>
+<tr><td><code>error: call to consteval function 'std::basic_format_string&lt;...>' is not a constant expression</code><br><code>note: non-constexpr function '__throw_format_error' cannot be used in a constant expression</code><br><code>&nbsp;&nbsp;std::__throw_format_error("Argument index outside the valid range");</code></td><td>A <code>std::println</code> format string has more <code>{}</code> placeholders than arguments. The frightening wording is because the check happens at compile time; the quoted text under the first note (<code>"Argument index outside the valid range"</code>) is the part that says what is wrong. The dozen notes after it are the library's internals; ignore them.</td><td>Make the number of <code>{}</code> equal to the number of values after the string.</td><td><a href="01-what-a-program-is.html">1</a></td></tr>
+<tr><td><code>fatal error: 'life.hpp' file not found</code></td><td>An <code>#include "..."</code> names a file that is not next to the source file and not in any include folder.</td><td>Check the spelling and the folder. In the Life project, <code>include_directories(src ...)</code> in <code>CMakeLists.txt</code> is what makes <code>"life.hpp"</code> findable; compiling by hand, add <code>-Isrc</code>.</td><td><a href="10-headers-and-files.html">10</a></td></tr>
+</table>
+
+<h3>Compiler warnings</h3>
+<table>
+<tr><th>Message</th><th>Cause</th><th>Fix</th><th>Ch.</th></tr>
+<tr><td><code>warning: comparison of integers of different signs: 'int' and 'size_type' (aka 'unsigned long') [-Wsign-compare]</code></td><td><code>for (int i = 0; i &lt; v.size(); ++i)</code>. <code>.size()</code> is unsigned (<code>std::size_t</code>); <code>i</code> is signed. If <code>i</code> were ever negative the comparison would silently be wrong.</td><td>Make the counter <code>std::size_t i = 0</code>, or compare against <code>static_cast&lt;int>(v.size())</code> when you truly need a signed index.</td><td><a href="06-vector.html">6</a></td></tr>
+<tr><td><code>warning: unused variable 'depth' [-Wunused-variable]</code><br><code>warning: unused parameter 'h' [-Wunused-parameter]</code></td><td>You declared something and never read it. Harmless by itself, but it often means you used the wrong variable somewhere else (here <code>w * w</code> instead of <code>w * h</code>).</td><td>Use it or delete it. For a parameter that is deliberately unused, write <code>(void)h;</code> as the stubs in <code>life.cpp</code> do.</td><td><a href="04-functions.html">4</a></td></tr>
+<tr><td><code>warning: non-void function does not return a value in all control paths [-Wreturn-type]</code></td><td>A function that promises an <code>int</code> has a route through it with no <code>return</code>. Usually every <code>if</code> returns something, but when none of the conditions is true the code runs off the closing brace with nothing to hand back. Reaching that brace is undefined behaviour: the caller gets a garbage number.</td><td>Add a final <code>return</code> that covers every remaining case.</td><td><a href="04-functions.html">4</a></td></tr>
+<tr><td><code>warning: variable 'total' is uninitialized when used here [-Wuninitialized]</code></td><td><code>int total;</code> then <code>total + 5</code>. A variable without an initialiser holds whatever bytes were there before: garbage.</td><td>Always initialise: <code>int total = 0;</code>.</td><td><a href="02-values-and-types.html">2</a></td></tr>
+<tr><td><code>warning: using the result of an assignment as a condition without parentheses [-Wparentheses]</code><br><code>note: use '==' to turn this assignment into an equality comparison</code></td><td><code>if (n = 4)</code>: one <code>=</code> assigns, it does not compare. The condition is then "is 4 non-zero", which is always true.</td><td>Write <code>==</code>.</td><td><a href="03-control-flow.html">3</a></td></tr>
+</table>
+
+<div class="callout trap"><span class="label">Trap</span><p>A program with warnings still builds and runs, so it is tempting to ignore them. The three warnings most likely to be real bugs are the uninitialised variable, the missing return path and the assignment-in-condition: all three produce a program that <em>seems</em> to work on some runs. Keep the warning count at zero and these bugs cannot hide.</p></div>
+
+<h3>Linker errors</h3>
+<p>These appear after every file compiled cleanly. The linker's job (<a href="10-headers-and-files.html">chapter 10</a>) is to find, for every function that is called, exactly one definition. Here is the smallest program that fails at this stage: a function that is declared and called but never defined.</p>
+
+<pre class="code" data-lang="cpp" data-file="declared_not_defined.cpp" data-check="error"><code>#include &lt;print&gt;
+
+int twice(int n);   // a promise...
+
+int main() {
+    std::println("{}", twice(4));   // ...that nobody keeps
+    return 0;
+}
+</code></pre>
+<pre class="output"><code>Undefined symbols for architecture arm64:
+  "twice(int)", referenced from:
+      _main in declared_not_defined-ed7dd2.o
+ld: symbol(s) not found for architecture arm64
+clang++: error: linker command failed with exit code 1 (use -v to see invocation)
+</code></pre>
+
+<p>Three things to notice. There is no file and line number, because the linker works on compiled object files, not source. The quoted name <code>"twice(int)"</code> is a <strong>symbol</strong>: the linker's word for a named function (or variable) that one object file needs and another must provide (<a href="10-headers-and-files.html">chapter 10</a>). It includes the parameter types, so a function with the same name but different parameters is a different symbol. And the <code>referenced from: _main</code> line tells you who was calling it. The random-looking letters and digits after <code>declared_not_defined-</code> in the <code>.o</code> name are a temporary tag that changes on every compile; ignore them.</p>
+
+<table>
+<tr><th>Message</th><th>Cause</th><th>Fix</th><th>Ch.</th></tr>
+<tr><td><code>Undefined symbols for architecture arm64:</code><br><code>&nbsp;&nbsp;"perimeter(int, int)", referenced from: _main in main-798d21.o</code></td><td>A function is declared (in a header or at the top of the file) and called, but no file that was given to the compiler defines it. Either you forgot to write it, or you forgot to list the <code>.cpp</code> that contains it on the command line or in <code>add_executable</code>.</td><td>Write the definition, or add the source file: <code>clang++ main.cpp shapes.cpp</code>, not just <code>main.cpp</code>. Check that the definition's parameter types match the declaration exactly.</td><td><a href="10-headers-and-files.html">10</a></td></tr>
+<tr><td><code>Undefined symbols for architecture arm64:</code><br><code>&nbsp;&nbsp;"_main", referenced from: &lt;initial-undefines></code></td><td>You compiled a file (or set of files) that has no <code>main</code> function, for example <code>life.cpp</code> on its own.</td><td>Include the file with <code>main</code> in the command, or build the whole project with CMake.</td><td><a href="10-headers-and-files.html">10</a></td></tr>
+<tr><td><code>duplicate symbol 'area(int, int)' in:</code><br><code>&nbsp;&nbsp;.../shapes-bf0c30.o</code><br><code>&nbsp;&nbsp;.../shapes2-0f859c.o</code><br><code>ld: 1 duplicate symbols</code></td><td>Two source files both <em>define</em> the same function. Usually a function body was written in a header that two files include, or the same function was pasted into two <code>.cpp</code> files.</td><td>Keep one definition in one <code>.cpp</code>; the header gets only the declaration (the line ending in <code>;</code>).</td><td><a href="10-headers-and-files.html">10</a></td></tr>
+<tr><td>A screen-long list of <code>Undefined symbols</code> all starting with <code>doctest::</code>, ending in <code>"_main"</code></td><td>A test file includes <code>doctest.h</code> but the line <code>#define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN</code> is missing above the include, so neither the doctest machinery nor <code>main</code> was compiled.</td><td>Put <code>#define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN</code> as the first line of the test file, before <code>#include "doctest.h"</code>, in exactly one file.</td><td><a href="12-testing.html">12</a></td></tr>
+</table>
+
+<h3>Command line and shell</h3>
+<table>
+<tr><th>Message</th><th>Cause</th><th>Fix</th></tr>
+<tr><td><code>clang++: error: no such file or directory: 'mian.cpp'</code><br><code>clang++: error: no input files</code></td><td>The file name in the command is misspelt, or you are in a different folder from the file.</td><td><code>ls</code> to see what is really there; <code>pwd</code> to see where you are.</td></tr>
+<tr><td><code>zsh: no such file or directory: ./life</code></td><td>You ran a program that does not exist at that path. Either the build failed (scroll up), or it was built somewhere else (<code>./build/life</code>, not <code>./life</code>), or you forgot <code>-o life</code> and the compiler produced <code>a.out</code>.</td><td>Look for the file first: <code>ls build/</code>. Re-run the build and read its last lines.</td></tr>
+<tr><td><code>zsh: permission denied: ./hello.cpp</code></td><td>You tried to run the source file instead of the compiled program.</td><td>Compile first, then run the output: <code>./hello</code>. Or use <code>tools/run.sh hello.cpp</code>, which does both.</td></tr>
+<tr><td>The program seems to print nothing, or its output is glued to the next prompt (zsh shows a <code>%</code> at the end of the line)</td><td>The text was written with <code>std::print</code> and no final newline, so the prompt is drawn on the same line; or <code>main</code> returned (or a condition was false) before the print ran. Output is <strong>buffered</strong>: held in memory and sent to the terminal in batches, normally at each newline (<a href="09-terminal.html">chapter 9</a>). Buffered text is <em>not</em> lost at a normal exit, only when the program is killed or crashes.</td><td>End the last line with <code>std::println</code>; if a print must stay visible while the program keeps running or sleeping, follow it with <code>std::fflush(stdout)</code>; check the return paths.</td></tr>
+<tr><td>The cursor has vanished after an animation was interrupted with <kbd>Ctrl</kbd>+<kbd>C</kbd></td><td>Your program hid the cursor with <code>\x1b[?25l</code> and was killed before it could show it again.</td><td>Type <code>tput cnorm</code> and press return (you will not see yourself typing it; it still works).</td></tr>
+</table>
+
+<h3>Runtime: sanitizers and terminations</h3>
+<p>Everything in this table happens <em>after</em> a successful build, while the program runs. The Debug build of the Life project, and <code>tools/run.sh</code>, compile with <code>-fsanitize=address,undefined</code>, which adds two watchdogs to your program: <strong>AddressSanitizer</strong> (ASan), which checks every memory access against what was actually allocated, and <strong>UndefinedBehaviorSanitizer</strong> (UBSan), which checks arithmetic and a few other things the language leaves undefined. Without them the same bugs produce wrong numbers or random crashes with no explanation at all.</p>
+
+<div class="callout analogy"><span class="label">Analogy</span><p>The sanitizers are watchdogs: they sit beside your program and bark the moment it touches memory it does not own. The analogy breaks in two places. A watchdog is free; these are not: a Debug build with the sanitizers on runs several times slower (the timing section below shows a thirty-fold gap), which is why benchmarks are built without them. And they only bark at <em>memory</em> and <em>arithmetic</em> crimes. A <code>step</code> that applies the Life rules wrongly but stays inside the vector is perfectly legal C++, and no sanitizer will ever complain; that is what the doctest cases are for.</p></div>
+
+<p>The ASan report is long; you only need its first three lines. Here is a program that reads one element past the end of a vector (the loop uses <code>&lt;=</code> where it should use <code>&lt;</code>), built with the sanitizers on. It is marked compile-only in the book because it deliberately fails when run.</p>
+
+<pre class="code" data-lang="cpp" data-file="overflow.cpp" data-check="compile"><code>#include &lt;print&gt;
+#include &lt;vector&gt;
+
+int main() {
+    std::vector&lt;int&gt; v(4, 1);
+    int sum = 0;
+    for (std::size_t i = 0; i &lt;= v.size(); ++i) {   // &lt;= is the bug
+        sum += v[i];
+    }
+    std::println("{}", sum);
+    return 0;
+}
+</code></pre>
+<pre class="shell"><code>$ clang++ -std=c++23 -Wall -Wextra -g -fsanitize=address,undefined -fno-omit-frame-pointer overflow.cpp -o overflow
+$ ./overflow
+=================================================================
+==64374==ERROR: AddressSanitizer: heap-buffer-overflow on address 0x6020000000e0 at pc 0x000102a30b64 bp 0x00016d3cdcb0 sp 0x00016d3cdca8
+READ of size 4 at 0x6020000000e0 thread T0
+    #0 0x000102a30b60 in main overflow.cpp:8
+    #1 0x000186c214e0 in start+0x1b4c (dyld:arm64e+0x204e0)
+
+0x6020000000e0 is located 0 bytes after 16-byte region [0x6020000000d0,0x6020000000e0)
+allocated by thread T0 here:
+    #0 0x00010339ff50 in _Znwm+0x74 (libclang_rt.asan_osx_dynamic.dylib:arm64e+0x4ff50)
+    ...
+    #9 0x000102a30a7c in main overflow.cpp:5
+    ...
+SUMMARY: AddressSanitizer: heap-buffer-overflow overflow.cpp:8 in main
+Shadow bytes around the buggy address:
+    ...
+zsh: abort      ./overflow
+$ echo $?
+134
+</code></pre>
+
+<p>Line one names the kind of bug: <strong>heap-buffer-overflow</strong>, an access outside a block of heap memory (a vector's cells live on the heap, <a href="06-vector.html">chapter 6</a>). Line two says what kind of access and how big: a <code>READ of size 4</code>, one <code>int</code>. Line three is the one you want: <code>#0 ... in main overflow.cpp:8</code>, the first line of the call stack, which is the line of <em>your</em> code that did it. The block after that says where the memory was allocated (<code>overflow.cpp:5</code>, the vector's construction) and how far outside it you were (<code>0 bytes after 16-byte region</code>: exactly one element past the end of a four-int vector, since 4 ints of 4 bytes make 16). After the summary comes a table of "shadow bytes" that you can ignore.</p>
+
+<p>Two more details of that run. The sanitizer stops the program by <strong>aborting</strong> it: it asks the operating system to kill the process at once, and the operating system does so by sending it a <strong>signal</strong>, a one-number message that means "stop now". Abort is signal number 6. zsh reports a killed program as <code>zsh: abort</code> and gives it exit code 128 + 6 = 134; you will see the same 134 for the library termination further down, because that also aborts. And the <code>-g</code> flag is what puts file names and line numbers into the report. Without it the <code>#0</code> line says only <code>in main+0x258</code>: a position inside the function, counted in bytes of machine code, with no file and no line number. <code>tools/run.sh</code> and the Debug build both pass <code>-g</code> for you.</p>
+
+<div class="callout try"><span class="label">Try it</span><p>Type <code>overflow.cpp</code> into <code>scratch/</code> and run it three ways. First exactly as shown, with <code>-g</code> and the sanitizers: find the <code>#0</code> line and the <code>bytes after</code> line. Second, drop <code>-g</code> but keep <code>-fsanitize=...</code>: the <code>#0</code> line loses its file and line. Third, drop the sanitizer flags entirely: <code>clang++ -std=c++23 -Wall -Wextra overflow.cpp -o overflow</code>. On this Mac that build printed <code>7</code>, three runs in a row, and exited 0 as if nothing were wrong: the four real ones plus a <code>3</code> that happened to be stored in the memory just past the vector. Built once more with <code>-O2</code>, the same file printed <code>0</code>. Neither number is a bug in the compiler; reading past the end is undefined behaviour, so any answer is permitted, and the optimiser took the liberty. That silent wrong number is what every out-of-bounds read looks like in a Release build, and it is the reason the Life project's Debug build keeps the sanitizers on.</p></div>
+
+<p>UBSan reports are one line, and they point directly at the expression.</p>
+
+<pre class="code" data-lang="cpp" data-file="signed_overflow.cpp" data-check="compile"><code>#include &lt;print&gt;
+#include &lt;vector&gt;
+
+int main() {
+    std::vector&lt;int&gt; v(2, 2147483647);   // the largest int, twice
+    int total = v[0] + v[1];              // does not fit in an int
+    std::println("{}", total);
+    return 0;
+}
+</code></pre>
+<pre class="shell"><code>$ tools/run.sh signed_overflow.cpp
+signed_overflow.cpp:6:22: runtime error: signed integer overflow: 2147483647 + 2147483647 cannot be represented in type 'value_type' (aka 'int')
+SUMMARY: UndefinedBehaviorSanitizer: undefined-behavior signed_overflow.cpp:6:22
+-2
+</code></pre>
+
+<p>Notice that the program carried on and printed <code>-2</code>. That is the nature of undefined behaviour: without the sanitizer there is no message at all, just a wrong number. In Release builds (no sanitizer) the compiler is allowed to assume the overflow never happens and may do something stranger than <code>-2</code>.</p>
+
+<p>The third kind of runtime message comes from the C++ library itself when you ask it something impossible. It ends the program immediately. <a href="08-strings-and-args.html">Chapter 8</a> named the mechanism, an <strong>exception</strong>, and asked you to take it on trust; keep doing so. All you need this week is to recognise the shape of the message: <code>libc++abi: terminating</code>, then the kind of complaint, then the library's own words about what went wrong.</p>
+
+<pre class="code" data-lang="cpp" data-file="bad_stoi.cpp" data-check="compile"><code>#include &lt;print&gt;
+#include &lt;string&gt;
+
+int main() {
+    int width = std::stoi("eighty");   // not a number
+    std::println("{}", width);
+    return 0;
+}
+</code></pre>
+<pre class="shell"><code>$ clang++ -std=c++23 -Wall -Wextra bad_stoi.cpp -o bad_stoi
+$ ./bad_stoi
+libc++abi: terminating due to uncaught exception of type std::invalid_argument: stoi: no conversion
+zsh: abort      ./bad_stoi
+$ echo $?
+134
+</code></pre>
+
+<table>
+<tr><th>Message</th><th>Cause</th><th>Fix</th><th>Ch.</th></tr>
+<tr><td><code>==NNNN==ERROR: AddressSanitizer: heap-buffer-overflow on address ...</code><br><code>READ of size 4 at ... thread T0</code><br><code>&nbsp;&nbsp;#0 ... in main file.cpp:8</code></td><td>An index outside a vector, with <code>[]</code>. Classic causes: <code>&lt;=</code> in a loop condition, a flat index with <code>x</code> and <code>y</code> swapped (<code>x * width + y</code>), a neighbour coordinate that was not wrapped, or an index computed from a negative number cast to <code>std::size_t</code> (a gigantic value, reported as <code>N bytes before</code> the region).</td><td>Go to the <code>#0</code> line. Print the index just before it. Compare with <code>.size()</code>. For a grid, check the wrap first.</td><td><a href="06-vector.html">6</a>, <a href="07-flat-grid.html">7</a></td></tr>
+<tr><td><code>WRITE of size 1 at ...</code> (same report shape)</td><td>Same as above, but you were storing. A <code>WRITE</code> overflow silently corrupts whatever lives next door when the sanitizer is off; this is the bug that makes programs crash somewhere unrelated later.</td><td>Same as above. Check that <code>next</code> has <code>width * height</code> cells before you write into it.</td><td><a href="07-flat-grid.html">7</a></td></tr>
+<tr><td><code>file.cpp:6:22: runtime error: signed integer overflow: 2147483647 + 2147483647 cannot be represented in type 'int'</code></td><td>An <code>int</code> calculation exceeded about 2.1 billion. For a 1000 by 1000 grid <code>width * height</code> is fine, but a product of three such numbers, or a sum over millions of steps, is not.</td><td>Use a wider type for the computation (<code>long long</code>, or <code>double</code> as <code>bench_life.cpp</code> does).</td><td><a href="02-values-and-types.html">2</a></td></tr>
+<tr><td><code>file.cpp:7:30: runtime error: division by zero</code></td><td>Integer division or <code>%</code> by a value that was 0 at runtime. <code>wrap(v, 0)</code> or a width of 0 from a mistyped argument will do it.</td><td>Check the divisor; reject zero sizes when parsing arguments.</td><td><a href="07-flat-grid.html">7</a></td></tr>
+<tr><td><code>.../vector.h:407:12: runtime error: addition of unsigned offset to 0x... overflowed to 0x...</code> followed by an ASan report saying <code>4 bytes before 16-byte region</code></td><td>A negative number was converted to <code>std::size_t</code> and used as an index: <code>-1</code> became 18446744073709551615, which wrapped round to just before the buffer. The first line points inside <code>vector.h</code>, where <code>[]</code> does its arithmetic, not at your code; your line is the <code>in main file.cpp:LINE</code> frame a little further down the call stack.</td><td>Wrap the coordinate (<code>wrap(x - 1, width)</code>) <em>before</em> turning it into an index.</td><td><a href="07-flat-grid.html">7</a></td></tr>
+<tr><td><code>libc++abi: terminating due to uncaught exception of type std::invalid_argument: stoi: no conversion</code><br><code>zsh: abort</code>, exit code 134</td><td><code>std::stoi</code> was given text that does not start with a number: <code>"eighty"</code>, <code>"--seed"</code> (an argument parser that is off by one), or an empty string.</td><td>Print <code>argv</code> values before converting them; make sure each flag is followed by its value. Exceptions themselves are a later week.</td><td><a href="08-strings-and-args.html">8</a></td></tr>
+<tr><td><code>libc++abi: terminating due to uncaught exception of type std::out_of_range: vector</code></td><td><code>v.at(i)</code> with <code>i &gt;= v.size()</code>. <code>.at()</code> checks and stops; <code>[]</code> does not check and becomes the ASan report above.</td><td>Same hunt as for the ASan report; <code>.at()</code> just caught it earlier. Fix the index.</td><td><a href="06-vector.html">6</a></td></tr>
+<tr><td><code>t.cpp:8: ERROR: CHECK( wrap(-1, 10) == 9 ) is NOT correct!</code><br><code>&nbsp;&nbsp;values: CHECK( -1 == 9 )</code></td><td>Not a crash: a doctest assertion failed. The first line is the claim as you wrote it; the <code>values:</code> line is what the two sides actually were. Here <code>wrap(-1, 10)</code> returned <code>-1</code>: the negative-modulo trap of <a href="07-flat-grid.html">chapter 7</a>.</td><td>Read the <code>values</code> line as the bug report it is, then go to the function.</td><td><a href="12-testing.html">12</a></td></tr>
+</table>
+
+<div class="callout twin"><span class="label">Inference twin</span><p>Every one of these runtime messages will reappear in week 15, when the vector of cells becomes a tensor of floats. An out-of-bounds read in a matrix multiply is the same <code>heap-buffer-overflow</code> with a different file name, and a stride computed in the wrong order is the same swapped <code>x * width + y</code>. Learn to read the <code>#0</code> line now and you will never fear the long version.</p></div>
+
+<h3>CMake, Ninja and ctest</h3>
+<p>Build-system messages come from three programs: <code>cmake</code> when you configure, <code>ninja</code> when you build (even when you type <code>cmake --build</code>, it is Ninja doing the work), and <code>ctest</code> when you run tests. Two words from <a href="11-cmake.html">chapter 11</a> appear in several rows. The <strong>generator</strong> is the build tool CMake writes its files for; <code>-G Ninja</code> picks Ninja. The <strong>cache</strong> is the file <code>build/CMakeCache.txt</code>, where CMake remembers every choice it made while configuring: which compiler, which generator, which build type, and the absolute path of the folder it was in. Most of the confusing rows below are the cache remembering something that is no longer true.</p>
+
+<table>
+<tr><th>Message</th><th>Cause</th><th>Fix</th></tr>
+<tr><td><code>Error: /.../01-life/build is not a directory</code></td><td><code>cmake --build build</code> before <code>build/</code> exists: you skipped the configure step, or you are in the wrong folder.</td><td><code>cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug</code> first, from the folder that holds <code>CMakeLists.txt</code>.</td></tr>
+<tr><td><code>ninja: fatal: chdir to 'build' - No such file or directory</code></td><td>The same mistake, made by calling <code>ninja -C build</code> directly.</td><td>Configure first.</td></tr>
+<tr><td><code>CMake Error: The source directory "/.../x" does not appear to contain CMakeLists.txt.</code></td><td>The <code>-S</code> path (or the current folder when you wrote <code>-S .</code>) has no <code>CMakeLists.txt</code>. You are one level too high or too low.</td><td><code>cd</code> into <code>phase1-terminal/01-life</code> and try again.</td></tr>
+<tr><td><code>ninja: error: unknown target 'life_test', did you mean 'life_tests'?</code></td><td>A target name that is not in <code>CMakeLists.txt</code>. The Life targets are <code>life</code>, <code>life_tests</code> (plural) and <code>life_bench</code>.</td><td>Use the name from <code>add_executable(...)</code>.</td></tr>
+<tr><td><code>CMake Error: Error: generator : Unix Makefiles</code><br><code>Does not match the generator used previously: Ninja</code><br><code>Either remove the CMakeCache.txt file and CMakeFiles directory or choose a different binary directory.</code></td><td>The build folder was configured with one generator (Ninja) and you now passed <code>-G</code> with a different one, usually by pasting a command from another project or a web page. A build folder remembers its generator. Leaving <code>-G</code> out does <em>not</em> trigger this: CMake then quietly reuses the one in the cache.</td><td>Either always pass <code>-G Ninja</code>, or <code>rm -rf build</code> and configure again.</td></tr>
+<tr><td><code>CMake Error: The current CMakeCache.txt directory /.../build2/CMakeCache.txt is different than the directory /.../build where CMakeCache.txt was created.</code></td><td>The build folder (or the whole project folder) was moved or copied after configuring. <code>CMakeCache.txt</code> stores absolute paths, so it is now stale.</td><td>Delete the build folder and configure again. Build folders are disposable; never keep anything in them.</td></tr>
+<tr><td><code>CMake Error: The source "/.../CMakeLists.txt" does not match the source "/.../CMakeLists.txt" used to generate cache.</code></td><td>Same stale cache, seen from the source side.</td><td><code>rm -rf build</code>, reconfigure.</td></tr>
+<tr><td><code>CMake Error at CMakeLists.txt:40 (add_executable):</code><br><code>&nbsp;&nbsp;Cannot find source file:</code><br><code>&nbsp;&nbsp;&nbsp;&nbsp;src/mian.cpp</code><br>often followed by <code>No SOURCES given to target: life</code></td><td>A file named in <code>add_executable</code> does not exist (typo, wrong folder, or you have not created it yet). The second error is a consequence of the first.</td><td>Fix the name or create the file. The line number points at the <code>add_executable</code> line (40 in the Life project's <code>CMakeLists.txt</code>).</td></tr>
+<tr><td><code>[1/2] Building CXX object ...</code><br><code>FAILED: [code=1] CMakeFiles/life.dir/src/life.cpp.o</code><br><code>... error: ...</code><br><code>ninja: build stopped: subcommand failed.</code></td><td>Not a build-system problem. A C++ file failed to compile inside the build; the real clang message is in the middle of this block.</td><td>Scroll to the line that says <code>error:</code> and use the compiler table above.</td></tr>
+<tr><td><code>No tests were found!!!</code></td><td><code>ctest</code> ran in a build folder whose <code>CMakeLists.txt</code> has no <code>add_test</code>, or <code>enable_testing()</code> is missing or placed after the test.</td><td>The Life project has both; if you see this there, you are pointing <code>--test-dir</code> at the wrong folder.</td></tr>
+<tr><td><code>Failed to change working directory to "/.../bild": No such file or directory</code></td><td>Typo in <code>ctest --test-dir</code>.</td><td>Point it at the real build folder.</td></tr>
+<tr><td><code>CMake Error: Could not find CMAKE_ROOT !!!</code> (rare)</td><td>The CMake installation itself is broken or half-upgraded; it cannot find its own support files. Not your project's fault.</td><td><code>brew reinstall cmake</code>, then reconfigure from a fresh build folder.</td></tr>
+</table>
+
+<div class="callout note"><span class="label">The universal CMake fix</span><p>Nearly every confusing CMake state is cured by <code>rm -rf build</code> followed by the configure command. The build folder contains nothing you wrote; it is entirely regenerated from <code>CMakeLists.txt</code> and your sources. If you are unsure whether a problem is a stale cache, delete the folder first and see whether the message survives.</p></div>
+
+<div class="callout try"><span class="label">Try it</span><p>Make the stale-cache message appear on purpose, so that it holds no fear later. In <code>phase1-terminal/01-life</code>, configure as usual, then copy the build folder: <code>cp -R build build2</code>. Now run <code>cmake -S . -B build2 -G Ninja</code>. CMake refuses, with the <code>CMakeCache.txt directory ... is different</code> message from the table, because the copy still remembers that it lives in <code>build</code>. Delete the copy with <code>rm -rf build2</code>. Nothing you wrote was in it.</p></div>
+
+<h2>Glossary</h2>
+<p>Every term the book has bolded, in alphabetical order, one sentence each. Chapter numbers in brackets say where the term is taught properly.</p>
+
+<dl>
+<dt>abort</dt><dd>To stop a program at once because something is badly wrong; the sanitizers and the C++ library do it, zsh prints <code>zsh: abort</code>, and the exit code is 134. (15)</dd>
+<dt>ANSI escape</dt><dd>A short sequence of bytes starting with <code>\x1b[</code> that a terminal reads as a command (clear the screen, move the cursor) instead of printing it. (9)</dd>
+<dt>argc, argv</dt><dd>The two parameters of <code>main(int argc, char* argv[])</code>: how many words were typed on the command line, and the words themselves; <code>argv[0]</code> is the program's own name. (8)</dd>
+<dt>argument</dt><dd>The actual value you pass to a function when you call it; the function receives it in a parameter. (4)</dd>
+<dt>ASan, UBSan</dt><dd>AddressSanitizer and UndefinedBehaviorSanitizer, the two checkers that <code>-fsanitize=address,undefined</code> builds into a Debug program; the first watches memory, the second watches arithmetic. (11, 15)</dd>
+<dt>assertion</dt><dd>A claim in a test that must be true, written as <code>CHECK(expression)</code> in doctest; a failed assertion prints the claim and the values it saw. (12)</dd>
+<dt><code>auto</code></dt><dd>A keyword that asks the compiler to work out a variable's type from its initialiser; the type is still fixed, you just did not have to write it. (2)</dd>
+<dt>benchmark</dt><dd>A program that times one operation on a fixed input so you can compare numbers before and after a change. (13)</dd>
+<dt><code>bool</code></dt><dd>The type with exactly two values, <code>true</code> and <code>false</code>; conditions in <code>if</code> and loops are <code>bool</code>s. (2)</dd>
+<dt>build system</dt><dd>A program that knows which source files make which executables and runs the compiler and linker for you; this week it is CMake generating files for Ninja. (11)</dd>
+<dt>build type</dt><dd>A named set of compiler flags: <strong>Debug</strong> (no optimisation, sanitizers on, easy to debug) or <strong>Release</strong> (optimised, no sanitizers, for benchmarks). (11, 13)</dd>
+<dt>byte</dt><dd>Eight bits, the smallest unit of memory with an address; a <code>char</code> or <code>std::uint8_t</code> occupies exactly one. (2)</dd>
+<dt>cache (CMake)</dt><dd>The file <code>build/CMakeCache.txt</code> where CMake remembers the compiler, generator, build type and folder it configured with; when any of those change, delete the build folder. (11)</dd>
+<dt>call stack</dt><dd>The list of functions currently running, innermost first; sanitizer reports print it with <code>#0</code>, <code>#1</code>, ... (4, 15)</dd>
+<dt><code>char</code></dt><dd>A one-byte type that holds a single character such as <code>'#'</code>; really a small integer with a printing convention. (2)</dd>
+<dt><code>chrono</code></dt><dd>The standard header for time: clocks that give the current instant and durations such as <code>100ms</code>. (9, 13)</dd>
+<dt>CMake</dt><dd>The tool that reads <code>CMakeLists.txt</code> and generates a build for Ninja; you run it once to configure, then <code>cmake --build</code> as often as you like. (11)</dd>
+<dt>compiler</dt><dd>The program (clang here) that translates one C++ source file into machine code for the CPU, producing an object file. (1)</dd>
+<dt><code>const</code></dt><dd>A promise, checked by the compiler, that a variable or a reference will not be used to change the value. (2, 5)</dd>
+<dt>contiguous</dt><dd>Stored in one unbroken run of memory with no gaps, as the elements of a <code>std::vector</code> are; this is why <code>v[i]</code> is one multiplication and one addition. (6)</dd>
+<dt>declaration</dt><dd>A line that introduces a name and its type without giving the body or the value, such as <code>int wrap(int v, int n);</code>. (4, 10)</dd>
+<dt>definition</dt><dd>The declaration plus the thing itself: a function with its body, a variable with its storage. There must be exactly one per program. (4, 10)</dd>
+<dt>doctest</dt><dd>The single-header testing library the project uses; you write <code>TEST_CASE</code> blocks with <code>CHECK</code>s and it provides <code>main</code> and the report. (12)</dd>
+<dt>double</dt><dd>The 8-byte floating-point type for numbers with a fractional part, such as <code>0.35</code>. (2)</dd>
+<dt>double buffering</dt><dd>Keeping two grids, reading from one while writing the next generation into the other, then swapping; it stops a cell's update from corrupting its neighbours' reads. (7)</dd>
+<dt>exception</dt><dd>How a library function such as <code>std::stoi</code> reports "I cannot do this" when it has no sensible value to return; unhandled, it ends the program with a <code>libc++abi: terminating</code> message. Taken on trust this week; taught in a later week. (8)</dd>
+<dt>exit code</dt><dd>The whole number a program hands back to the shell when it ends: <code>return 0;</code> from <code>main</code> means success, anything else means failure, and <code>echo $?</code> shows the last one. (1, 8)</dd>
+<dt>expression</dt><dd>A piece of code that produces a value: <code>3</code>, <code>x + 1</code>, <code>wrap(x, w)</code>. (1)</dd>
+<dt>flat index</dt><dd>The single number <code>y * width + x</code> that locates a 2D cell inside a 1D vector. (7)</dd>
+<dt>flush</dt><dd>To push buffered output to its destination now rather than waiting for a newline or program exit; <code>std::fflush(stdout)</code>. (9)</dd>
+<dt>frame (animation)</dt><dd>One complete picture of the grid drawn to the terminal; the game loop draws one frame per generation. (9)</dd>
+<dt>frame (stack)</dt><dd>The block of memory a function gets for its local variables while it runs; it is released when the function returns. (4)</dd>
+<dt>function</dt><dd>A named block of code with parameters and a return type that you can call from elsewhere; the unit of reuse. (4)</dd>
+<dt>generation</dt><dd>One state of the Life grid; <code>step</code> turns generation <em>n</em> into generation <em>n</em>+1. (0)</dd>
+<dt>generator (CMake)</dt><dd>The build tool CMake writes its files for; this book always says <code>-G Ninja</code>, and a build folder remembers the generator it was first configured with. (11)</dd>
+<dt>header</dt><dd>A <code>.hpp</code> file containing declarations, pasted into each source file that <code>#include</code>s it. (10)</dd>
+<dt>heap</dt><dd>The large pool of memory a program asks for while running, where a vector keeps its elements; its size is decided at run time. (6)</dd>
+<dt>identifier</dt><dd>A name you chose: a variable, a function, a type alias. (1)</dd>
+<dt><code>#include</code></dt><dd>A line that tells the compiler to paste another file here before compiling. (1, 10)</dd>
+<dt>initialisation</dt><dd>Giving a variable its first value at the moment it is created; an uninitialised <code>int</code> holds garbage. (2)</dd>
+<dt><code>int</code></dt><dd>The 4-byte signed whole-number type, holding roughly -2.1 billion to +2.1 billion. (2)</dd>
+<dt>kernel</dt><dd>In inference, a small function applied at every position of a tensor; the Life step is a 3 by 3 kernel. (4, 7, goal.md)</dd>
+<dt>linker</dt><dd>The program that joins object files into one executable, matching every call to exactly one definition. (10)</dd>
+<dt>literal</dt><dd>A value written directly in the code: <code>42</code>, <code>0.5</code>, <code>'#'</code>, <code>"hello"</code>, <code>true</code>. (2)</dd>
+<dt>loop</dt><dd>A statement that repeats a block: <code>for</code> when you know how many times, <code>while</code> when you know the stopping condition. (3)</dd>
+<dt><code>main</code></dt><dd>The function where every program starts; it returns an <code>int</code> that becomes the exit code. (1)</dd>
+<dt>median</dt><dd>The middle value of a sorted list of measurements; more honest than the mean when one run was disturbed. (13)</dd>
+<dt>modulo</dt><dd>The remainder operator <code>%</code>; in C++ the result takes the sign of the left operand, so <code>-1 % 10</code> is <code>-1</code>, not <code>9</code>. (2, 7)</dd>
+<dt>namespace</dt><dd>A named group of names; everything from the standard library lives in <code>std</code>, hence <code>std::vector</code>. (1)</dd>
+<dt>Ninja</dt><dd>The fast build tool that actually runs the compiler commands CMake generated. (11)</dd>
+<dt>object file</dt><dd>The <code>.o</code> output of compiling one source file: machine code plus a list of names it defines and names it needs. (10)</dd>
+<dt>optimisation</dt><dd>The compiler rewriting your program to run faster without changing what it computes; <code>-O2</code> or <code>-O3</code> (CMake's Release type uses <code>-O3</code>), off in Debug. (11, 13)</dd>
+<dt>parameter</dt><dd>A variable in a function's declaration that receives an argument when the function is called. (4)</dd>
+<dt><code>#pragma once</code></dt><dd>The first line of every header; it makes a second <code>#include</code> of the same header in one file do nothing. (10)</dd>
+<dt>PRNG</dt><dd>Pseudo-random number generator: a formula that produces a sequence that looks random but is completely determined by its seed; <code>std::mt19937</code>. (8)</dd>
+<dt>range-for</dt><dd><code>for (int x : v)</code>: a loop over every element of a container without an index. (6)</dd>
+<dt>reference</dt><dd>Another name for an existing variable, written <code>T&amp;</code>; passing by reference avoids copying and lets a function change the caller's variable. (5)</dd>
+<dt>row-major</dt><dd>Laying a grid out row after row in memory, so moving one step right is one element and one step down is <code>width</code> elements. (7)</dd>
+<dt>sanitizer</dt><dd>A checker compiled into your program by <code>-fsanitize=...</code> that turns memory errors and undefined behaviour into readable reports. (11)</dd>
+<dt>scope</dt><dd>The region of code where a name is visible, bounded by braces; a variable is destroyed at the end of its scope. (4)</dd>
+<dt>seed</dt><dd>The starting number of a PRNG; the same seed always gives the same sequence, which is what makes a random grid reproducible. (8)</dd>
+<dt>signal</dt><dd>A one-number message the operating system sends a running program, such as "stop now"; <kbd>Ctrl</kbd>+<kbd>C</kbd> sends one, and abort is number 6, which is why an aborted program exits with 128 + 6 = 134. (15)</dd>
+<dt>signed / unsigned</dt><dd>Whether a whole-number type can be negative (<code>int</code>) or not (<code>std::size_t</code>, <code>unsigned int</code>); mixing them is the source of the sign-compare warning. (2)</dd>
+<dt><code>std::size_t</code></dt><dd>The unsigned type used for sizes and indexes; <code>v.size()</code> returns it. (2, 6)</dd>
+<dt>stack</dt><dd>The region of memory where local variables and function frames live; fast, automatic, and small. (4)</dd>
+<dt>statement</dt><dd>One complete instruction, ending in <code>;</code> or a brace block. (1)</dd>
+<dt><code>std::string</code></dt><dd>A growable sequence of characters you can append to with <code>+=</code>, index with <code>[]</code> and compare with <code>==</code>. (8)</dd>
+<dt>stdout</dt><dd>Standard output: the byte stream your program writes to, normally connected to the terminal. (9)</dd>
+<dt>stencil</dt><dd>A fixed pattern of neighbouring positions that an operation reads for each cell; Life's is the 3 by 3 square minus the centre. (7)</dd>
+<dt>stride</dt><dd>How many elements you skip in memory to move one step along a dimension; in a row-major grid the row stride is <code>width</code>. (7)</dd>
+<dt>symbol</dt><dd>The linker's word for a named function or variable that one object file needs and another must define; <code>"twice(int)"</code> in an <code>Undefined symbols</code> message is one. (10)</dd>
+<dt>template</dt><dd>The mechanism that lets one recipe such as <code>std::vector</code> work for any element type (<code>std::vector&lt;int></code>, <code>std::vector&lt;std::uint8_t></code>); you use it this week and learn how it works in week 8. (6, week 8)</dd>
+<dt>tensor</dt><dd>A flat array plus a shape (and strides) that describes how to read it as multi-dimensional; a Life grid is a 2D tensor of bytes. (7, goal.md)</dd>
+<dt><code>TEST_CASE</code></dt><dd>The doctest macro that defines one named test; the tests in <code>life_test.cpp</code> are thirteen of these. (12)</dd>
+<dt>torus</dt><dd>A grid whose left edge touches its right edge and whose top touches its bottom, so every cell has exactly eight neighbours. (7)</dd>
+<dt>translation unit</dt><dd>One <code>.cpp</code> file after all its <code>#include</code>s have been pasted in: the thing the compiler actually compiles. (10)</dd>
+<dt>type</dt><dd>What kind of value a variable holds and how many bytes it takes; the compiler uses it to decide what every operation means. (2)</dd>
+<dt><code>std::uint8_t</code></dt><dd>An unsigned 1-byte whole number, 0 to 255; the Life grid uses it for cells so a million cells are a million bytes. (2)</dd>
+<dt>undefined behaviour</dt><dd>Anything the C++ standard says a program must not do, with no promise about what happens if it does: out-of-range index, signed overflow, reading an uninitialised variable. (2, 6)</dd>
+<dt>variable</dt><dd>A named piece of memory of a known type that holds a value. (2)</dd>
+<dt><code>std::vector</code></dt><dd>The growable, contiguous array of the standard library; <code>std::vector&lt;int> v(n, 0)</code> makes <code>n</code> zeros. (6)</dd>
+<dt>warm-up</dt><dd>Running the operation a few times before timing it so that caches are filled and the measurement reflects steady state. (13)</dd>
+<dt>warning</dt><dd>A compiler message about legal but suspicious code; this book keeps the count at zero. (1)</dd>
+<dt>wrap</dt><dd>Bringing a coordinate back into range on a torus: <code>-1</code> becomes <code>width - 1</code>, <code>width</code> becomes <code>0</code>. (7)</dd>
+<dt>zero-based</dt><dd>Counting positions from 0, so a vector of 10 elements has indexes 0 to 9 and <code>v[10]</code> is outside it. (6)</dd>
+</dl>
+
+<h2>Cheat sheet</h2>
+<p>The syntax of the week, one block per topic, in the exact forms the chapters used. These are fragments, not whole programs: the <code>#include</code> lines are left out, and so is the <code>int main() { ... }</code> around most of them, so pasting a block into an empty file will not compile. Copy the shape, not the lines, and take the headers you need from the includes table that follows.</p>
+
+<h3>Includes used in week 1</h3>
+<table>
+<tr><th>Header</th><th>Gives you</th><th>Ch.</th></tr>
+<tr><td><code>#include &lt;print&gt;</code></td><td><code>std::println</code>, <code>std::print</code></td><td>1</td></tr>
+<tr><td><code>#include &lt;cstdint&gt;</code></td><td><code>std::uint8_t</code> and the other fixed-width integers</td><td>2</td></tr>
+<tr><td><code>#include &lt;cstddef&gt;</code></td><td><code>std::size_t</code> (also comes with <code>&lt;vector&gt;</code>)</td><td>2</td></tr>
+<tr><td><code>#include &lt;vector&gt;</code></td><td><code>std::vector</code></td><td>6</td></tr>
+<tr><td><code>#include &lt;utility&gt;</code></td><td><code>std::swap</code></td><td>7</td></tr>
+<tr><td><code>#include &lt;string&gt;</code></td><td><code>std::string</code>, <code>std::to_string</code>, <code>std::stoi</code></td><td>8</td></tr>
+<tr><td><code>#include &lt;random&gt;</code></td><td><code>std::mt19937</code>, <code>std::uniform_real_distribution</code></td><td>8</td></tr>
+<tr><td><code>#include &lt;cstdio&gt;</code></td><td><code>std::fflush</code>, <code>stdout</code></td><td>9</td></tr>
+<tr><td><code>#include &lt;chrono&gt;</code></td><td><code>std::chrono::steady_clock</code>, durations, the <code>ms</code> literal</td><td>9, 13</td></tr>
+<tr><td><code>#include &lt;thread&gt;</code></td><td><code>std::this_thread::sleep_for</code></td><td>9</td></tr>
+<tr><td><code>#include "life.hpp"</code></td><td>Your own header; quotes mean "look next to this file first"</td><td>10</td></tr>
+<tr><td><code>#include "doctest.h"</code></td><td>The test framework (after <code>#define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN</code>)</td><td><a href="12-testing.html">12</a></td></tr>
+</table>
+
+<h3>Variables and types</h3>
+<pre class="code" data-lang="cpp" data-file="types.cpp" data-check="fragment"><code>int count = 0;                    // 4 bytes, signed, about ±2.1 billion
+double fill = 0.35;               // 8 bytes, fractional
+bool alive = true;                // true or false
+char mark = '#';                  // one character, one byte
+std::size_t n = cells.size();     // unsigned, for sizes and indexes
+std::uint8_t cell = 1;            // 0..255, one byte
+const int width = 80;             // cannot be changed after this line
+auto total = width * 2;           // the compiler works out: int
+total += 5;                       // same as total = total + 5 (also -=, *=, /=)
+
+std::println("{}", sizeof(int));  // 4
+int whole = static_cast&lt;int&gt;(3.9);             // 3, deliberate conversion
+std::size_t idx = static_cast&lt;std::size_t&gt;(y); // signed to unsigned, on purpose
+</code></pre>
+
+<h3>Decisions and loops</h3>
+<pre class="code" data-lang="cpp" data-file="control.cpp" data-check="fragment"><code>if (hour &lt; 12) {
+    // morning
+} else if (hour &lt; 18) {
+    // afternoon
+} else {
+    // evening
+}
+
+for (int i = 0; i &lt; 10; ++i) {       // known count
+    if (i == 5) {
+        continue;                    // skip the rest of this round
+    }
+    if (i == 8) {
+        break;                       // leave the loop
+    }
+}
+
+while (remaining &gt; 0) {              // known stopping condition
+    --remaining;
+}
+
+for (int y = 0; y &lt; height; ++y) {   // nested: rows outside, columns inside
+    for (int x = 0; x &lt; width; ++x) {
+        // visit (x, y)
+    }
+}
+
+// comparisons: ==  !=  &lt;  &lt;=  &gt;  &gt;=     logic: &amp;&amp;  ||  !
+</code></pre>
+
+<h3>Functions</h3>
+<pre class="code" data-lang="cpp" data-file="functions.cpp" data-check="fragment"><code>int area(int w, int h);          // declaration: name, parameter types, return type; ends in ;
+
+int area(int w, int h) {         // definition: the same line plus a body
+    return w * h;
+}
+
+void greet() {                   // void: returns nothing
+    std::println("hi");
+}
+
+int main() {
+    int a = area(3, 4);          // call: arguments in the same order as parameters
+    greet();
+    return 0;                    // exit code 0 means success
+}
+</code></pre>
+
+<h3>References and const</h3>
+<pre class="code" data-lang="cpp" data-file="refs.cpp" data-check="fragment"><code>void fill_zero(std::vector&lt;int&gt;&amp; v);          // may change the caller's vector; no copy
+int sum(const std::vector&lt;int&gt;&amp; v);           // reads only; no copy; accepts const vectors too
+int twice(int n);                             // by value: a copy; fine for small things
+
+int x = 5;
+int&amp; alias = x;        // another name for x
+alias = 6;             // x is now 6
+const int&amp; view = x;   // can read x through view, cannot write
+</code></pre>
+
+<h3>std::vector</h3>
+<pre class="code" data-lang="cpp" data-file="vectors.cpp" data-check="fragment"><code>std::vector&lt;int&gt; v(10, 0);      // 10 elements, all 0
+std::vector&lt;std::uint8_t&gt; cells(static_cast&lt;std::size_t&gt;(width) * height, 0);
+
+v.size()                        // how many (std::size_t)
+v[3]                            // element 3, no checking (ASan catches mistakes in Debug)
+v.at(3)                         // element 3, stops the program if out of range
+v[3] = 7;                       // write
+v.push_back(42);                // grow by one at the end
+v.resize(20);                   // change the count (new elements are 0)
+
+for (std::size_t i = 0; i &lt; v.size(); ++i) { /* v[i] */ }   // with index
+for (int x : v) { /* copy of each element */ }               // range-for, read
+for (int&amp; x : v) { x = 0; }                                  // range-for, write
+
+a == b                          // true if same size and every element equal
+std::swap(a, b);                // exchange contents; no copying of elements
+</code></pre>
+
+<h3>Flat 2D index</h3>
+<pre class="code" data-lang="cpp" data-file="flat.cpp" data-check="fragment"><code>using Grid = std::vector&lt;std::uint8_t&gt;;   // a short name for a long type
+
+// width columns, height rows, stored row by row:
+//   index  = y * width + x          (x = column, y = row)
+//   x      = index % width
+//   y      = index / width
+// one step right: +1      one step down: +width
+// total cells: width * height      last valid index: width * height - 1
+
+// torus wrap: a coordinate of -1 must become n - 1 and a coordinate of n must become 0.
+// plain v % n is NOT enough: in C++ the remainder of a negative number is negative
+// (-1 % 10 == -1). Chapter 7 shows the trap and the clock-face way out; you write wrap().
+</code></pre>
+
+<h3>Strings</h3>
+<pre class="code" data-lang="cpp" data-file="strings.cpp" data-check="fragment"><code>std::string s = "abc";
+s += '#';                       // append a char
+s += "def";                     // append text
+s += '\n';                      // newline
+s.size()                        // number of characters
+s[0]                            // first character (a char)
+s == "abc#def\n"                // compare contents
+std::to_string(42)              // "42"
+std::stoi("42")                 // 42   (stops the program if the text is not a number)
+std::println("{} {}", s, s.size());
+</code></pre>
+
+<h3>Command-line arguments</h3>
+<p>The pattern <a href="08-strings-and-args.html">chapter 8</a> taught, as a complete program: flags come in pairs, the loop steps by two, and a wrong flag ends the program with a non-zero exit code.</p>
+<pre class="code" data-lang="cpp" data-file="args.cpp" data-check="compile"><code>#include &lt;print&gt;
+#include &lt;string&gt;
+
+int main(int argc, char* argv[]) {
+    int width = 80;
+    int height = 24;
+    unsigned int seed = 1;
+
+    for (int i = 1; i + 1 &lt; argc; i += 2) {         // argv[0] is the program name
+        std::string flag = argv[i];
+        std::string value = argv[i + 1];
+        if (flag == "--width") {
+            width = std::stoi(value);
+        } else if (flag == "--height") {
+            height = std::stoi(value);
+        } else if (flag == "--seed") {
+            seed = static_cast&lt;unsigned int&gt;(std::stoi(value));
+        } else {
+            std::println("unknown option: {}", flag);
+            return 1;
+        }
+    }
+    std::println("width={} height={} seed={}", width, height, seed);
+    return 0;
+}
+</code></pre>
+<pre class="shell"><code>$ clang++ -std=c++23 -Wall -Wextra args.cpp -o args
+$ ./args
+width=80 height=24 seed=1
+$ ./args --width 40 --seed 7
+width=40 height=24 seed=7
+$ ./args --wdith 40
+unknown option: --wdith
+$ echo $?
+1
+</code></pre>
+<p>Read the loop condition before you copy it. <code>i + 1 &lt; argc</code> means "there is a flag at <code>i</code> <em>and</em> a value after it". That protects <code>argv[i + 1]</code> from reading past the end of the argument list, which would be the same out-of-bounds bug as reading past a vector.</p>
+<div class="callout trap"><span class="label">Trap</span><p>Two inputs that this program handles in ways you may not want. Run <code>./args --width</code> with no value: the loop condition is false on the first round, so the flag is silently ignored and the program prints the defaults and exits 0. Run <code>./args --width eighty</code>: <code>std::stoi</code> cannot convert it and the program aborts with <code>libc++abi: terminating due to uncaught exception of type std::invalid_argument: stoi: no conversion</code> (exit code 134). Both are real outputs from this machine. Neither is a crash of <em>your</em> making, but neither is a friendly message either. <a href="14-build-life.html">Chapter 14</a> asks you to decide, in milestone 5, what your <code>main</code> should do about a lone flag and about a width of 0.</p></div>
+
+<h3>Randomness</h3>
+<pre class="code" data-lang="cpp" data-file="rng.cpp" data-check="fragment"><code>std::mt19937 rng(seed);                              // generator, fixed by seed
+std::uniform_real_distribution&lt;double&gt; coin(0.0, 1.0); // numbers in [0, 1)
+double r = coin(rng);                                // one draw
+bool alive = r &lt; fill;                               // true with probability fill
+</code></pre>
+
+<h3>ANSI escape codes</h3>
+<p>All of these are printed with <code>std::print</code> (no newline) and take effect when the terminal reads them. <code>\x1b</code> is byte 27, the escape character.</p>
+<table>
+<tr><th>Sequence</th><th>Effect</th><th>Shell equivalent</th></tr>
+<tr><td><code>"\x1b[2J"</code></td><td>Clear the whole screen</td><td><code>tput clear</code> (also homes)</td></tr>
+<tr><td><code>"\x1b[H"</code></td><td>Move the cursor to the top-left corner (row 1, column 1)</td><td><code>tput cup 0 0</code></td></tr>
+<tr><td><code>"\x1b[" + row + ";" + col + "H"</code>, in practice <code>std::print("\x1b[{};{}H", row, col)</code></td><td>Move the cursor to that row and column (1-based). The <code>{}</code> are ordinary <code>std::print</code> placeholders; the terminal receives, for example, <code>\x1b[3;10H</code></td><td><code>tput cup ROW COL</code> (0-based)</td></tr>
+<tr><td><code>"\x1b[?25l"</code></td><td>Hide the cursor</td><td><code>tput civis</code></td></tr>
+<tr><td><code>"\x1b[?25h"</code></td><td>Show the cursor (do this before exiting)</td><td><code>tput cnorm</code></td></tr>
+<tr><td><code>"\x1b[31m"</code> ... <code>"\x1b[37m"</code></td><td>Text colour: 31 red, 32 green, 33 yellow, 34 blue, 35 magenta, 36 cyan, 37 white</td><td><code>tput setaf N</code></td></tr>
+<tr><td><code>"\x1b[1m"</code></td><td>Bold</td><td><code>tput bold</code></td></tr>
+<tr><td><code>"\x1b[0m"</code></td><td>Reset colour and style</td><td><code>tput sgr0</code></td></tr>
+</table>
+<pre class="code" data-lang="cpp" data-file="frame.cpp" data-check="fragment"><code>std::print("\x1b[?25l");                 // hide cursor, once, at the start
+// each frame:
+std::print("\x1b[H");                    // home (no clear: avoids flicker)
+std::print("{}", frame);                 // frame: the text of this generation, a std::string
+std::fflush(stdout);                     // push it out now
+std::this_thread::sleep_for(100ms);      // needs: using namespace std::chrono_literals;
+// at the end:
+std::print("\x1b[?25h");                 // show cursor again
+</code></pre>
+
+<h3>Timing with chrono</h3>
+<p>The complete pattern from <a href="13-timing-and-benchmark.html">chapter 13</a>, timing a loop over a million cells. Your number will differ; that is the point of measuring.</p>
+<pre class="code" data-lang="cpp" data-file="timing.cpp" data-check="run"><code>#include &lt;chrono&gt;
+#include &lt;print&gt;
+#include &lt;vector&gt;
+
+int main() {
+    std::vector&lt;int&gt; cells(1000 * 1000, 1);
+
+    const auto start = std::chrono::steady_clock::now();
+    long long sum = 0;
+    for (std::size_t i = 0; i &lt; cells.size(); ++i) {
+        sum += cells[i];
+    }
+    const auto end = std::chrono::steady_clock::now();
+
+    const double ms = std::chrono::duration&lt;double, std::milli&gt;(end - start).count();
+    std::println("sum = {}", sum);
+    std::println("took {:.3f} ms", ms);
+    return 0;
+}
+</code></pre>
+<pre class="shell"><code>$ tools/run.sh scratch/timing.cpp                              # Debug flags: sanitizers on, no optimisation
+sum = 1000000
+took 7.858 ms
+$ clang++ -std=c++23 -Wall -Wextra -O2 scratch/timing.cpp -o timing && ./timing   # Release flags
+sum = 1000000
+took 0.240 ms
+</code></pre>
+<p>Those two runs are the same program on the same machine, about thirty times apart (another run of the same pair gave 8.1 ms and 0.15 ms, fifty times apart; the gap is large and it is not a constant). The first number is what a Debug build costs: no optimisation, plus the sanitizers checking every <code>cells[i]</code>. That is why <code>life_bench</code> is built from <code>build-release</code>.</p>
+<p>Three habits from <a href="13-timing-and-benchmark.html">chapter 13</a> go with it. Build in Release before you believe a number: <code>-O2</code> by hand, or CMake's Release type, which uses <code>-O3</code>; either way, no sanitizers. Run a few warm-up iterations first, as <code>bench_life.cpp</code> does with its 3 warm-up steps. And time many repetitions and divide (<code>bench_life.cpp</code> times 20 steps), or take the median of several runs, rather than trusting one measurement.</p>
+
+<h3>CMake</h3>
+<p>The Life project's <code>CMakeLists.txt</code> with three lines removed to fit the page: the block that defaults <code>CMAKE_BUILD_TYPE</code> to Debug, the <code>CMAKE_EXPORT_COMPILE_COMMANDS</code> line for editors, and the <code>life_bench</code> target. <a href="11-cmake.html">Chapter 11</a> explains every line of the real file.</p>
+<pre class="code" data-lang="cmake" data-file="CMakeLists.txt"><code>cmake_minimum_required(VERSION 3.25)
+project(life LANGUAGES CXX)
+set(CMAKE_CXX_STANDARD 23)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+add_compile_options(-Wall -Wextra -Wpedantic)
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+  add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+  add_link_options(-fsanitize=address,undefined)
+endif()
+include_directories(src ${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/doctest)
+add_executable(life       src/main.cpp        src/life.cpp)
+add_executable(life_tests tests/life_test.cpp src/life.cpp)
+enable_testing()
+add_test(NAME life_tests COMMAND life_tests)
+</code></pre>
+
+<h3>doctest</h3>
+<pre class="code" data-lang="cpp" data-file="tests.cpp" data-check="fragment"><code>#define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN   // first line, in one file only: doctest writes main
+#include "doctest.h"
+#include "life.hpp"
+
+TEST_CASE("wrap: like a clock face") {      // one named test
+    CHECK(wrap(7, 10) == 7);                // records a failure and carries on
+    CHECK(wrap(-1, 10) == 9);
+    REQUIRE(wrap(0, 10) == 0);              // like CHECK, but stops this TEST_CASE on failure
+}
+
+// run everything:        ./build/life_tests
+// one test case:         ./build/life_tests -tc="wrap*"
+// list the test cases:   ./build/life_tests -ltc
+</code></pre>
+
+<h3>git for the week</h3>
+<p>The repository already exists (<a href="00-start-here.html">chapter 0</a> showed you around it and introduced the git words). You need four commands. Commit at every green milestone; a commit is a save point you can always return to.</p>
+<pre class="shell"><code>$ git status                         # what changed since the last commit
+$ git add phase1-terminal/01-life    # stage a folder (or a file) for the next commit
+$ git commit -m "M1: index_of green"
+$ git log --oneline                  # the history, one line per commit
+</code></pre>
+
+<h2>Commands cheat sheet</h2>
+<p>Every command line the week uses, in the order you meet them. Run them from the repo root unless the comment says otherwise.</p>
+
+<h3>One file, by hand</h3>
+<pre class="shell"><code>$ clang++ -std=c++23 -Wall -Wextra hello.cpp -o hello     # compile and link
+$ ./hello                                                # run
+$ clang++ -std=c++23 -Wall -Wextra -g -fsanitize=address,undefined -fno-omit-frame-pointer hello.cpp -o hello   # with the sanitizers
+$ tools/run.sh scratch/hello.cpp                         # the same flags, compile and run in one go
+$ tools/run.sh scratch/args.cpp --width 40 --seed 7      # with arguments for the program
+$ echo $?                                                # exit code of the last command (0 = success)
+</code></pre>
+
+<h3>Several files, by hand</h3>
+<pre class="shell"><code>$ clang++ -std=c++23 -Wall -Wextra -Isrc src/main.cpp src/life.cpp -o life   # -Isrc: where to find "life.hpp"
+$ clang++ -std=c++23 -c src/life.cpp -o life.o                               # compile only, to an object file
+$ clang++ -std=c++23 -E -Isrc src/main.cpp | less                            # see what #include pasted in; | less pages the output, q quits
+</code></pre>
+
+<h3>The Life project with CMake</h3>
+<pre class="shell"><code>$ cd phase1-terminal/01-life
+$ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug          # configure once (Debug: sanitizers on)
+$ cmake --build build                                            # build everything
+$ cmake --build build --target life_tests                        # build one target
+$ ./build/life_tests                                             # run the tests directly
+$ ctest --test-dir build                                         # run them through ctest
+$ ctest --test-dir build --output-on-failure                     # and show doctest's output when one fails
+$ ./build/life --width 80 --height 24 --seed 7                   # the game
+$ cmake -S . -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release   # a second build folder, optimised
+$ cmake --build build-release
+$ ./build-release/life_bench                                     # the benchmark, 1000x1000
+$ ./build-release/life_bench 500                                 # a smaller grid
+$ rm -rf build build-release                                     # start over (safe: nothing of yours is in there)
+</code></pre>
+
+<h3>Terminal repairs</h3>
+<pre class="shell"><code>$ tput cnorm      # bring the cursor back after an interrupted animation
+$ tput sgr0       # reset colours and bold
+$ reset           # the big hammer: reinitialise the terminal completely
+$ clear           # just clear the screen
+</code></pre>
+
+<h2>Further reading</h2>
+<p>Short on purpose. Each of these is worth your time this week or next; everything else can wait until the book asks for it.</p>
+
+<h3>cppreference.com</h3>
+<p><a href="https://en.cppreference.com/">cppreference.com</a> is the reference every C++ programmer has open. It is written for people who already know C++, so here is how to read a page without drowning. Search for the name (for example <code>std::vector::at</code>). At the top is the <strong>signature</strong>: the function's declaration, often in several numbered versions; you want the simplest one. Below it, <strong>Parameters</strong> says what each argument means, <strong>Return value</strong> says what you get back, and <strong>Exceptions</strong> says how it fails (this is where "<code>std::out_of_range</code>" for <code>.at()</code> comes from). The small grey labels need decoding. "(since C++11)" or "(since C++20)" means the feature was added in that version; your compiler is C++23, so everything marked "since" applies to you and you can ignore the label. "(until C++20)" or "(deprecated)" means the opposite: that version of the feature was removed or is on its way out, so skip those lines. Scroll to the bottom: nearly every page ends with a complete <strong>Example</strong> program and its output, which is often the fastest way to understand the function. Pages you will actually use this week: <code>std::vector</code>, <code>std::string</code>, <code>std::stoi</code>, <code>std::mt19937</code>, <code>std::uniform_real_distribution</code>, <code>std::chrono::steady_clock</code>, <code>std::println</code>.</p>
+
+<h3>learncpp.com</h3>
+<p><a href="https://www.learncpp.com/">learncpp.com</a> is a free, careful, very long tutorial, and a good second explanation when one of this book's chapters did not land. It is organised in numbered chapters whose numbers shift between revisions, so look for titles: "C++ Basics" and "Fundamental Data Types" cover <a href="02-values-and-types.html">chapter 2</a>; "Control Flow" covers <a href="03-control-flow.html">chapter 3</a>; "Functions" and "Scope, Duration, and Linkage" cover <a href="04-functions.html">chapter 4</a> and <a href="10-headers-and-files.html">chapter 10</a>; "Compound Types: References and Pointers" (read only the reference lessons) covers <a href="05-references-and-const.html">chapter 5</a>; "Dynamic arrays: std::vector" covers <a href="06-vector.html">chapter 6</a>. Its sections on <code>std::cout</code> use an older printing style than <code>std::println</code>; the ideas are the same. Skip its pointer and class lessons for now.</p>
+
+<h3>A Tour of C++, Bjarne Stroustrup</h3>
+<p>Written by the language's designer, the third edition (C++20) is short and dense. Read chapter 1, "The Basics", and chapter 2, "User-Defined Types", at the end of this week: the first will feel like a brisk review, the second is a preview of weeks 3 and 4. Chapter 12, "Containers", explains <code>std::vector</code> and its relatives (including the <code>std::deque</code> you meet next week) with exactly the right amount of detail. Do not try to read the whole book now; it is a tour, meant to be returned to.</p>
+
+<h3>CppCon "Back to Basics" talks</h3>
+<p>CppCon is the largest C++ conference and every talk is free on <a href="https://www.youtube.com/@CppCon">its YouTube channel</a>. Its "Back to Basics" track is made for exactly your position: an hour on one fundamental, by a good explainer. Search the channel for "Back to Basics" plus a topic. Good ones for this week: <em>The Structure of a Program</em> (Bob Steagall, 2020) on declarations, definitions and translation units; <em>Compiling and Linking</em> (Ben Saks, 2021) for everything in <a href="10-headers-and-files.html">chapter 10</a>; and <em>Debugging Techniques</em> (Mike Shah, 2021) for sanitizers and the debugger you pick up in week 3. One talk per evening is plenty.</p>
+
+<h3>LifeWiki</h3>
+<p><a href="https://conwaylife.com/wiki/">conwaylife.com/wiki</a> catalogues thousands of Game of Life patterns with animations. Once your <code>step</code> is green, look up the <em>Glider</em> (five cells that walk diagonally forever), the <em>R-pentomino</em> (five cells that take 1103 generations to settle), and the <em>Gosper glider gun</em> (the first pattern proved to grow without bound). The <em>Block</em> and <em>Blinker</em> your tests use are there too. Typing a pattern into your grid by hand and watching it behave as the wiki says is a better acceptance test than any <code>CHECK</code>.</p>
+
+<h2>What week 3 brings (Snake)</h2>
+<p>The row for week 3 in <code>goal.md</code> lists the C++ you learn next. Each item below is one paragraph of preview, not teaching; the point is that you recognise the names when the week-3 book uses them, and see that each one fixes a limitation you felt this week.</p>
+
+<p><strong><code>struct</code>.</strong> This week every function took <code>cells, width, height</code> as three separate parameters, and you had to keep them consistent by hand. A <code>struct</code> bundles related variables into one new type with named parts: a <code>Grid</code> with <code>.cells</code>, <code>.width</code> and <code>.height</code>, or a <code>Point</code> with <code>.x</code> and <code>.y</code>. The snake's body is a list of <code>Point</code>s. You will pass one thing instead of three, and the compiler will stop you mixing up a width with a height.</p>
+
+<p><strong><code>enum class</code>.</strong> The snake moves <code>Up</code>, <code>Down</code>, <code>Left</code> or <code>Right</code>. You could use the numbers 0 to 3, but then <code>direction = 7</code> compiles and means nothing. An <code>enum class</code> is a type whose only values are the names you list, so <code>Direction::Up</code> is legal and <code>7</code> is not. It is the tool for "one of a fixed set of choices", and it goes with <code>switch</code>, a cleaner <code>if</code>/<code>else if</code> chain for exactly that situation.</p>
+
+<p><strong><code>std::deque</code>.</strong> A snake grows at the head and shrinks at the tail. With <code>std::vector</code>, removing the first element means shifting every other element down by one, every tick. <code>std::deque</code> (double-ended queue) is a container that is cheap at both ends: <code>push_front</code>, <code>pop_back</code>, still indexable with <code>[]</code>. Same vocabulary as vector, different costs: what is cheap in one is expensive in the other. Choosing a container by what it makes cheap is a skill the whole curriculum builds.</p>
+
+<p><strong>RAII and the terminal guard.</strong> You saw this week that an interrupted animation leaves the cursor hidden. Next week the program also switches the terminal into raw mode (keys arrive instantly, without waiting for return), and leaving the terminal in that state is much worse than a hidden cursor. <strong>RAII</strong> (resource acquisition is initialisation) is the C++ idea that cleanup belongs in a type: a <code>RawTerminal</code> object switches the mode on when it is created and switches it back in its <strong>destructor</strong>, a function that runs automatically when the object goes out of scope, however the scope is left. It is the first thing in C++ that will feel like it is looking after you.</p>
+
+<p><strong>Raw-mode input.</strong> Reading a key press in a normal terminal is impossible: the terminal collects a whole line and hands it over only when you press return. Raw mode turns that off. It is switched on with a few <strong>system calls</strong>, which are requests your program makes directly to the operating system, the same way <code>std::println</code> ultimately asks the operating system to write bytes. A <strong>non-blocking read</strong> then lets the game loop ask "was a key pressed?" and get an immediate answer, yes or no, instead of waiting until one is. This is the week you learn what a terminal is on the input side, having learned the output side in <a href="09-terminal.html">chapter 9</a>.</p>
+
+<p><strong><code>std::optional</code>.</strong> "Was a key pressed?" has two kinds of answer: a key, or no key. Returning a special value such as <code>-1</code> works until <code>-1</code> is a real answer. <code>std::optional&lt;char&gt;</code> is a type that holds either a <code>char</code> or nothing, and makes you check which before you use it. It is the honest return type for every "maybe" function, and it reappears in week 5 and again in the inference engine.</p>
+
+<div class="callout twin"><span class="label">Inference twin</span><p><code>goal.md</code> gives week 3 its twin: the game loop is a decode loop. One update per tick with a fixed time budget, and a tick that overruns is a dropped frame, exactly as a token that takes too long is a latency spike. The frame-timing code from <a href="09-terminal.html">chapter 9</a> is the piece you carry forward unchanged.</p></div>
+
+<h2>Check yourself</h2>
+<div class="quiz">
+<div class="q"><p>A message begins <code>Undefined symbols for architecture arm64:</code>. Which of the four stages failed, and what does that tell you about your source files?</p><details class="answer"><summary>Answer</summary><p>The linker (stage 2). Every file compiled, so the syntax and the types are fine; a function that is called somewhere has no definition in any of the files that were compiled. Either you have not written it yet, or the file that contains it was not passed to the compiler or listed in <code>add_executable</code>.</p></details></div>
+<div class="q"><p>clang reports <code>error: expected ';' at end of declaration</code> on line 12, but line 12 looks correct. Where is the mistake?</p><details class="answer"><summary>Answer</summary><p>On line 11 (or the nearest non-empty line above). The compiler notices a missing semicolon only when it reads the next token, which is on the following line. The caret is placed where it <em>noticed</em>, not where you forgot.</p></details></div>
+<div class="q"><p>An AddressSanitizer report is forty lines long. Which single line do you read first, and what does <code>0 bytes after 16-byte region</code> mean for a <code>std::vector&lt;int&gt;</code>?</p><details class="answer"><summary>Answer</summary><p>The <code>#0 ... in main file.cpp:LINE</code> line under <code>READ of</code> or <code>WRITE of</code>: it is the line of your code that touched the bad address. A 16-byte region is four <code>int</code>s, and "0 bytes after" means you used index 4 in a vector of size 4: exactly one past the end.</p></details></div>
+<div class="q"><p>Your program ends with <code>libc++abi: terminating due to uncaught exception of type std::invalid_argument: stoi: no conversion</code>. Name two ways that happens in a program that parses <code>--width 80 --seed 7</code>.</p><details class="answer"><summary>Answer</summary><p>Either the user typed a non-number (<code>--width eighty</code>), or your loop is off by one and you called <code>std::stoi</code> on a flag such as <code>"--seed"</code> instead of on the value after it. Printing <code>argv[i]</code> before converting shows which.</p></details></div>
+<div class="q"><p>Why does the warning <code>comparison of integers of different signs</code> deserve a fix rather than a shrug?</p><details class="answer"><summary>Answer</summary><p>Because a signed <code>int</code> that is negative is converted to unsigned before the comparison and becomes an enormous positive number, so <code>i &lt; v.size()</code> is false when you expected it to be true (or the other way round). The loop then does the wrong number of iterations silently. Use <code>std::size_t</code> for the counter.</p></details></div>
+<div class="q"><p>CMake says <code>The current CMakeCache.txt directory ... is different than the directory ... where CMakeCache.txt was created</code>. What did you do, and what is the fix?</p><details class="answer"><summary>Answer</summary><p>You moved or copied the project (or the build folder) after configuring; the cache stores absolute paths. Delete the build folder and run the configure command again. Nothing you wrote lives in the build folder.</p></details></div>
+<div class="q"><p>You run <code>./args --width</code> (from the command-line cheat sheet) with no value after the flag. What is printed, what is the exit code, and why?</p><details class="answer"><summary>Answer</summary><p><code>width=80 height=24 seed=1</code> and exit code 0. The loop condition <code>i + 1 &lt; argc</code> is <code>2 &lt; 2</code>, which is false, so the body never runs and the lone flag is silently skipped. Nothing crashed, but nothing told you either; your own <code>main</code> should probably print a message and return 1 in that case.</p></details></div>
+<div class="q"><p>Without looking: in the glossary sense, what is the difference between a declaration and a definition, and which one belongs in a header?</p><details class="answer"><summary>Answer</summary><p>A declaration introduces the name and its type (<code>int wrap(int v, int n);</code>); a definition also provides the body or the storage. Headers hold declarations, so that many files can include them; each definition lives in exactly one <code>.cpp</code>, or the linker reports a duplicate symbol.</p></details></div>
+</div>
+
+<h2>What you can do now</h2>
+<ul>
+<li>Tell from the first line of any failure whether it is the compiler, the linker, the shell or the running program that is talking, and go to the right table.</li>
+<li>Read a clang error as file, line, column, severity, message, caret, suggestion, and fix the first one before looking at the rest.</li>
+<li>Decode the fifty-odd messages a week-1 learner meets, including the three lines of an AddressSanitizer report that matter.</li>
+<li>Look up any term the book has used and find the chapter that teaches it.</li>
+<li>Reproduce the syntax of chapters 1 to 13 from the cheat sheet without re-reading the chapters.</li>
+<li>Type every command of the week, from <code>clang++</code> to <code>ctest</code> to <code>tput cnorm</code>, from memory or from one page.</li>
+<li>Know where to read next, and what the six new ideas of week 3 are for.</li>
+</ul>
+</main>
+</body>
+</html>
