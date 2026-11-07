@@ -67,11 +67,13 @@
 </ul>
 
 <h2>Serving the book locally</h2>
-<p>The book is plain HTML with no build step and no network access. You can open <code>index.html</code> directly in a browser, or serve the folder so that the address bar shows clean URLs:</p>
+<p>The book is plain HTML with no build step and no network access. You can open <code>index.html</code> directly in a browser, or serve the books so that the address bar shows clean URLs:</p>
 <pre class="shell"><code>$ python3 tools/serve-book.py
-Serving the book at http://localhost:8765  (Ctrl-C to stop)
+Serving the books at http://localhost:8765  (Ctrl-C to stop)
+  Week 1: http://localhost:8765/week1/
+  Week 3: http://localhost:8765/week3/  (starts Mon 23 Nov 2026)
 </code></pre>
-<p>Then visit <code>http://localhost:8765</code>. The script is the built-in Python web server with one change: it tells the browser to re-check each page, so when the book is updated a normal reload shows the new version. Press <kbd>Ctrl-C</kbd> in that terminal to stop the server. Progress ticks are stored per browser and per origin, so stick to one way of opening the book if you want them to persist.</p>
+<p>Then visit <code>http://localhost:8765</code>, which opens the current week's book; every book also has its own address, as the server prints. The script is the built-in Python web server with two additions: it tells the browser to re-check each page, so when the book is updated a normal reload shows the new version, and it runs the AI tutor (<a href="../../tutor.md">docs/tutor.md</a>). Press <kbd>Ctrl-C</kbd> in that terminal to stop the server. Progress ticks are stored per browser and per origin, so stick to one way of opening the book if you want them to persist.</p>
 <p>To check that every example in the book still compiles and prints what it claims:</p>
 <pre class="shell"><code>$ python3 tools/book-check.py
 </code></pre>

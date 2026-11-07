@@ -2,10 +2,10 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "week1-book",
-      "runtimeExecutable": "/bin/sh",
-      "runtimeArgs": ["-c", "cd /Users/dan/Desktop/projects/cpp-101/docs/book/week1 && exec python3 -m http.server 8765 --bind 127.0.0.1"],
-      "port": 8765
+      "name": "book",
+      "runtimeExecutable": "/usr/bin/python3",
+      "runtimeArgs": ["/Users/dan/Desktop/projects/cpp-101/tools/serve-book.py", "8766"],
+      "port": 8766
     }
   ]
 }

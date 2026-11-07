@@ -15,8 +15,9 @@ note export. Those are version 2; leave them out entirely, do not stub them.
 
 ## 1. Server
 
-`python3 tools/serve-book.py [port]` keeps doing what it does (serve `docs/book/week1` with
-`Cache-Control: no-cache`, default port 8765) and adds two routes. `tools/tutor.py` holds the logic so
+`python3 tools/serve-book.py [port]` serves `docs/book`, every week's book, with
+`Cache-Control: no-cache` on default port 8765 (`/` forwards to the current week's book, and a Week 1
+address from before Week 3, such as `/07-flat-grid.html`, forwards to `/week1/`), and adds two routes. `tools/tutor.py` holds the logic so
 it can be imported by tests; `serve-book.py` stays small.
 
 ### Security (required)

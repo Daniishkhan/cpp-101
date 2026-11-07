@@ -9,7 +9,10 @@
 # The online copy has no tutor: the tutor needs tools/serve-book.py and your own API key on your
 # own computer, and a key never goes into a published page (docs/tutor.md).
 #
-# Only runs when the book or its tools change, because the check compiles a few hundred programs.
+# Runs when the book or its tools change, because the check compiles a few hundred programs, and
+# every Monday at 00:30 UTC: the site's front page opens the newest book whose week has started
+# (tools/build-pages.py), and only a build can move it, so a week's book becomes the front page on
+# the morning that week starts. The weekly run also re-checks the book with the runner's compiler of that week.
 name: book
 
 on:
@@ -26,6 +29,8 @@ on:
       - "tools/build-pages.py"
       - ".github/workflows/book.yml"
   workflow_dispatch:
+  schedule:
+    - cron: "30 0 * * 1"
 
 permissions:
   contents: read

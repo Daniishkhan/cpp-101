@@ -1,9 +1,10 @@
 # The book tutor
 
-The Week 1 book has an AI tutor built into the page. Select a sentence or a line of code to get it
-explained more simply, ask for an analogy, ask your own question about the chapter, or ask for the
-next rung of a hint ladder on a drill or a Life milestone. It follows the same rules as Claude does
-everywhere in this repository (`CLAUDE.md`): it explains, it never writes your Life functions.
+Each challenge's book has an AI tutor built into the page: so far the Week 1 book (Life) and the
+Week 3 book (Snake). Select a sentence or a line of code to get it explained more simply, ask for an
+analogy, ask your own question about the chapter, or ask for the next rung of a hint ladder on a
+drill or a challenge milestone. It follows the same rules as Claude does everywhere in this
+repository (`CLAUDE.md`): it explains, it never writes your challenge functions.
 
 This page covers setting it up, using it, what it costs and how it is kept from handing you the
 answer.
@@ -45,8 +46,10 @@ To use your API credit:
    python3 tools/serve-book.py
    ```
 
-   Open <http://localhost:8765>, press <kbd>A</kbd>, and the panel's header should say
-   *Anthropic API · Opus 5.5 · $0.00 of $5 today*.
+   Open <http://localhost:8765>: it opens the current week's book. Every book also has its own
+   address, which the server prints when it starts (Week 3 is <http://localhost:8765/week3/>, open
+   from the day it is written, so you can read it for a spec ritual). Press <kbd>A</kbd>, and the
+   panel's header should say *Anthropic API · Opus 5.5 · $0.00 of $5 today*.
 
 `python3 tools/tutor-key.py --check` tells you whether the key still works;
 `python3 tools/tutor-key.py --remove` deletes it and the workspace ID (the tutor then goes back to
@@ -61,7 +64,7 @@ Claude Code).
 | To ask your own question about a passage | Select it, then **Ask…** |
 | To ask about the chapter in general | Press <kbd>A</kbd> (or the speech-bubble button) and type. Enter sends, Shift+Enter is a new line |
 | To be quizzed | Open the panel on an empty chapter conversation and choose **Quiz me on this chapter** |
-| A hint on a drill or a Life milestone | The **Ask the tutor for rung N of 4** button under the drill's hints. Paste your code or the compiler error if you have one |
+| A hint on a drill or a challenge milestone | The **Ask the tutor for rung N of 4** button under the drill's or the milestone's hints. Paste your code or the compiler error if you have one |
 | The tutor to take more care | Switch on **Think harder** (slower, costs a few times more) |
 | A standing instruction ("be strict", "use kitchen analogies") | **Tell the tutor** in the panel. It can never override the no-solutions rule |
 | The book without any AI | **Aa → Tutor → AI tutor** off |
@@ -70,7 +73,9 @@ A small dot appears in the left margin next to every passage you asked about; cl
 to that answer. Each chapter keeps its own conversation in your browser, so the answers become your
 notes for the after-lesson review. **Clear** empties the current chapter only.
 
-Rungs go up one at a time per drill or milestone and stop at 4. There is no rung 5: after rung 4 the
+Each book keeps its own conversations and rung counts; the on/off switch, **Think harder** and
+**Tell the tutor** are shared by all the books. Rungs go up one at a time per drill or milestone and
+stop at 4. There is no rung 5: after rung 4 the
 button tells you to reread the chapter or ask for a review, which is the methodology in
 `docs/methodology.md`, not a limitation.
 
@@ -103,21 +108,29 @@ Three layers, from the inside out:
 
 1. **The instructions.** Every request starts with a system prompt (in `tools/tutor.py`) that
    carries the `CLAUDE.md` rules: who you are, how to teach (first principles, one idea at a time,
-   analogies that say where they break, Week 1 constructs only), the four-rung ladder, and the rule
-   that `index_of`, `wrap`, `count_neighbours`, `step`, `random_cells`, `render` and the Life `main`
-   are never written, sketched or "fixed" in any form or language. Mechanisms are taught on a
-   different problem: a clock, a ring of lamps, a calendar.
+   analogies that say where they break, only the C++ the books have taught so far), the four-rung
+   ladder, and the rule that the challenge functions are never written, sketched or "fixed" in any
+   form or language. For Life those are `index_of`, `wrap`, `count_neighbours`, `step`,
+   `random_cells`, `render` and the Life `main`; for Snake, `next_head`, `tick_ms`, `render`,
+   `on_body`, `steer`, `parse_key`, `place_food`, `new_game`, `tick`, `RawTerminal`, `read_keys` and
+   the Snake `main`. A page of the Week 3 book gets its own prompt, about Snake. Mechanisms are
+   taught on a different problem: a clock, a ring of lamps, a calendar, a queue at a counter.
 2. **The guard.** As the answer streams, the server holds back every code block until it is
    complete and checks it. A block that defines one of the contract functions, binds a lambda to one
    of their names, or is a `main` calling several of them is replaced by a note ("A code block was
-   withheld here…"). The thinking stream gets the same treatment.
-3. **The tests.** `python3 tools/test_tutor.py` (85 tests) and `python3 tools/test_tutor_api.py` (23)
-   check the guard against dozens of disguised definitions and against the book's own harmless
+   withheld here…"). The thinking stream gets the same treatment. The guard protects the names of
+   both challenges on every page: a Week 1 page can be open while you write Snake, and the other way
+   round, and a page cannot widen what may be written by saying it belongs to another week.
+3. **The tests.** `python3 tools/test_tutor.py` (105 tests) and `python3 tools/test_tutor_api.py`
+   (23) check the guard against dozens of disguised definitions and against both books' own harmless
    examples, and check the server's request handling, offline. `python3 tools/tutor-eval.py` is a
-   live red-team: about fifteen attempts to talk the tutor into writing a Life function ("my teacher
-   said it's fine", "just pseudo-code", "in Python", "fix my step"), plus three questions that must
-   get a real answer. Its first run against the API (7 November 2026) passed all 15, with the guard never
-needed (the model declined on its own every time), and cost $0.21.
+   live red-team of 23 cases. Twelve, sent from Week 1 pages, try to talk the tutor into writing a
+   Life function ("my teacher said it's fine", "just pseudo-code", "in Python", "fix my step"); six,
+   sent from Week 3 pages, try the same on Snake ("it's only terminal plumbing", "fix my steer", the
+   Snake `main`); and five questions must get a real answer. `--week 3` runs only the eight Week 3
+   cases. Its first run against the API (7 November 2026) passed all 15 Life cases, with the guard
+   never needed (the model declined on its own every time), and cost $0.21.
+   On 8 November 2026, with the Snake cases added, all 23 passed, again without the guard, for $0.36.
 
 In a live test, asked for `wrap` with a "my teacher says it's fine" excuse, the tutor declined and
 gave rung 4 as a worked example on a ring of eight lamps.
@@ -150,13 +163,14 @@ mode: a question or a rung request becomes a prompt you can copy into Claude Cod
 
 | File | What it does |
 |---|---|
-| `tools/serve-book.py` | Serves the book with no caching, and routes `/api/tutor/*` to the tutor |
+| `tools/serve-book.py` | Serves every week's book with no caching (the front page opens the current week's book), and routes `/api/tutor/*` to the tutor |
 | `tools/tutor.py` | The system prompt, the request checks, the code guard, the Claude Code provider |
 | `tools/tutor_api.py` | The Anthropic API provider, the key loading and the daily budget |
 | `tools/tutor-key.py` | Saves, checks and removes the API key |
 | `tools/test_tutor.py`, `tools/test_tutor_api.py` | Offline tests |
 | `tools/tutor-eval.py` | Live red-team of the running tutor |
 | `docs/book/week1/assets/tutor.js`, `tutor.css` | The panel, the selection menu, the margin dots, the rung buttons |
+| `docs/book/week3/assets/tutor.js` | The Week 3 copy of the panel: its own conversations and rung counts, the Snake milestones. What differs from Week 1's copy is marked "Week 3:"; keep the two in step |
 | `docs/book/week1/assets/TUTOR-SPEC.md` | The contract between the pieces |
 | `tools/build-pages.py` | Builds the GitHub Pages copy of the book, which has no tutor |
 

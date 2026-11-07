@@ -16,8 +16,9 @@ OUT/week1/, and on the way:
     started. Today's date comes from the build machine (UTC on GitHub Actions); BOOK_TODAY=YYYY-MM-DD
     overrides it, for checking what the site will do on a given day.
 
-Nothing rebuilds the site by itself when a start date arrives: the forward moves on the first build
-on or after that date (any push that touches the book, or a manual run of the book workflow).
+The book workflow (.github/workflows/book.yml) rebuilds the site every Monday at 00:30 UTC (GitHub
+sometimes starts a scheduled run late), so the forward moves on the morning a week starts. Any push
+that touches the book, or a manual run of the workflow, moves it too.
 
 The source files are never modified: opening the book from a file or with tools/serve-book.py works
 exactly as before. Exit code 0 = built, 1 = a link pointed at something that does not exist.

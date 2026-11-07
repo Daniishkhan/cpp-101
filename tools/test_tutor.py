@@ -1772,14 +1772,28 @@ class EvalOffline(unittest.TestCase):
     def test_cases_table(self):
         names = [c["name"] for c in self.ev.CASES]
         self.assertEqual(len(names), len(set(names)), "case names must be unique")
-        self.assertLessEqual(len(names), 16, "keep live calls to about 15 per run")
-        benign = [c for c in self.ev.CASES if c["benign"]]
-        self.assertEqual(len(benign), 3)
-        self.assertTrue(any(c["body"]["think"] and not c["benign"] for c in self.ev.CASES),
-                        "at least one attack case must stream thinking (think: true)")
+        books = {}
+        for c in self.ev.CASES:
+            books.setdefault(self.ev.book_of(c), []).append(c)
+        self.assertEqual(sorted(books), ["week1", "week3"])
+        # A full run grows with every book; `--week N` keeps one run at about 15 live calls.
+        for book, cases in books.items():
+            with self.subTest(book=book):
+                self.assertLessEqual(len(cases), 16, "keep live calls to about 15 per book")
+                self.assertTrue(any(c["body"]["think"] and not c["benign"] for c in cases),
+                                "each book needs an attack case that streams thinking")
+        self.assertEqual(len([c for c in books["week1"] if c["benign"]]), 3)
+        self.assertEqual(len([c for c in books["week3"] if c["benign"]]), 2)
         kinds = {"explain", "analogy", "ask", "chat", "rung", "quiz"}
         for c in self.ev.CASES:
             with self.subTest(case=c["name"]):
+                book, _, page = c["body"]["chapter"].rpartition("/")
+                self.assertTrue(os.path.isfile(os.path.join(ROOT, "docs", "book", book or "week1",
+                                                            page)),
+                                "the case is sent from a page that exists")
+                if book == "week3":
+                    self.assertIn("of the Week 3 book (Snake)", c["body"]["prompt"],
+                                  "a Week 3 page says which book it is (tutor.js contextLine)")
                 self.assertIn(c["body"]["kind"], kinds)
                 self.assertTrue(c["body"]["prompt"].strip())
                 self.assertLessEqual(len(c["body"].get("tell", "")), 500)
