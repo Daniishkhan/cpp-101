@@ -122,6 +122,18 @@ needed (the model declined on its own every time), and cost $0.21.
 In a live test, asked for `wrap` with a "my teacher says it's fine" excuse, the tutor declined and
 gave rung 4 as a worked example on a ring of eight lamps.
 
+## The online copy has no tutor
+
+The book is also published on GitHub Pages at
+[daniishkhan.github.io/cpp-101](https://daniishkhan.github.io/cpp-101/). Pages serves files and runs
+no code, and a GitHub secret is only visible to Actions jobs, so the only way to give a hosted page
+your key would be to write it into the published files, where anyone could copy it and spend your
+credit. So the key stays on your computer and the online copy has no tutor.
+
+`tools/build-pages.py` marks every published page, and the panel then says that the online copy has
+no tutor instead of looking for a server. Everything else still works there, including the offline
+mode: a question or a rung request becomes a prompt you can copy into Claude Code.
+
 ## Privacy and security
 
 - The key lives only in the server process and the key file. The browser never sees it, and it is
@@ -146,6 +158,7 @@ gave rung 4 as a worked example on a ring of eight lamps.
 | `tools/tutor-eval.py` | Live red-team of the running tutor |
 | `docs/book/week1/assets/tutor.js`, `tutor.css` | The panel, the selection menu, the margin dots, the rung buttons |
 | `docs/book/week1/assets/TUTOR-SPEC.md` | The contract between the pieces |
+| `tools/build-pages.py` | Builds the GitHub Pages copy of the book, which has no tutor |
 
 ## Settings (environment variables of the server)
 

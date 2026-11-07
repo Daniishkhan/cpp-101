@@ -32,13 +32,17 @@ never writes the solution (see [CLAUDE.md](CLAUDE.md)).
 
 ### Reading the book
 
-The book is plain HTML with no build step. Either open the file directly:
+**Online:** [daniishkhan.github.io/cpp-101](https://daniishkhan.github.io/cpp-101/), published from `main`
+whenever the book changes and its check passes. The online copy has no tutor (see below).
+
+On your own machine the book is plain HTML with no build step. Either open the file directly:
 
 ```sh
 open docs/book/week1/index.html
 ```
 
-or serve it (progress tracking and the sidebar work in both modes):
+or serve it, which is the only way to get the AI tutor (progress tracking and the sidebar work in every
+mode):
 
 ```sh
 python3 tools/serve-book.py

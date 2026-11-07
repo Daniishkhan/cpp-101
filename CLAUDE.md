@@ -134,6 +134,7 @@ tools/new-challenge.sh phase1-terminal 02-snake snake
 # the book
 python3 tools/book-check.py                                   # all chapters
 python3 tools/serve-book.py                                  # serve it at http://localhost:8765
+python3 tools/build-pages.py                                 # the GitHub Pages copy (no tutor), into build-pages/
 python3 tools/test_tutor.py                                  # tutor guard + server unit tests (offline)
 python3 tools/test_tutor_api.py                              # API-provider unit tests (offline)
 python3 tools/tutor-key.py                                   # save the Anthropic API key the tutor uses (docs/tutor.md)

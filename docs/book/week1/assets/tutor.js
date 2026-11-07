@@ -356,6 +356,8 @@
   }
   function checkStatus() {
     if (location.protocol === 'file:') { setStatus({ state: 'offline', reason: 'The book was opened from a file.' }); return Promise.resolve(); }
+    // tools/build-pages.py marks the GitHub Pages copy: no server there, and no key ever goes into a page.
+    if (document.documentElement.dataset.hosted === 'static') { setStatus({ state: 'offline', reason: 'This online copy of the book has no tutor. The tutor runs on your own computer: clone the repository and start the book with python3 tools/serve-book.py.' }); return Promise.resolve(); }
     if (S.status.state !== 'online') setStatus({ state: 'checking' });
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 4000);

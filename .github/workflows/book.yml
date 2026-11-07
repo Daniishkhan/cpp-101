@@ -1,7 +1,15 @@
-# book.yml — compiles and runs every C++ example in the book, and checks every link.
+# book.yml — checks the book, and publishes it to GitHub Pages when the check passes on main.
 #
-# Only runs when the book or its checker changes, because it compiles a few hundred programs.
-# Locally: python3 tools/book-check.py
+# 1. check:  compiles and runs every C++ example in the book and checks every link
+#            (locally: python3 tools/book-check.py).
+# 2. site:   on main only, builds the static copy with tools/build-pages.py
+#            (locally: python3 tools/build-pages.py, then serve build-pages/).
+# 3. deploy: publishes that copy to https://daniishkhan.github.io/cpp-101/.
+#
+# The online copy has no tutor: the tutor needs tools/serve-book.py and your own API key on your
+# own computer, and a key never goes into a published page (docs/tutor.md).
+#
+# Only runs when the book or its tools change, because the check compiles a few hundred programs.
 name: book
 
 on:
@@ -9,20 +17,23 @@ on:
     paths:
       - "docs/book/**"
       - "tools/book-check.py"
+      - "tools/build-pages.py"
       - ".github/workflows/book.yml"
   pull_request:
     paths:
       - "docs/book/**"
       - "tools/book-check.py"
+      - "tools/build-pages.py"
       - ".github/workflows/book.yml"
   workflow_dispatch:
 
 permissions:
   contents: read
 
+# A newer push cancels an older run, except on main, where a deployment is never cut off half-way.
 concurrency:
   group: book-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   check:
@@ -30,6 +41,34 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - run: c++ --version
       - run: python3 tools/book-check.py
+
+  site:
+    name: Build the static site
+    needs: check
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - run: python3 tools/build-pages.py build-pages
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: build-pages
+
+  deploy:
+    name: Publish to GitHub Pages
+    needs: site
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5
