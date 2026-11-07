@@ -208,11 +208,11 @@ class Streaming(Base):
 
     def test_guard_withholds_a_life_function(self):
         self.write_key()
-        code = '```cpp\nint wrap(int v, int n) {\n    return (v % n + n) % n;\n}\n```\n'
+        code = '```cpp\nint wrap(int v, int n) {\n    (void)v; (void)n;\n    return 0;\n}\n```\n'  # deliberately useless body (CLAUDE.md)
         FAKE['events'] = text_events('Here:\n\n', code[:17], code[17:], 'Done.')
         out = run()
         self.assertIn('withheld', [e for e, _ in out])
-        self.assertNotIn('% n + n', joined(out))
+        self.assertNotIn('(void)v', joined(out))
         self.assertIn('withheld', joined(out))
         self.assertEqual(out[-1][0], 'done')
 
