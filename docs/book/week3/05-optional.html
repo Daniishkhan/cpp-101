@@ -1,0 +1,488 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>05 · std::optional — C++ from Life to Snake</title>
+<link rel="stylesheet" href="../week1/assets/book.css?v=9">
+<link rel="stylesheet" href="../week1/assets/tutor.css?v=9">
+<script src="../week1/assets/theme.js?v=9"></script>
+<script defer src="assets/book.js?v=9"></script>
+<script defer src="assets/tutor.js?v=9"></script>
+</head>
+<body>
+<nav class="sidebar" aria-label="Chapters"></nav>
+<main>
+<p class="chapter-kicker">Chapter 05</p>
+<h1>std::optional</h1>
+<p class="lede">At the end of this chapter you will be able to write a function that sometimes has no answer and say so in its return type, check whether an answer arrived before you use it, and hand "maybe a value" to a function as a parameter. You will also know what an optional costs in memory, and the two ways of reading one that end your program.</p>
+
+<div class="callout note"><span class="label">In this chapter</span>
+<ul>
+<li>The problem: a function that has no answer for some inputs, and why a magic value such as -1 fails.</li>
+<li><code>std::optional&lt;T&gt;</code> and <code>std::nullopt</code>: a value, or nothing, and returning one from a function.</li>
+<li>Reading an optional: <code>has_value()</code>, <code>if (opt)</code>, <code>*opt</code>, <code>opt-&gt;member</code>, <code>value_or</code>, comparing with a value.</li>
+<li>Two ways to end your program: <code>*</code> on an empty optional, and <code>.value()</code>.</li>
+<li>What an optional is in memory: a value slot and a flag.</li>
+<li>An optional parameter: "no reading arrived this second".</li>
+<li>Text to a number without stopping the program, and the optionals in <code>snake.hpp</code>.</li>
+</ul>
+</div>
+
+<h2>The problem: an answer that may not exist</h2>
+<p>Here is a small question: what is the first even number in a list? Write it as a function, the way <a href="../week1/04-functions.html">Week 1 chapter 4</a> taught. It walks the list and returns the first number whose remainder after dividing by 2 is zero. The interesting line is the last one. If the loop finishes, the list had no even number at all, and the function still has to return <em>some</em> <code>int</code>. Here it returns -1 and calls that "none".</p>
+<p>One small thing in <code>main</code> is new. The calls hand the function a list written in braces, <code>first_even({3, 8, 5, 6})</code>, where a <code>const std::vector&lt;int&gt;&amp;</code> is expected. The machine builds a nameless vector from the braces, lends it to the function and throws it away at the end of the statement. That is the <strong>temporary</strong> you met in <a href="../week1/05-references-and-const.html">Week 1 chapter 5</a>, when a string literal was handed to a <code>const std::string&amp;</code>.</p>
+
+<pre class="code" data-lang="cpp" data-file="first_even_sentinel.cpp" data-check="run"><code>#include &lt;print>
+#include &lt;vector>
+
+// The first even number in `numbers`, or -1 if there is none.
+int first_even(const std::vector&lt;int>&amp; numbers) {
+    for (int n : numbers) {
+        if (n % 2 == 0) {
+            return n;
+        }
+    }
+    return -1;  // "none": safe here only because -1 is odd, so it is never an answer
+}
+
+int main() {
+    std::println("{}", first_even({3, 8, 5, 6}));
+    std::println("{}", first_even({-4, 7}));
+    std::println("{}", first_even({1, 3, 5}));
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="first_even_sentinel.cpp"><code>8
+-4
+-1
+</code></pre>
+
+<p>It works, and the comment says why: -1 is odd, so it can never be a real answer, and a caller who sees -1 knows the list had no even number. A value with a special meaning like this is called a <strong>sentinel</strong>. Now ask the sister question, the first <em>odd</em> number, and keep the same trick:</p>
+
+<pre class="code" data-lang="cpp" data-file="first_odd_sentinel.cpp" data-check="run"><code>#include &lt;print>
+#include &lt;vector>
+
+// The first odd number in `numbers`, or -1 if there is none.
+int first_odd(const std::vector&lt;int>&amp; numbers) {
+    for (int n : numbers) {
+        if (n % 2 != 0) {  // not "== 1": in C++, -3 % 2 is -1
+            return n;
+        }
+    }
+    return -1;
+}
+
+int main() {
+    std::println("{}", first_odd({4, -1, 6}));  // there is an answer: -1
+    std::println("{}", first_odd({2, 4, 6}));   // there is no answer
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="first_odd_sentinel.cpp"><code>-1
+-1
+</code></pre>
+
+<p>Two different situations, one output. In the first list the answer really is -1; in the second there is no answer, and the function says -1 again. The caller cannot tell them apart. (The comment about <code>== 1</code> is <a href="../week1/02-values-and-types.html#negative-numbers-divide-toward-zero">Week 1 chapter 2</a>'s rule: a remainder takes the sign of the number divided, so <code>-3 % 2</code> is <code>-1</code>, and "odd" has to be written as "the remainder is not zero".)</p>
+<p>Could you pick a better sentinel? Try. 0 is even, so it is safe for <code>first_odd</code>, but it breaks <code>first_even</code>. Any odd number breaks <code>first_odd</code>. Change the question to "the first number above 100" or "the first temperature below zero" and some other set of values becomes unsafe. The deep reason is a counting argument. An <code>int</code> has 4,294,967,296 bit patterns, and when the answer can be any <code>int</code>, every one of those patterns already means a number. "There is no answer" needs one more pattern, and there is none left.</p>
+
+<div class="callout principle"><span class="label">First principle</span><p>When every value of a type can be a real answer, "no answer" is extra information. It needs a place of its own to live: at least one more bit, beside the value. Either the caller and the function carry that bit separately, or they use a type that carries the value and the bit together.</p></div>
+
+<p>You already know a way to carry the bit separately. <a href="../week1/05-references-and-const.html">Week 1 chapter 5</a> wrote <code>divide</code>, which handed back two results through references. The same shape works here: return a <code>bool</code> that says whether there was an answer, and write the answer itself through an <code>int&amp;</code>.</p>
+
+<pre class="code" data-lang="cpp" data-file="bool_and_reference_fragment.cpp" data-check="fragment"><code>// true: there was an odd number, and it has been written into `answer`
+bool first_odd(const std::vector&lt;int>&amp; numbers, int&amp; answer);
+
+int answer = 0;                       // a box that may never be filled
+if (first_odd(numbers, answer)) {     // the bool says whether it was
+    std::println("{}", answer);
+}
+</code></pre>
+
+<p>That is honest, and C code is full of it. It is also clumsy: the caller must make a box first and fill it with a meaningless 0, and because the answer and the <code>bool</code> travel separately, nothing stops a hurried caller from printing that 0 as if it were the answer. What you want is one value that is either "here is the number" or "there is no number". The standard library has exactly that type.</p>
+
+<h2>std::optional: a value, or nothing</h2>
+<p>A <strong><code>std::optional&lt;T&gt;</code></strong> is a variable that either holds one value of type <code>T</code> or holds nothing. It lives in the header <code>&lt;optional&gt;</code>. <code>std::optional&lt;int&gt;</code> reads as "maybe an int". An optional that holds a value is said to <strong>have a value</strong>; one that holds nothing is <strong>empty</strong>. There is a special value, <strong><code>std::nullopt</code></strong> ("null optional"), that means "nothing": assign it, or compare with it, and you are talking about the empty state.</p>
+
+<pre class="code" data-lang="cpp" data-file="optional_basics.cpp" data-check="run"><code>#include &lt;optional>
+#include &lt;print>
+
+int main() {
+    std::optional&lt;int> maybe;  // starts empty: no int inside
+    std::println("has a value: {}", maybe.has_value());
+
+    maybe = 42;  // now it holds 42
+    std::println("has a value: {}, the value: {}", maybe.has_value(), *maybe);
+
+    maybe = std::nullopt;  // empty again
+    std::println("has a value: {}", maybe.has_value());
+
+    std::optional&lt;int> zero = 0;  // holds 0, which is a value, not "nothing"
+    std::println("zero has a value: {}", zero.has_value());
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="optional_basics.cpp"><code>has a value: false
+has a value: true, the value: 42
+has a value: false
+zero has a value: true
+</code></pre>
+
+<p>Read it line by line. <code>std::optional&lt;int&gt; maybe;</code> makes an empty optional. A plain <code>int n;</code> would hold whatever bytes were in memory (<a href="../week1/02-values-and-types.html#always-initialise">Week 1 chapter 2</a>); an optional is never uninitialised, because empty is a well-defined state of its own. <code>has_value()</code> asks the question and gives a <code>bool</code>. <code>maybe = 42;</code> puts an <code>int</code> in. <code>*maybe</code>, with a star in front, means <strong>the value inside</strong>: the multiplication symbol with one thing after it instead of two around it, a notation borrowed from pointers (Buffer A and week 10). <code>maybe = std::nullopt;</code> empties it again.</p>
+<p>The last two lines are the point of the whole type. <code>zero</code> holds 0, and 0 is a value. An optional keeps "the number is zero" and "there is no number" apart, which no sentinel could.</p>
+
+<div class="callout analogy"><span class="label">Analogy</span><p>An optional is a box with a small lamp on the lid. The lamp is lit when there is something inside and dark when there is not. You look at the lamp first (<code>has_value()</code>), and only open the box (<code>*</code>) when it is lit.</p>
+<p>Where it breaks: a real empty box is visibly empty. An empty optional is not. Its box still exists, full size, and still holds whatever bytes were last left in that memory; opening it when the lamp is dark gives you those leftover bytes as if they were a value, and the language makes no promise about what happens. The section on the two ways to end your program shows this happening.</p></div>
+
+<h3>Returning an optional</h3>
+<p>Now rewrite <code>first_odd</code> with the honest return type:</p>
+
+<pre class="code" data-lang="cpp" data-file="first_odd_optional.cpp" data-check="run"><code>#include &lt;optional>
+#include &lt;print>
+#include &lt;vector>
+
+// The first odd number in `numbers`, or nothing if there is none.
+std::optional&lt;int> first_odd(const std::vector&lt;int>&amp; numbers) {
+    for (int n : numbers) {
+        if (n % 2 != 0) {
+            return n;  // the int is wrapped in an optional that holds it
+        }
+    }
+    return std::nullopt;  // the empty optional: "there is no answer"
+}
+
+int main() {
+    const std::optional&lt;int> a = first_odd({4, -1, 6});
+    const std::optional&lt;int> b = first_odd({2, 4, 6});
+
+    if (a.has_value()) {
+        std::println("a: the first odd number is {}", *a);
+    } else {
+        std::println("a: there is no odd number");
+    }
+
+    if (b) {  // the same question, short form
+        std::println("b: the first odd number is {}", *b);
+    } else {
+        std::println("b: there is no odd number");
+    }
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="first_odd_optional.cpp"><code>a: the first odd number is -1
+b: there is no odd number
+</code></pre>
+
+<p>Two lines changed in the function. <code>return n;</code> hands back an <code>int</code>, and the compiler wraps it in an optional that holds it. <code>return std::nullopt;</code> hands back the empty optional. In <code>main</code>, the two lists now give two clearly different results, and the caller has to ask which one it got. <code>if (b)</code> is short for <code>if (b.has_value())</code>: an optional used as a condition is true exactly when it has a value.</p>
+<p>The biggest change is not in any line of the body. It is in the first line of the function. <code>int first_odd(...)</code> claims there is always an answer. <code>std::optional&lt;int&gt; first_odd(...)</code> says, to every reader and to the compiler, "sometimes there is not, and you must look". The signature tells the truth.</p>
+
+<div class="callout principle"><span class="label">First principle</span><p>Use <code>std::optional&lt;T&gt;</code> as a return type when "no answer" is a normal, expected outcome: the list had no odd number, the word is not in the dictionary, nothing was typed. It is not for errors that should never happen; for those, a crash with a clear message (a sanitizer report, a failed test) is more useful than a quiet "nothing".</p></div>
+
+<div class="callout try"><span class="label">Try it</span><p>Write <code>std::optional&lt;int&gt; first_above(const std::vector&lt;int&gt;&amp; numbers, int limit)</code>, the first number greater than <code>limit</code>, or nothing. Call it with <code>{3, 9, 12}</code> and the limits 5, 12 and -10, and predict the three lines before you run. Then change the return type back to plain <code>int</code> and read the error the compiler gives for <code>return std::nullopt;</code>.</p></div>
+
+<h2>Reading an optional</h2>
+<p>You have seen <code>has_value()</code>, <code>if (opt)</code> and <code>*opt</code>. Two more ways of reading an optional come up all the time. <strong><code>value_or(fallback)</code></strong> gives the value if there is one and <code>fallback</code> if there is not; it is the right tool when a sensible default exists. And you can compare an optional with a plain value using <code>==</code> and <code>!=</code>, without checking first:</p>
+
+<pre class="code" data-lang="cpp" data-file="optional_reading.cpp" data-check="run"><code>#include &lt;optional>
+#include &lt;print>
+
+int main() {
+    const std::optional&lt;int> seven = 7;
+    const std::optional&lt;int> none = std::nullopt;
+
+    std::println("value_or(0):  {} and {}", seven.value_or(0), none.value_or(0));
+    std::println("== 7:         {} and {}", seven == 7, none == 7);
+    std::println("!= 7:         {} and {}", seven != 7, none != 7);
+    std::println("== nullopt:   {} and {}", seven == std::nullopt, none == std::nullopt);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="optional_reading.cpp"><code>value_or(0):  7 and 0
+== 7:         true and false
+!= 7:         false and true
+== nullopt:   false and true
+</code></pre>
+
+<p>The comparisons follow one rule: an empty optional is never equal to a value. So <code>seven == 7</code> is <code>true</code>, <code>none == 7</code> is <code>false</code>, and <code>none != 7</code> is <code>true</code>, because "nothing" is indeed not 7. Comparing with <code>std::nullopt</code> asks "is it empty?". This is exactly the form the tests for this week use: <code>CHECK(parse_key("w") == Key::Up)</code> in <code>tests/snake_test.cpp</code> is true only when <code>parse_key</code> returned an optional holding <code>Key::Up</code>.</p>
+
+<div class="callout trap"><span class="label">Trap</span><p><code>if (opt)</code> asks "is there a value?", never "is the value true or non-zero?". An optional holding 0 passes the test, as you saw with <code>zero</code>. It bites hardest with <code>std::optional&lt;bool&gt;</code>: an optional holding <code>false</code> still has a value, so <code>if (answer)</code> runs its body. When the value matters, say so: <code>if (answer == true)</code>, or <code>if (answer.value_or(false))</code>.</p></div>
+
+<h3>An optional struct, and the arrow</h3>
+<p>An optional can hold any type, including a struct of your own from <a href="01-structs.html">chapter 1</a>. Here is a small English to Dutch glossary, a vector of entries, and a function that looks a word up in it. When the word is there, the function returns the whole entry; when it is not, nothing.</p>
+
+<pre class="code" data-lang="cpp" data-file="glossary.cpp" data-check="run"><code>#include &lt;optional>
+#include &lt;print>
+#include &lt;string>
+#include &lt;vector>
+
+struct Entry {
+    std::string english;
+    std::string dutch;
+};
+
+// The entry for `word`, or nothing if the glossary does not have it.
+std::optional&lt;Entry> look_up(const std::vector&lt;Entry>&amp; glossary, const std::string&amp; word) {
+    for (const Entry&amp; entry : glossary) {
+        if (entry.english == word) {
+            return entry;
+        }
+    }
+    return std::nullopt;
+}
+
+int main() {
+    const std::vector&lt;Entry> glossary = {
+        {"cat", "kat"},
+        {"house", "huis"},
+        {"bicycle", "fiets"},
+        {"rain", "regen"},
+    };
+    const std::vector&lt;std::string> words = {"bicycle", "snow", "rain"};
+
+    for (const std::string&amp; word : words) {
+        const std::optional&lt;Entry> found = look_up(glossary, word);
+        if (found) {
+            std::println("{} is {} in Dutch", found->english, found->dutch);
+        } else {
+            std::println("{} is not in the glossary", word);
+        }
+    }
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="glossary.cpp"><code>bicycle is fiets in Dutch
+snow is not in the glossary
+rain is regen in Dutch
+</code></pre>
+
+<p><code>found</code> is a <code>std::optional&lt;Entry&gt;</code>. To reach a member of the <code>Entry</code> inside, you could write <code>(*found).dutch</code>: open the box, then take the member. That is common enough to have a shorter spelling, <strong><code>found-&gt;dutch</code></strong>, an arrow made of a minus sign and a greater-than sign. Read it as "the <code>dutch</code> of the entry inside <code>found</code>". The same rule applies as for the star: only use the arrow after you have checked that there is an entry inside.</p>
+<p>One thing worth noticing in <code>look_up</code>: <code>return entry;</code> puts a <em>copy</em> of the entry into the optional. The optional owns its own <code>Entry</code>, two strings and all, independent of the glossary. For a four-word glossary that costs nothing worth measuring; <a href="06-value-or-reference.html">chapter 6</a> is about when copies like this start to matter.</p>
+
+<h2>Two ways to end your program</h2>
+<p>An optional makes "maybe nothing" visible in the type. It does not force anyone to check. Both of the following compile without a warning.</p>
+
+<h3>The star on an empty optional</h3>
+<pre class="code" data-lang="cpp" data-file="star_empty.cpp" data-check="compile"><code>#include &lt;optional>
+#include &lt;print>
+
+int main() {
+    const std::optional&lt;int> nothing = std::nullopt;
+    std::println("has a value: {}", nothing.has_value());
+    std::println("*nothing = {}", *nothing);  // undefined behaviour: there is no int
+    return 0;
+}
+</code></pre>
+<pre class="shell"><code>$ tools/run.sh scratch/star_empty.cpp
+has a value: false
+*nothing = 1863539712
+$ tools/run.sh scratch/star_empty.cpp
+has a value: false
+*nothing = 1829968896
+$ clang++ -std=c++23 -Wall -Wextra scratch/star_empty.cpp -o scratch/star_empty
+$ ./scratch/star_empty
+has a value: false
+*nothing = 0
+</code></pre>
+<p>Three runs, three different numbers, and not a word from the sanitizers in the two runs that had them. <code>*</code> does not check the lamp. It opens the box and reads the four bytes in the value slot, which for an empty optional are whatever happened to be in that memory. That is <strong>undefined behaviour</strong> again (<a href="../week1/02-values-and-types.html#undefined-behaviour">Week 1 chapter 2</a>): the language gives no rules for what happens. The sanitizers stay quiet because nothing they watch went wrong: the memory belongs to the program, it is just not a value. The plain build is the most dangerous of the three, because 0 looks like a perfectly good answer.</p>
+
+<div class="callout trap"><span class="label">Trap</span><p>Never use <code>*opt</code> or <code>opt-&gt;member</code> without knowing that <code>opt</code> has a value: check it with <code>if (opt)</code> first, or use <code>value_or</code>. The compiler will not remind you, and the sanitizers cannot.</p></div>
+
+<div class="callout try"><span class="label">Try it</span><p>Apple's C++ library has a checking mode that does test the lamp. Compile <code>star_empty.cpp</code> with one extra flag, <code>-D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_DEBUG</code>, and run it. This time the program stops with a message: <code>libc++ Hardening assertion this->has_value() failed: optional operator* called on a disengaged value</code> ("disengaged" is the library's word for empty), and zsh reports <code>abort</code>. The flag costs speed, so it belongs in Debug builds only.</p></div>
+
+<h3>.value() on an empty optional</h3>
+<p>Optionals also have a member function <code>.value()</code> that does check the lamp. Here is what it does when the lamp is dark:</p>
+
+<pre class="code" data-lang="cpp" data-file="value_empty.cpp" data-check="compile"><code>#include &lt;optional>
+#include &lt;print>
+
+int main() {
+    const std::optional&lt;int> nothing = std::nullopt;
+    std::println("about to call .value() on an empty optional...");
+    const int n = nothing.value();
+    std::println("n = {}", n);
+    return 0;
+}
+</code></pre>
+<pre class="shell"><code>$ clang++ -std=c++23 -Wall -Wextra value_empty.cpp -o value_empty
+$ ./value_empty
+about to call .value() on an empty optional...
+libc++abi: terminating due to uncaught exception of type std::bad_optional_access: bad_optional_access
+zsh: abort      ./value_empty
+$ echo $?
+134
+</code></pre>
+<p>You have seen this shape before: it is what <code>std::stoi("abc")</code> did in <a href="../week1/08-strings-and-args.html">Week 1 chapter 8</a>. <code>.value()</code> found no value and raised an <strong>exception</strong>, the library's way of saying "I cannot do this". Nothing in the program catches exceptions, so the program ends with a message and exit code 134. This course does not use exceptions as a mechanism (week 16 explains them, and why inference code avoids them), so for you <code>.value()</code> is just a slower, more verbose way to crash. Check with <code>if</code>, then use <code>*</code>.</p>
+
+<h2>What an optional is in memory</h2>
+<p>An optional is not magic and it does not allocate anything. It is a small fixed-size box: room for one value, plus a flag. <code>sizeof</code> shows it:</p>
+
+<pre class="code" data-lang="cpp" data-file="optional_sizes.cpp" data-check="run"><code>#include &lt;optional>
+#include &lt;print>
+
+int main() {
+    std::println("char   {:2} bytes   std::optional&lt;char>   {:2} bytes", sizeof(char),
+                 sizeof(std::optional&lt;char>));
+    std::println("int    {:2} bytes   std::optional&lt;int>    {:2} bytes", sizeof(int),
+                 sizeof(std::optional&lt;int>));
+    std::println("double {:2} bytes   std::optional&lt;double> {:2} bytes", sizeof(double),
+                 sizeof(std::optional&lt;double>));
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="optional_sizes.cpp"><code>char    1 bytes   std::optional&lt;char>    2 bytes
+int     4 bytes   std::optional&lt;int>     8 bytes
+double  8 bytes   std::optional&lt;double> 16 bytes
+</code></pre>
+
+<p>An <code>int</code> is 4 bytes; an optional <code>int</code> is 8. Four of them are the value slot. One byte is the flag, a <code>bool</code> that is 1 when there is a value and 0 when there is not: the lamp. The last three are <strong>padding</strong>, the unused bytes <a href="01-structs.html#padding-the-gaps-the-compiler-adds">chapter 1</a> showed in a struct: an <code>int</code> must start at a multiple of 4, and in a vector each optional starts where the previous one ends, so the size is rounded up to a multiple of 4. A <code>double</code> wants a multiple of 8, so its optional is 8 + 1 + 7 = 16; a <code>char</code> is happy anywhere, so its optional is 1 + 1 = 2.</p>
+
+<pre class="grid-figure">std::optional&lt;int&gt; holding 42    [ 42 . . . ][ 1 ][ pad pad pad ]     8 bytes
+std::optional&lt;int&gt; that is empty  [ ? ? ? ?  ][ 0 ][ pad pad pad ]     8 bytes
+                                    value slot  flag   padding</pre>
+
+<p>Three facts follow from the picture. An empty optional is exactly as big as a full one, because the slot is always there. The question marks are why <code>*</code> on an empty optional printed a different number on every run: it read the slot without looking at the flag. And copying an optional copies its bytes, 8 for an optional <code>int</code>, so a small optional is as cheap to pass around as a <code>double</code>.</p>
+
+<div class="callout twin"><span class="label">Inference twin</span><p>A request to a language-model server is full of settings that may or may not be given: a temperature, a maximum number of tokens, a seed, a stop word. Absent is not the same as zero. A temperature of 0.0 is a real setting (always pick the most likely next token), while an absent temperature means "use the default". A C++ server reads such a request into a struct of <code>std::optional</code> fields for exactly the reason in the first section: every <code>double</code> is a possible temperature, so "not given" needs its own flag. In week 17 you meet the optional's sibling, <code>std::expected</code>, in the weight loader: it holds either the tensor you asked for or the <em>reason</em> it could not be read (the file is missing, the shape is wrong), so a failure carries an explanation instead of a bare "nothing".</p></div>
+
+<h2>An optional parameter: no reading this second</h2>
+<p>Optionals are not only for answers. A function can take one as a parameter, to say "the caller may or may not have this for me". Picture a greenhouse thermostat. Its thermometer sends one reading per second over a radio link that sometimes drops a message, and the thermostat smooths the readings before it acts on them, so that one odd reading does not switch the heating on: each second, its value moves a quarter of the way from where it is towards the new reading. That is a <strong>smoothing filter</strong>. When a second passes with no reading at all, the filter has nothing to move towards, so it keeps the value it had.</p>
+
+<pre class="code" data-lang="cpp" data-file="smoothing.cpp" data-check="run"><code>#include &lt;optional>
+#include &lt;print>
+#include &lt;vector>
+
+// One step of a smoothing filter: move a quarter of the way from `previous`
+// towards the new reading. No reading this second: keep the previous value.
+double smooth(double previous, std::optional&lt;double> reading) {
+    if (!reading) {
+        return previous;
+    }
+    return previous + 0.25 * (*reading - previous);
+}
+
+int main() {
+    // One entry per second. std::nullopt is a second in which no reading arrived.
+    const std::vector&lt;std::optional&lt;double>> readings = {
+        20.0, 24.0, std::nullopt, std::nullopt, 24.0, 24.0, std::nullopt, 16.0,
+    };
+
+    double value = 20.0;
+    int second = 0;
+    for (std::optional&lt;double> reading : readings) {
+        value = smooth(value, reading);
+        if (reading) {
+            std::println("second {}: reading {:4.1f}   smoothed {:5.2f}", second, *reading, value);
+        } else {
+            std::println("second {}: no reading     smoothed {:5.2f}", second, value);
+        }
+        ++second;
+    }
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="smoothing.cpp"><code>second 0: reading 20.0   smoothed 20.00
+second 1: reading 24.0   smoothed 21.00
+second 2: no reading     smoothed 21.00
+second 3: no reading     smoothed 21.00
+second 4: reading 24.0   smoothed 21.75
+second 5: reading 24.0   smoothed 22.31
+second 6: no reading     smoothed 22.31
+second 7: reading 16.0   smoothed 20.73
+</code></pre>
+
+<p><code>smooth</code> takes the previous value and a <code>std::optional&lt;double&gt;</code>. Its first line handles the empty case: <code>!reading</code>, "not reading", is true when the optional is empty, and the previous value goes straight back. Otherwise it moves a quarter of the way: from 20 towards 24 is a step of 4, a quarter of that is 1, so second 1 shows 21.00. Seconds 2 and 3 bring nothing and the value holds at 21.00 instead of falling to zero. The readings sit in a <code>std::vector&lt;std::optional&lt;double&gt;&gt;</code>, a vector of maybe-doubles, where each <code>std::nullopt</code> is a lost second. Without optionals you would need a sentinel temperature for "lost", and every temperature is a possible reading.</p>
+<p>Notice the parameter type: <code>std::optional&lt;double&gt;</code> by value, not by <code>const&amp;</code>. It is 16 bytes, small enough that copying it is cheaper than going through a reference. That is one of the rules of thumb from <a href="../week1/05-references-and-const.html">Week 1 chapter 5</a>, and <a href="06-value-or-reference.html">chapter 6</a> tests it on real types.</p>
+
+<div class="callout try"><span class="label">Try it</span><p>Change the filter to move halfway (<code>0.5</code>) instead of a quarter, and predict the value at second 4 before running. Then add a counter to <code>main</code> that prints how many seconds had no reading. Finally, try the one-line version of the body: <code>return previous + 0.25 * (reading.value_or(previous) - previous);</code>. Why does it give exactly the same output? (Work out what it computes when there is no reading.)</p></div>
+
+<h2>Text to a number, without stopping the program</h2>
+<p><a href="../week1/08-strings-and-args.html">Week 1 chapter 8</a> turned text into numbers with <code>std::stoi</code>. It has two habits you saw there: given <code>"80x24"</code> it quietly returns 80 and throws the rest away, and given <code>"eighty"</code> it ends the program with an exception, because an <code>int</code> has no spare value for "that was not a number". Now you have a type with a spare value. Here is a converter that accepts digits only and says "not a number" instead of stopping:</p>
+
+<pre class="code" data-lang="cpp" data-file="digits.cpp" data-check="run"><code>#include &lt;optional>
+#include &lt;print>
+#include &lt;string>
+#include &lt;vector>
+
+// The number written in `text`, or nothing if `text` is not 1 to 9 digits.
+// Nine digits always fit in an int: 999,999,999 is less than 2,147,483,647.
+std::optional&lt;int> digits_to_int(const std::string&amp; text) {
+    if (text.empty() || text.size() > 9) {
+        return std::nullopt;
+    }
+    int value = 0;
+    for (char c : text) {
+        if (c &lt; '0' || c > '9') {
+            return std::nullopt;  // one stray character spoils the whole text
+        }
+        value = value * 10 + (c - '0');  // '7' - '0' is 7: the digits are bytes 48 to 57
+    }
+    return value;
+}
+
+int main() {
+    const std::vector&lt;std::string> texts = {"42", "007", "80x24", "", "eighty", "-3", "1234567890"};
+    for (const std::string&amp; text : texts) {
+        const std::optional&lt;int> number = digits_to_int(text);
+        if (number) {
+            std::println("\"{}\" -> {}", text, *number);
+        } else {
+            std::println("\"{}\" -> not a number", text);
+        }
+    }
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="digits.cpp"><code>"42" -> 42
+"007" -> 7
+"80x24" -> not a number
+"" -> not a number
+"eighty" -> not a number
+"-3" -> not a number
+"1234567890" -> not a number
+</code></pre>
+
+<p>The loop is the way you read a number aloud from left to right. Start with 0. For each digit, multiply what you have by 10 and add the digit: <code>"427"</code> goes 0, then 4, then 42, then 427. To turn the character <code>'7'</code> into the number 7, the function uses the fact from <a href="../week1/08-strings-and-args.html#a-char-is-a-small-number">Week 1 chapter 8</a> that a <code>char</code> is a small number: the digit characters <code>'0'</code> to <code>'9'</code> are the bytes 48 to 57, in order, so <code>c - '0'</code> is the digit's value. Any other character, and the whole text is refused.</p>
+<p>The limit of nine digits is first principles, not fussiness. The largest <code>int</code> is 2,147,483,647, ten digits long. Every nine-digit number fits; not every ten-digit one does, and 9,999,999,999 would overflow, which is undefined behaviour. Refusing ten digits also refuses some numbers that would have fitted, such as 1,234,567,890, but it makes overflow impossible with one simple check. And unlike <code>std::stoi</code>, it refuses <code>"80x24"</code> outright, which for a program's arguments is friendlier: the user hears about the typo instead of silently getting 80.</p>
+
+<div class="callout try"><span class="label">Try it</span><p>Write a <code>main</code> that reads <code>argv[1]</code> through <code>digits_to_int</code> and prints either the number or one line saying what is wrong, and returns a non-zero status for bad input. Run it with <code>12</code>, <code>12a</code> and no argument at all (remember <a href="../week1/08-strings-and-args.html">Week 1 chapter 8</a>'s check before touching <code>argv[1]</code>). Then decide, and write down, what your converter should do with a leading <code>+</code> sign.</p></div>
+
+<h2>The optionals in snake.hpp</h2>
+<p>Open <code>phase1-terminal/02-snake/src/snake.hpp</code> and look for <code>std::optional</code>. It appears in four declarations. Read each one aloud, the way <a href="../week1/05-references-and-const.html">Week 1 chapter 5</a> read <code>life.hpp</code>; do not implement anything yet.</p>
+<ul>
+<li><code>std::optional&lt;Key&gt; parse_key(const std::string&amp; bytes);</code>: "give me the bytes read from the keyboard; I hand back maybe a key". Its comment lists when the answer is nothing, and the first case is the most common: no key was pressed at all.</li>
+<li><code>std::optional&lt;Point&gt; place_food(const Body&amp; body, int width, int height, std::mt19937&amp; rng);</code>: "maybe a free cell". Nothing means the snake fills the board.</li>
+<li><code>Direction steer(Direction heading, std::optional&lt;Direction&gt; wanted);</code>: "give me the heading, and maybe a direction the player asked for". Nothing means no direction key this tick.</li>
+<li><code>void tick(Game&amp; game, std::optional&lt;Direction&gt; wanted, std::mt19937&amp; rng);</code>: the same maybe-a-direction, handed on.</li>
+</ul>
+<p>Each is the situation from the first section: a key, a cell and a direction have no spare value for "none". The optional parameters travel by value, like <code>reading</code> in <code>smooth</code>, because they are a few bytes. What each function <em>does</em> with its optional is the challenge; <a href="09-build-snake.html">chapter 9</a> has the hint ladders.</p>
+
+<h2>Check yourself</h2>
+<div class="quiz">
+<div class="q"><p>A function returns the position of a word in a list as an <code>int</code>, and -1 when the word is missing. Why is that sentinel safe, when -1 was not safe for <code>first_odd</code>?</p><details class="answer"><summary>Answer</summary><p>A position is never negative, so -1 can never be a real answer: the type <code>int</code> has values the answer never uses, and one of them can mean "none". For <code>first_odd</code> every odd <code>int</code>, including -1, is a possible answer, so no value is left over. A sentinel is safe exactly when the real answers leave some values of the type unused.</p></details></div>
+
+<div class="q"><p>What does each optional hold after these lines: <code>std::optional&lt;int&gt; a;</code>, <code>std::optional&lt;int&gt; b = 0;</code>, <code>std::optional&lt;int&gt; c = std::nullopt;</code>? Which of <code>if (a)</code>, <code>if (b)</code>, <code>if (c)</code> run their body?</p><details class="answer"><summary>Answer</summary><p><code>a</code> is empty, <code>b</code> holds 0, <code>c</code> is empty. Only <code>if (b)</code> runs its body: the condition asks whether there is a value, and 0 is a value.</p></details></div>
+
+<div class="q"><p><code>first_odd({2, 4})</code> returns an empty optional. What are <code>first_odd({2, 4}) == 5</code>, <code>first_odd({2, 4}) != 5</code> and <code>first_odd({2, 4}).value_or(5)</code>?</p><details class="answer"><summary>Answer</summary><p><code>false</code>, <code>true</code> and <code>5</code>. An empty optional is never equal to a value, so it is "not equal" to every value; <code>value_or</code> gives the fallback when there is nothing inside.</p></details></div>
+
+<div class="q"><p>Why did <code>*nothing</code> print a different number on every run under <code>tools/run.sh</code>, and why did neither sanitizer report it?</p><details class="answer"><summary>Answer</summary><p><code>*</code> reads the value slot without looking at the flag. In an empty optional the slot holds leftover bytes, so the result is whatever those bytes were (undefined behaviour). The sanitizers did not report it because the slot is memory the program owns; reading it is not an out-of-bounds or use-after-free access, it is reading bytes that were never set to a value.</p></details></div>
+
+<div class="q"><p><code>sizeof(std::optional&lt;double&gt;)</code> is 16 on your Mac. Account for every byte.</p><details class="answer"><summary>Answer</summary><p>8 bytes for the <code>double</code> value slot, 1 byte for the flag that says whether there is a value, and 7 bytes of padding so that the total is a multiple of 8, which keeps the slot of the next optional in a vector on an 8-byte boundary.</p></details></div>
+
+<div class="q"><p>What does <code>.value()</code> do on an empty optional, and why does this course prefer <code>if (opt)</code> followed by <code>*opt</code>?</p><details class="answer"><summary>Answer</summary><p>It throws an exception, <code>std::bad_optional_access</code>. Nothing catches it, so the program ends with <code>libc++abi: terminating due to uncaught exception</code> and exit code 134, like <code>std::stoi("abc")</code>. This course does not use exceptions, so the honest pattern is to check first and then read with <code>*</code>, or to use <code>value_or</code> when there is a sensible default.</p></details></div>
+
+<div class="q"><p>What do <code>digits_to_int("12a")</code> and <code>std::stoi("12a")</code> each give? Which would you want for a <code>--width</code> argument, and why?</p><details class="answer"><summary>Answer</summary><p><code>digits_to_int("12a")</code> returns an empty optional; <code>std::stoi("12a")</code> returns 12 and silently ignores the <code>a</code>. For an argument, refusing is better: <code>12a</code> is almost certainly a typo, and the user should hear about it rather than get a board 12 wide without knowing why.</p></details></div>
+</div>
+
+<h2>What you can do now</h2>
+<ul>
+<li>Explain, with the counting argument, why a sentinel fails when every value of the type is a possible answer.</li>
+<li>Write a function that returns <code>std::optional&lt;T&gt;</code>, handing back a value or <code>std::nullopt</code>.</li>
+<li>Read an optional safely with <code>has_value()</code> or <code>if (opt)</code> followed by <code>*opt</code> or <code>opt-&gt;member</code>, and with <code>value_or</code>; compare one with a value or with <code>std::nullopt</code>.</li>
+<li>Recognise the two ways to end a program with an optional: <code>*</code> on an empty one (silent undefined behaviour) and <code>.value()</code> (an uncaught exception).</li>
+<li>Say what an optional is in memory: a value slot, a flag and padding, and why an empty one is as big as a full one.</li>
+<li>Take "maybe a value" as a parameter, by value when it is small, and keep the previous state when nothing arrived.</li>
+<li>Turn text into a number without exceptions, and read the four optionals in <code>snake.hpp</code> as plain sentences.</li>
+</ul>
+</main>
+</body>
+</html>

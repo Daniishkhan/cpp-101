@@ -1,0 +1,636 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>07 · Scope, lifetime and RAII — C++ from Life to Snake</title>
+<link rel="stylesheet" href="../week1/assets/book.css?v=9">
+<link rel="stylesheet" href="../week1/assets/tutor.css?v=9">
+<script src="../week1/assets/theme.js?v=9"></script>
+<script defer src="assets/book.js?v=9"></script>
+<script defer src="assets/tutor.js?v=9"></script>
+</head>
+<body>
+<nav class="sidebar" aria-label="Chapters"></nav>
+<main>
+<p class="chapter-kicker">Chapter 07</p>
+<h1>Scope, lifetime and RAII</h1>
+<p class="lede">At the end of this chapter you will be able to say exactly when every object in a program is born and when it dies, write a small struct that cleans up after itself however its scope is left, change one terminal setting and always put it back, and make Ctrl-C end a loop cleanly instead of killing the program. That last one keeps the promise of <a href="../week1/09-terminal.html#ctrl-c-and-the-lost-cursor">Week 1 chapter 9</a>.</p>
+
+<div class="callout note"><span class="label">In this chapter</span>
+<ul>
+<li>Scope (where a name can be used) and lifetime (when an object exists).</li>
+<li>A struct whose constructor and destructor print, to watch objects live and die in blocks, loops, globals and vectors.</li>
+<li>Two ways to outlive an object by mistake: a reference to a dead local, and <code>std::exit</code>.</li>
+<li>RAII: a guard that hides the cursor and always shows it again.</li>
+<li>The terminal driver's switches: flag words and the bit operators <code>&amp;</code>, <code>|</code>, <code>~</code>.</li>
+<li>A second guard that turns echo off for a password prompt.</li>
+<li>Ctrl-C, what it leaves behind, and the fix: a signal handler that sets a flag.</li>
+</ul>
+</div>
+
+<h2>Scope and lifetime are two different questions</h2>
+<p><a href="../week1/04-functions.html">Week 1 chapter 4</a> introduced <strong>scope</strong>: the part of the program text where a name can be used. A pair of braces makes a <strong>block</strong>, and a name declared in a block can be used from its declaration to the closing brace. The braces need not belong to a function, an <code>if</code> or a loop; a bare pair makes a block too. The compiler checks scope:</p>
+
+<pre class="code" data-lang="cpp" data-file="scope_error.cpp" data-check="error"><code>#include &lt;print>
+
+int main() {
+    {
+        int inner = 42;
+        std::println("inside the block: {}", inner);
+    }
+    std::println("after the block: {}", inner);  // the name ended with the block
+    return 0;
+}
+</code></pre>
+<pre class="output"><code>scope_error.cpp:8:41: error: use of undeclared identifier 'inner'
+    8 |     std::println("after the block: {}", inner);  // the name ended with the block
+      |                                         ^~~~~
+1 error generated.
+</code></pre>
+
+<p>Scope is about <em>text</em>: which lines may mention <code>inner</code>. <strong>Lifetime</strong> is about <em>time</em>: while the program runs, when does the box exist? For a local the two match: the box is made when the declaration runs and destroyed when the program leaves the block. But they are not the same thing, and this chapter's bugs live in the gap: a name still usable for an object that no longer exists. For an <code>int</code> you cannot watch a lifetime, because nothing visible happens when an <code>int</code> dies. For your own structs you can make something happen.</p>
+
+<h2>A struct that announces its birth and death</h2>
+<p>A struct may contain two special functions. One with the struct's own name and no return type, not even <code>void</code>, is the <strong>constructor</strong>: it runs automatically whenever an object of the type is created. One with the struct's name after a <code>~</code> (tilde) is the <strong>destructor</strong>: it runs automatically whenever an object of the type is destroyed. You never call either yourself. This chapter uses only the simplest form, with empty parentheses; week 4 goes deep.</p>
+
+<pre class="code" data-lang="cpp" data-file="noisy.cpp" data-check="run"><code>#include &lt;print>
+
+int next_number = 1;  // a global: outside every function, alive for the whole run
+
+struct Noisy {
+    int number = 0;
+
+    Noisy() {  // the constructor: runs when a Noisy is created
+        number = next_number;
+        next_number += 1;
+        std::println("  Noisy {} is born", number);
+    }
+
+    ~Noisy() {  // the destructor: runs when a Noisy dies
+        std::println("  Noisy {} dies", number);
+    }
+};
+
+int main() {
+    std::println("main starts");
+    Noisy a;
+    {
+        std::println("inner block starts");
+        Noisy b;
+        Noisy c;
+        std::println("inner block ends");
+    }
+    std::println("back in main");
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="noisy.cpp"><code>main starts
+  Noisy 1 is born
+inner block starts
+  Noisy 2 is born
+  Noisy 3 is born
+inner block ends
+  Noisy 3 dies
+  Noisy 2 dies
+back in main
+  Noisy 1 dies
+</code></pre>
+
+<p><code>int next_number = 1;</code> sits outside every function, which makes it a <strong>global</strong>: its scope is the rest of the file and its lifetime is the whole run. Each <code>Noisy</code> takes a number from it, so you can tell them apart. Now read the output against the code. <code>a</code> is born when its declaration runs, <code>b</code> and <code>c</code> inside the block in the order declared. At the block's closing brace both die, in <em>reverse</em> order: <code>c</code>, then <code>b</code>. <code>a</code> dies last, after <code>back in main</code>: leaving <code>main</code> is leaving a block too.</p>
+
+<div class="callout principle"><span class="label">First principle</span><p>A local object dies when the program leaves the block that holds it, and the objects of one block die in the reverse of the order they were born: last in, first out, like a stack of plates. Reverse order is what makes it safe for a later object to depend on an earlier one: the later one is taken apart while the earlier one still exists.</p></div>
+
+<h3>A loop body is a new block every time round</h3>
+<pre class="code" data-lang="cpp" data-file="loop_lifetime.cpp" data-check="run"><code>#include &lt;print>
+
+int next_number = 1;
+
+struct Noisy {
+    int number = 0;
+    Noisy() {
+        number = next_number;
+        next_number += 1;
+        std::println("  Noisy {} is born", number);
+    }
+    ~Noisy() {
+        std::println("  Noisy {} dies", number);
+    }
+};
+
+int main() {
+    for (int i = 0; i &lt; 3; ++i) {
+        Noisy n;
+        std::println("  iteration {} uses Noisy {}", i, n.number);
+    }
+    std::println("loop finished");
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="loop_lifetime.cpp"><code>  Noisy 1 is born
+  iteration 0 uses Noisy 1
+  Noisy 1 dies
+  Noisy 2 is born
+  iteration 1 uses Noisy 2
+  Noisy 2 dies
+  Noisy 3 is born
+  iteration 2 uses Noisy 3
+  Noisy 3 dies
+loop finished
+</code></pre>
+<p>Every pass enters the loop body and leaves it again, so <code>n</code> is three different objects that share a name, and each is gone before the next pass begins.</p>
+
+<h3>Globals live for the whole program; a vector's elements die with it</h3>
+<pre class="code" data-lang="cpp" data-file="global_and_vector.cpp" data-check="run"><code>#include &lt;print>
+#include &lt;vector>
+
+int next_number = 1;
+
+struct Noisy {
+    int number = 0;
+    Noisy() {
+        number = next_number;
+        next_number += 1;
+        std::println("  Noisy {} is born", number);
+    }
+    ~Noisy() {
+        std::println("  Noisy {} dies", number);
+    }
+};
+
+Noisy first_of_all;  // a global object: born before main starts, dies after main ends
+
+void make_three() {
+    std::println("make_three starts");
+    std::vector&lt;Noisy> three(3);  // three Noisy objects, owned by the vector
+    std::println("make_three ends");
+}
+
+int main() {
+    std::println("main starts");
+    make_three();
+    std::println("main ends");
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="global_and_vector.cpp"><code>  Noisy 1 is born
+main starts
+make_three starts
+  Noisy 2 is born
+  Noisy 3 is born
+  Noisy 4 is born
+make_three ends
+  Noisy 4 dies
+  Noisy 3 dies
+  Noisy 2 dies
+main ends
+  Noisy 1 dies
+</code></pre>
+<p><code>first_of_all</code> is a global object: born <em>before</em> <code>main</code> starts and dead only after <code>main</code> has returned. <code>three</code> owns its three elements (<a href="../week1/06-vector.html#who-owns-the-elements">Week 1 chapter 6</a>), so they die with it at the end of <code>make_three</code>. This library destroys them last to first; the standard promises no order for a vector's elements, so do not rely on it.</p>
+
+<div class="callout try"><span class="label">Try it</span><p>In <code>noisy.cpp</code>, move <code>Noisy a;</code> below the inner block, put a <code>Noisy</code> inside an <code>if</code>, and call a function that declares two. Write down the expected lines first, then run. For every line you got wrong, find the closing brace that explains it.</p></div>
+
+<h2>Two ways to outlive an object by mistake</h2>
+<h3>A reference to a dead local</h3>
+<p><a href="../week1/05-references-and-const.html">Week 1 chapter 5</a> warned you never to return a reference to a local. Now you can watch why:</p>
+
+<pre class="code" data-lang="cpp" data-file="dangling_noisy.cpp" data-check="fragment"><code>#include &lt;print>
+
+int next_number = 1;
+
+struct Noisy {
+    int number = 0;
+    Noisy() {
+        number = next_number;
+        next_number += 1;
+        std::println("  Noisy {} is born", number);
+    }
+    ~Noisy() {
+        std::println("  Noisy {} dies", number);
+    }
+};
+
+const Noisy&amp; make_noisy() {
+    Noisy local;
+    return local;  // a name for an object that dies at the closing brace
+}
+
+int main() {
+    const Noisy&amp; r = make_noisy();
+    std::println("using Noisy {}", r.number);
+    return 0;
+}
+</code></pre>
+<pre class="shell"><code>$ clang++ -std=c++23 -Wall -Wextra dangling_noisy.cpp -o dangling_noisy
+dangling_noisy.cpp:19:12: warning: reference to stack memory associated with local variable 'local' returned [-Wreturn-stack-address]
+   19 |     return local;  // a name for an object that dies at the closing brace
+      |            ^~~~~
+1 warning generated.
+</code></pre>
+
+<p>A warning, not an error, so the program is built. Run it and the lines come in this order: <code>Noisy 1 is born</code>, <code>Noisy 1 dies</code>, <code>using Noisy ...</code>. The object died at the closing brace of <code>make_noisy</code>, before <code>main</code> used the reference. The number after "using" is not promised: 0 in a plain build on this Mac, 41448480 under <code>tools/run.sh</code>, and neither sanitizer said a word. The reference's scope outlived the object's lifetime, and this warning is your only guard.</p>
+
+<h3>std::exit skips the destructors of locals</h3>
+<p><code>std::exit(status)</code>, from <code>&lt;cstdlib&gt;</code>, ends the program on the spot from anywhere, with that exit status:</p>
+
+<pre class="code" data-lang="cpp" data-file="exit_skips.cpp" data-check="run"><code>#include &lt;cstdlib>
+#include &lt;print>
+
+int next_number = 1;
+
+struct Noisy {
+    int number = 0;
+    Noisy() {
+        number = next_number;
+        next_number += 1;
+        std::println("  Noisy {} is born", number);
+    }
+    ~Noisy() {
+        std::println("  Noisy {} dies", number);
+    }
+};
+
+Noisy global_one;
+
+int main() {
+    std::println("main starts");
+    Noisy local;
+    std::println("calling std::exit(0)");
+    std::exit(0);  // ends the program here: nothing below this line runs
+}
+</code></pre>
+<pre class="output" data-for="exit_skips.cpp"><code>  Noisy 1 is born
+main starts
+  Noisy 2 is born
+calling std::exit(0)
+  Noisy 1 dies
+</code></pre>
+
+<p>There is no <code>Noisy 2 dies</code>. <code>std::exit</code> does not leave <code>main</code>'s block, it stops the program, so no closing brace is reached and no local destructor runs; only the globals are cleaned up. For a <code>Noisy</code> that costs a line of output. For the guards below it costs a terminal left in the wrong state. In this book, a program ends by returning from <code>main</code>.</p>
+
+<h2>RAII: tie the clean-up to a lifetime</h2>
+<p>Some actions come in pairs: hide the cursor and show it again; change a terminal setting and put it back; open a file and close it. The second half must happen however the code in between ends. Writing it by hand at every way out fails the day you add a way out, as Life's cursor showed.</p>
+<p>Instead, put the first half in a constructor and the second half in a destructor, and make an object of that type a local variable. The language guarantees the destructor runs on <em>every</em> ordinary way out of the block: the closing brace, an early <code>return</code>, a <code>break</code> or a <code>continue</code>. This pattern is <strong>RAII</strong>, "resource acquisition is initialisation": the thing is acquired when the object is initialised and released when it dies. An object whose only job is that is a <strong>guard</strong>. <a href="../week1/06-vector.html">Week 1 chapter 6</a> named RAII when a vector gave back its own memory; now you write your own.</p>
+
+<div class="callout analogy"><span class="label">Analogy</span><p>A guard is a door with a spring closer. You open it once and never have to remember to shut it: walk through, run through or turn back halfway, and the spring closes it behind you.</p>
+<p>Where it breaks: the spring only acts when you leave through that door. Two ways out of a program climb out of the window instead: <code>std::exit</code>, which you have just seen, and being killed by a signal, which is what Ctrl-C does. The end of this chapter turns the second one into an ordinary way out.</p></div>
+
+<h3>Guard 1: a cursor that always comes back</h3>
+<p>Here is Week 1's hidden cursor as a guard, protecting a countdown that can give up early. The early stop is a <code>std::optional&lt;int&gt;</code> from <a href="05-optional.html">chapter 5</a>, so the second countdown can have none.</p>
+
+<pre class="code" data-lang="cpp" data-file="countdown_guard.cpp" data-check="compile"><code>#include &lt;chrono>
+#include &lt;cstdio>
+#include &lt;optional>
+#include &lt;print>
+#include &lt;thread>
+
+// While a CursorHidden exists, the terminal's cursor is hidden.
+struct CursorHidden {
+    CursorHidden() {
+        std::print("\x1b[?25l");  // hide the cursor (Week 1 chapter 9)
+        std::fflush(stdout);
+    }
+    ~CursorHidden() {
+        std::print("\x1b[?25h");  // show it again
+        std::fflush(stdout);
+    }
+};
+
+// Counts down from `from`. Gives up at `scrub_at`, if there is one. True means lift-off.
+bool countdown(int from, std::optional&lt;int> scrub_at) {
+    using namespace std::chrono_literals;
+    CursorHidden cursor;
+    for (int seconds = from; seconds > 0; --seconds) {
+        if (scrub_at == seconds) {
+            std::println("\rscrubbed at {}", seconds);
+            return false;  // way out 1: early return
+        }
+        std::print("\r{:2} ", seconds);
+        std::fflush(stdout);
+        std::this_thread::sleep_for(1s);
+    }
+    std::println("\rlift-off");
+    return true;  // way out 2: the normal end
+}
+
+int main() {
+    if (!countdown(5, 3)) {
+        std::println("trying again");
+        countdown(5, std::nullopt);
+    }
+    return 0;
+}
+</code></pre>
+<p>Run it and watch. The first countdown shows 5 and 4, prints <code>scrubbed at 3</code> and returns early; the second runs from 5 to <code>lift-off</code>. The cursor is hidden during each countdown and back after each, including after the early return, although no "show" line is anywhere near either <code>return</code>. Recorded through a terminal, the bytes say the same: <code>\x1b[?25l</code> before the first 5, <code>\x1b[?25h</code> straight after <code>scrubbed at 3</code>, and the same pair around the second countdown. <code>cursor</code> is never mentioned after its declaration; its job is to exist. (The compiler does not call it unused, because a variable whose type has a constructor or destructor is assumed to be there for them.)</p>
+
+<div class="callout try"><span class="label">Try it</span><p>Replace <code>return false;</code> with <code>break;</code>, and predict what the first countdown now prints and whether the cursor comes back. Then press Ctrl-C during the second countdown and look at your prompt: the cursor is gone (<code>tput cnorm</code> brings it back). The guard did not run. Why not is the rest of this chapter.</p></div>
+
+<h2>The terminal driver and its switches</h2>
+<p>Between your keyboard and your program sits a part of the operating system called the <strong>terminal driver</strong>; Week 1 chapter 9 met it adding a carriage return before every newline you print. On the input side it does three things you have relied on without noticing:</p>
+<ul>
+<li><strong>Line mode</strong>, officially <strong>canonical mode</strong>: it collects what you type into a line and gives your program nothing until Enter. Until then the line is the driver's, Backspace edits it, and your program never sees the mistake.</li>
+<li><strong>Echo</strong>: it sends every key you type back to the screen. Your program never printed those letters.</li>
+<li><strong>Ctrl-C as a signal</strong>: Ctrl-C does not reach your program as a byte. The driver sends a <strong>signal</strong>, a message from the operating system that arrives outside the program's normal flow. This one is <code>SIGINT</code>, the interrupt signal, and unless the program has made arrangements, it ends the program on the spot.</li>
+</ul>
+<p>Each is a switch a program may flip: a password prompt wants echo off, and Snake wants line mode off too (<a href="08-keys-and-the-loop.html">chapter 8</a>). The switches live in a struct of type <code>termios</code>, from the C header <code>&lt;termios.h&gt;</code>, packed as bits into a few numbers called flag words.</p>
+
+<h3>A flag word: one number, many switches</h3>
+<p>A number is stored as a pattern of bits (<a href="../week1/02-values-and-types.html">Week 1 chapter 2</a>). A <strong>flag word</strong> uses each bit as a separate on-off switch. Each switch gets a number with exactly one bit set, a power of two: 1, 2, 4, 8, which are <code>0001</code>, <code>0010</code>, <code>0100</code>, <code>1000</code> in binary. Such a one-bit number is a <strong>mask</strong>. Three operators, each working on every bit position separately, do the rest:</p>
+<table>
+<thead><tr><th>Operator</th><th>A result bit is 1 when...</th><th>Used for</th><th>Example</th></tr></thead>
+<tbody>
+<tr><td><code>a | b</code> (or)</td><td>it is 1 in <code>a</code>, in <code>b</code>, or in both</td><td>switching on: <code>word |= mask</code></td><td><code>1001 | 0010</code> is <code>1011</code></td></tr>
+<tr><td><code>a &amp; b</code> (and)</td><td>it is 1 in both</td><td>testing: <code>(word &amp; mask) != 0</code></td><td><code>1011 &amp; 1000</code> is <code>1000</code></td></tr>
+<tr><td><code>~a</code> (not)</td><td>it is 0 in <code>a</code>: every bit flips</td><td>switching off: <code>word &amp;= ~mask</code></td><td><code>~0001</code> is <code>1110</code> (in four bits)</td></tr>
+</tbody>
+</table>
+<p>Here they are on four light switches. <code>0b</code> in front of a number means "written in binary", and <code>{:04b}</code> prints a number in binary, at least four digits, with leading zeros.</p>
+
+<pre class="code" data-lang="cpp" data-file="lights.cpp" data-check="run"><code>#include &lt;print>
+
+int main() {
+    // One switch per bit. In binary, 1, 2, 4 and 8 are 0001, 0010, 0100 and 1000.
+    const unsigned int kitchen = 0b0001;
+    const unsigned int hall = 0b0010;
+    const unsigned int bedroom = 0b0100;
+    const unsigned int garden = 0b1000;
+
+    unsigned int lights = kitchen | garden;  // two lights on
+    std::println("start:              {:04b}", lights);
+
+    lights |= hall;  // switch the hall on
+    std::println("hall on:            {:04b}", lights);
+
+    lights &amp;= ~kitchen;  // switch the kitchen off
+    std::println("kitchen off:        {:04b}", lights);
+
+    std::println("garden on?          {}", (lights &amp; garden) != 0);
+    std::println("bedroom on?         {}", (lights &amp; bedroom) != 0);
+    std::println("~kitchen, all bits: {:032b}", ~kitchen);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="lights.cpp"><code>start:              1001
+hall on:            1011
+kitchen off:        1010
+garden on?          true
+bedroom on?         false
+~kitchen, all bits: 11111111111111111111111111111110
+</code></pre>
+
+<p><code>kitchen | garden</code> is <code>0001 | 1000</code>, so <code>1001</code>. <code>lights |= hall</code>, short for <code>lights = lights | hall</code>, sets one bit and leaves the rest. Switching off takes two operators: <code>~kitchen</code> is every bit except the kitchen's (the last line shows all 32), and <code>&amp;</code> with it keeps every bit that was on except that one. Testing is <code>&amp;</code> with the mask, which gives the mask if the bit was on and 0 if not. The type is <code>unsigned int</code> (<a href="../week1/08-strings-and-args.html">Week 1 chapter 8</a>): a row of switches has no sign.</p>
+
+<div class="callout trap"><span class="label">Trap</span><p><code>&amp;</code> is not <code>&amp;&amp;</code>, and <code>|</code> is not <code>||</code>: the doubled ones treat each side as a single true or false. <code>lights &amp;&amp; garden</code> compiles and only asks whether both numbers are non-zero. Keep the parentheses in <code>(lights &amp; garden) != 0</code>, too: without them it means <code>lights &amp; (garden != 0)</code>. And note that <code>&amp;</code> now has three jobs: after a type it makes a reference, between two numbers it is bitwise and, and in front of a variable handed to a C function it does the third job, next.</p></div>
+
+<h3>Reading the terminal's settings</h3>
+<p><code>termios</code> has a member <code>c_lflag</code>, the "local flags" word, and <code>&lt;termios.h&gt;</code> provides a mask for each of its switches; the first you need is <code>ECHO</code>. (Names from C headers are often in capitals; your own constants stay in <code>snake_case</code>.) <code>tcgetattr</code>, "terminal control: get attributes", fills a <code>termios</code> variable with the current settings. Its first argument is <code>STDIN_FILENO</code>, from <code>&lt;unistd.h&gt;</code>: the number of your program's standard input, the keyboard. Its second is your variable, written <code>&amp;settings</code>. Take that <code>&amp;</code> on trust: the function is written in C, which has no references, so it must be told where your variable lives in memory, and <code>&amp;settings</code> is that location, its address. Buffer A shows what an address really is.</p>
+
+<pre class="code" data-lang="cpp" data-file="echo_flag.cpp" data-check="compile"><code>#include &lt;print>
+#include &lt;termios.h>
+#include &lt;unistd.h>
+
+int main() {
+    termios settings{};
+    if (tcgetattr(STDIN_FILENO, &amp;settings) != 0) {  // fill `settings` from the terminal
+        std::println("standard input is not a terminal");
+        return 1;
+    }
+    std::println("c_lflag: {:32b}", settings.c_lflag);
+    std::println("ECHO:    {:32b}", ECHO);
+    if ((settings.c_lflag &amp; ECHO) != 0) {
+        std::println("echo is on");
+    } else {
+        std::println("echo is off");
+    }
+    return 0;
+}
+</code></pre>
+<pre class="shell"><code>$ ./echo_flag
+c_lflag:   100000000000000000010111001011
+ECHO:                                1000
+echo is on
+$ stty -echo; ./echo_flag; stty echo
+c_lflag:   100000000000000000010111000011
+ECHO:                                1000
+echo is off
+$ ./echo_flag &lt; /dev/null
+standard input is not a terminal
+</code></pre>
+<p>(Recorded through a terminal on this Mac; the other bits depend on your terminal program.) <code>{:32b}</code> right-aligns the binary in 32 columns, so the mask sits under the bit it tests, the fourth from the right. In the second run the shell command <code>stty -echo</code> switched echo off before the program ran and <code>stty echo</code> switched it on again after, all on one line, and exactly one bit changed. In the third, standard input is a file, so <code>tcgetattr</code> has no terminal to ask and returns -1 instead of 0; a careful program checks.</p>
+
+<h2>Guard 2: echo off for a password prompt</h2>
+<p>To change a setting, read the settings, change a copy, and hand the copy back with <code>tcsetattr</code>, "set attributes"; its middle argument, <code>TCSANOW</code>, means "now". To put things back later, the guard keeps the original settings in a member, like any value in a struct (<a href="01-structs.html">chapter 1</a>). <code>std::getline(std::cin, line)</code>, from <code>&lt;iostream&gt;</code>, reads one typed line into a string; take it on trust.</p>
+
+<pre class="code" data-lang="cpp" data-file="password.cpp" data-check="compile"><code>#include &lt;cstdio>
+#include &lt;iostream>
+#include &lt;print>
+#include &lt;string>
+#include &lt;termios.h>
+#include &lt;unistd.h>
+
+// While an EchoOff exists, the terminal does not show what you type.
+// Line mode stays on: you still finish the line with Enter, and Backspace still works.
+struct EchoOff {
+    termios original{};  // the settings to put back
+
+    EchoOff() {
+        tcgetattr(STDIN_FILENO, &amp;original);          // save the settings as they are
+        termios changed = original;                  // change a copy...
+        changed.c_lflag &amp;= ~ECHO;                    // ...with one switch turned off
+        tcsetattr(STDIN_FILENO, TCSANOW, &amp;changed);  // and hand it to the terminal
+    }
+
+    ~EchoOff() {
+        tcsetattr(STDIN_FILENO, TCSANOW, &amp;original);  // put back exactly what was saved
+    }
+};
+
+int main() {
+    std::string password;
+    {
+        EchoOff quiet;
+        std::print("password: ");
+        std::fflush(stdout);
+        std::getline(std::cin, password);
+        std::println();  // Enter was not echoed either
+    }
+    std::println("you typed {} characters", password.size());
+    return 0;
+}
+</code></pre>
+<pre class="shell"><code>$ ./password
+password:
+you typed 6 characters
+</code></pre>
+<p>That is the screen after typing <code>secret</code> and Enter (checked by driving the program through a terminal from a script: the letters never appeared). The constructor saves the settings in <code>original</code>, copies them, switches exactly one bit off in the copy with <code>&amp;= ~ECHO</code>, the kitchen light again, and hands the copy over. The destructor hands back <code>original</code>. Restoring the saved settings, rather than switching echo on, matters: if echo was off when the program started, it stays off. Line mode is untouched, so Enter still ends the line and Backspace still corrects it. The guard lives in its own block, so echo is back before anything else is printed. The prompt is flushed before reading, or it could still sit in the buffer (Week 1 chapter 9), and the program prints its own newline, because the Enter was not echoed either.</p>
+
+<div class="callout principle"><span class="label">First principle</span><p>A guard saves the whole state before changing anything, and restores exactly that state when it dies. It never assumes what the state was. One guard, one job.</p></div>
+
+<h2>Ctrl-C: the way out that skips everything</h2>
+<p>Press Ctrl-C at the password prompt. The program ends at once, without even a <code>^C</code> on screen, because <code>^C</code> is shown by echo and echo is off. The exit status is 130 (128 plus 2, the number of <code>SIGINT</code>). The destructor did not run: a program killed by a signal runs none of its own code, clean-up included. At that moment the terminal still has echo off.</p>
+<p>What happens next depends on who started the program. zsh, your Mac's shell, switches echo and line mode back on before it runs your next command, so in zsh you may notice nothing. bash restores its saved settings only after a program was killed by a signal, and keeps whatever a program that ended normally left behind. Inside a script, or when one program starts another, nothing is repaired until a shell shows its next prompt. And nothing repairs the cursor: hiding it was an escape sequence the terminal obeyed, which no shell knows to undo. You can catch the damage even in zsh. Add <code>std::exit(0);</code> after the <code>std::println();</code> inside the guard's block (with <code>#include &lt;cstdlib&gt;</code>), build it as <code>password_exit</code>, and put a second command on the same line, so that it runs before zsh gets its turn:</p>
+<pre class="shell"><code>$ ./password_exit; ./echo_flag
+password:
+c_lflag:                      10111000011
+ECHO:                                1000
+echo is off
+$ ./echo_flag
+c_lflag:   100000000000000000010111001011
+ECHO:                                1000
+echo is on
+</code></pre>
+<p>The guard restored nothing; zsh repaired it before the next prompt. In bash the same run leaves echo off: you type <code>ls</code>, see nothing, and the command still runs when you press Enter. Two shell commands fix a terminal in a strange state; type them even if you cannot see them, and press Enter:</p>
+<ul>
+<li><strong><code>stty sane</code></strong> sets the driver's switches back to sensible values: echo on, line mode on, Ctrl-C a signal.</li>
+<li><strong><code>reset</code></strong> also resets the terminal program itself: the cursor comes back, colours are cleared and the screen is wiped. It is the bigger hammer, and it takes about a second.</li>
+</ul>
+
+<div class="callout trap"><span class="label">Trap</span><p>Do not let zsh's kindness make a guard look optional. zsh repairs only echo and line mode, and only when it gets back to its prompt. Not the cursor, not colours, not the other switches Snake changes. A program that relies on its shell to clean up works on your machine and breaks on someone else's.</p></div>
+
+<h2>The fix: turn the signal into a flag</h2>
+<p>The trouble is not the signal but its default effect: being killed mid-step. <code>std::signal(SIGINT, on_interrupt)</code>, from <code>&lt;csignal&gt;</code>, tells the operating system: "when <code>SIGINT</code> arrives, do not kill me; call <code>on_interrupt</code> instead". Such a function is a <strong>signal handler</strong>. When it returns, the program carries on from exactly where it was interrupted.</p>
+<p>The handler cannot do the clean-up itself. The signal can arrive between any two machine instructions: halfway through a <code>std::println</code>, with the output buffer half-updated, or while the heap is handing out memory. A handler that printed or built a string would walk into the half-finished operation and could corrupt it or wait for it for ever. So a handler does almost nothing. The one thing it may safely do is store a value in a variable of type <strong><code>volatile std::sig_atomic_t</code></strong>. <code>std::sig_atomic_t</code> is an integer type the machine writes in one step, so the program never sees half a write. <code>volatile</code> tells the compiler the variable can change behind the program's back, so the loop really reads it every time; otherwise the optimiser, seeing a loop that never changes the flag, may read it once and never again. And it must be a global, because the operating system calls the handler and nobody can pass it a parameter.</p>
+<p>So: the handler sets the flag; the loop checks it every time round; when it is set, the loop ends, the block is left the ordinary way, and every guard's destructor runs. Ctrl-C has become an ordinary way out.</p>
+
+<pre class="code" data-lang="cpp" data-file="countdown_ctrl_c.cpp" data-check="compile"><code>#include &lt;chrono>
+#include &lt;csignal>
+#include &lt;cstdio>
+#include &lt;print>
+#include &lt;thread>
+
+// Set by the signal handler, read by the loop. Nothing else may touch it.
+volatile std::sig_atomic_t interrupted = 0;
+
+// Runs when Ctrl-C arrives. It does one thing: set the flag.
+void on_interrupt(int) {
+    interrupted = 1;
+}
+
+struct CursorHidden {
+    CursorHidden() {
+        std::print("\x1b[?25l");
+        std::fflush(stdout);
+    }
+    ~CursorHidden() {
+        std::print("\x1b[?25h");
+        std::fflush(stdout);
+    }
+};
+
+int main() {
+    using namespace std::chrono_literals;
+    std::signal(SIGINT, on_interrupt);  // Ctrl-C: call on_interrupt instead of killing us
+
+    CursorHidden cursor;
+    for (int seconds = 10; seconds > 0 &amp;&amp; interrupted == 0; --seconds) {
+        std::print("\r{:2} ", seconds);
+        std::fflush(stdout);
+        std::this_thread::sleep_for(1s);
+    }
+    if (interrupted == 1) {
+        std::println("\rstopped by Ctrl-C");
+    } else {
+        std::println("\rlift-off");
+    }
+    return 0;  // cursor's destructor runs after this line
+}
+</code></pre>
+<pre class="shell"><code>$ ./countdown_ctrl_c
+stopped by Ctrl-C
+$ echo $?
+0
+</code></pre>
+<p>That is the screen after pressing Ctrl-C at about 8 (for a moment the line reads <code> 8 ^C</code>, then the message overwrites it). Exit status 0, not 130, and the last bytes written are <code>\x1b[?25h</code>: the cursor came back. The handler's parameter has no name, <code>void on_interrupt(int)</code>: <code>std::signal</code> needs a handler that takes the signal's number, this one does not use it, and leaving the name out says so on purpose (a named, unused parameter draws a <code>-Wunused-parameter</code> warning).</p>
+<p>The message came 0.73 seconds after the key press in the recorded run, not at once. The signal arrived during <code>sleep_for(1s)</code>; the handler ran, the sleep carried on to the end of its second (that is what Apple's library does with an interrupted sleep), and only then did the loop look at the flag. A flag is only as good as how often the loop looks at it. A program blocked in <code>std::getline</code> keeps waiting after the handler has run, because macOS quietly restarts an interrupted read. Snake's loop never waits for a key: it looks at the keyboard and at the flag on every tick.</p>
+
+<div class="callout try"><span class="label">Try it</span><p>Move the <code>std::signal</code> line to after the loop and press Ctrl-C during the countdown: status 130, cursor hidden. Put it back, then split each second into ten <code>sleep_for(100ms)</code> calls, checking the flag after each, and see how much faster Ctrl-C is answered.</p></div>
+
+<h2>Two guards: the order of destruction</h2>
+<p>A program often holds more than one guard. They follow the rule of plates. Here are two harmless ones on a trip to the garden shed, once with the ladder there and once without:</p>
+
+<pre class="code" data-lang="cpp" data-file="two_guards.cpp" data-check="run"><code>#include &lt;print>
+
+struct DoorOpen {
+    DoorOpen() {
+        std::println("  open the shed door");
+    }
+    ~DoorOpen() {
+        std::println("  close the shed door");
+    }
+};
+
+struct LightOn {
+    LightOn() {
+        std::println("  switch the shed light on");
+    }
+    ~LightOn() {
+        std::println("  switch the shed light off");
+    }
+};
+
+void fetch(bool ladder_is_there) {
+    DoorOpen door;
+    LightOn light;
+    if (!ladder_is_there) {
+        std::println("  no ladder: leave early");
+        return;
+    }
+    std::println("  take the ladder");
+}
+
+int main() {
+    std::println("first trip:");
+    fetch(true);
+    std::println("second trip:");
+    fetch(false);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="two_guards.cpp"><code>first trip:
+  open the shed door
+  switch the shed light on
+  take the ladder
+  switch the shed light off
+  close the shed door
+second trip:
+  open the shed door
+  switch the shed light on
+  no ladder: leave early
+  switch the shed light off
+  close the shed door
+</code></pre>
+
+<p>The door was opened first, so it is closed last. The early <code>return</code> gives the same clean-up in the same order. A <code>CursorHidden</code> declared before an <code>EchoOff</code> would likewise restore echo first and the cursor second. For those two the order is harmless, but the rule matters whenever one guard depends on another: declare the one it depends on first, and destruction undoes them in a safe order.</p>
+
+<div class="callout twin"><span class="label">Inference twin</span><p>Every resource in an inference engine that is not plain memory is held this way. In week 17 your engine maps SmolLM2's weight file into memory, so its hundreds of megabytes can be read as one long array; a guard maps it in its constructor and unmaps it in its destructor, so no error path leaks the mapping. In week 22 every buffer on the GPU belongs to an object whose destructor frees it. And a serving process stops on Ctrl-C the way your countdown does: the handler sets a flag, the loop finishes the token it is computing, and the destructors hand back the GPU memory and the files on the ordinary way out.</p></div>
+
+<h2>Check yourself</h2>
+<div class="quiz">
+<div class="q"><p>What is the difference between the scope of a local and its lifetime? Give a case where a name is usable but its object no longer exists.</p><details class="answer"><summary>Answer</summary><p>Scope is the stretch of program text where the name may be used, checked by the compiler; lifetime is the stretch of time during the run when the object exists. A reference returned from a function to one of its locals: the name is in scope in the caller, but the object died when the function returned.</p></details></div>
+
+<div class="q"><p><code>x</code>, <code>y</code> and <code>z</code> are declared in that order in one block, and a <code>Noisy</code> is declared inside a loop that runs five times. When do the destructors run, and in what order?</p><details class="answer"><summary>Answer</summary><p><code>z</code>, <code>y</code>, <code>x</code>, when the program leaves the block, whichever way it leaves. The loop's <code>Noisy</code> is born and destroyed five times, once per pass; at most one exists at a time.</p></details></div>
+
+<div class="q"><p>Which of these run the destructors of the current function's locals: the closing brace, <code>return</code>, <code>break</code> out of a loop that holds the object, <code>std::exit(0)</code>, being killed by Ctrl-C?</p><details class="answer"><summary>Answer</summary><p>The first three. <code>std::exit(0)</code> runs only the globals' destructors, and a program killed by a signal runs none of its own code.</p></details></div>
+
+<div class="q"><p>Write one line each to switch <code>ECHO</code> off in <code>settings.c_lflag</code>, switch it on, and test it.</p><details class="answer"><summary>Answer</summary><p>Off: <code>settings.c_lflag &amp;= ~ECHO;</code>. On: <code>settings.c_lflag |= ECHO;</code>. Test: <code>(settings.c_lflag &amp; ECHO) != 0</code>.</p></details></div>
+
+<div class="q"><p>Why does the <code>EchoOff</code> destructor hand back the saved <code>original</code> instead of switching <code>ECHO</code> on?</p><details class="answer"><summary>Answer</summary><p>The guard does not know what the state was before. If echo was already off, switching it on would leave the terminal different from how the program found it; restoring the saved settings puts back exactly what was there.</p></details></div>
+
+<div class="q"><p>Why must a signal handler do almost nothing, and why is the flag a <code>volatile std::sig_atomic_t</code>?</p><details class="answer"><summary>Answer</summary><p>The signal can interrupt the program between any two instructions, even in the middle of printing or of the heap's bookkeeping, and a handler doing the same kind of work could corrupt it or wait for ever. Storing one value is safe. <code>std::sig_atomic_t</code> is written in one step, so the loop never sees half a write; <code>volatile</code> makes every check in the loop really read the variable.</p></details></div>
+
+<div class="q"><p>A program installs the Ctrl-C flag and then blocks in <code>std::getline</code>. You press Ctrl-C. What happens, and what does that say about where the flag must be checked?</p><details class="answer"><summary>Answer</summary><p>The handler sets the flag and the read carries on waiting (macOS restarts it), so nothing visible happens until a line is typed. The flag only helps a loop that checks it regularly and never waits indefinitely, which is why Snake's loop looks at the keyboard on every tick instead of waiting for a key.</p></details></div>
+</div>
+
+<h2>What you can do now</h2>
+<ul>
+<li>Tell scope from lifetime, and predict when locals, loop-body objects, globals and a vector's elements are born and die.</li>
+<li>Write a struct with a constructor and a destructor, and use one as a guard that undoes its action on every ordinary way out.</li>
+<li>Explain why a reference to a local and <code>std::exit</code> both leave you on the wrong side of a lifetime.</li>
+<li>Read and change a flag word with <code>&amp;</code>, <code>|</code>, <code>~</code>, <code>&amp;=</code> and <code>|=</code>, and read the terminal's settings with <code>tcgetattr</code>.</li>
+<li>Write a guard that switches one terminal setting off and restores the saved settings.</li>
+<li>Recover a terminal with <code>stty sane</code> or <code>reset</code>, and say what zsh repairs and what it does not.</li>
+<li>Turn Ctrl-C into a flag with <code>std::signal</code> and a <code>volatile std::sig_atomic_t</code>, so the loop ends normally and every guard's destructor runs.</li>
+</ul>
+</main>
+</body>
+</html>

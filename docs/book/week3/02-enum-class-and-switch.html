@@ -1,0 +1,678 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>02 · enum class and switch — C++ from Life to Snake</title>
+<link rel="stylesheet" href="../week1/assets/book.css?v=9">
+<link rel="stylesheet" href="../week1/assets/tutor.css?v=9">
+<script src="../week1/assets/theme.js?v=9"></script>
+<script defer src="assets/book.js?v=9"></script>
+<script defer src="assets/tutor.js?v=9"></script>
+</head>
+<body>
+<nav class="sidebar" aria-label="Chapters"></nav>
+<main>
+<p class="chapter-kicker">Chapter 02</p>
+<h1>enum class and switch</h1>
+<p class="lede">At the end of this chapter you will be able to give a value a fixed list of possibilities, such as the colours of a traffic light, so that the compiler refuses anything else. You will choose between those possibilities with a <code>switch</code>, avoid its one famous trap, let the compiler tell you when you forgot a case, build small state machines, and look at what the processor actually does with a <code>switch</code>.</p>
+
+<div class="callout note"><span class="label">In this chapter</span>
+<ul>
+<li>The problem: a state stored as an <code>int</code>, where <code>light = 7</code> compiles.</li>
+<li><code>enum class</code>: scoped names, no silent conversion to <code>int</code>, and <code>static_cast&lt;int&gt;</code> to print one.</li>
+<li><code>switch</code> with <code>case</code>, <code>break</code>, <code>return</code> from a case, and <code>default</code>.</li>
+<li>The fallthrough trap, with real output.</li>
+<li><code>-Wswitch</code>, and why an enum switch without <code>default</code> lets the compiler check you.</li>
+<li>State machines: a traffic light and a washing-machine programme.</li>
+<li>For Saturday: compare chains, jump tables and lookup tables, seen in Compiler Explorer.</li>
+</ul>
+</div>
+
+<h2>The problem: a traffic light as an int</h2>
+<p>A traffic light is always in one of a few states. The obvious way to store that is a number with an agreement in a comment: 0 is red, 1 is amber, 2 is green.</p>
+
+<pre class="code" data-lang="cpp" data-file="light_int.cpp" data-check="run"><code>#include &lt;print&gt;
+#include &lt;string&gt;
+
+// 0 is red, 1 is amber, 2 is green. This comment is the only place that says so.
+std::string light_name(int light) {
+    if (light == 0) {
+        return "red";
+    } else if (light == 1) {
+        return "amber";
+    } else if (light == 2) {
+        return "green";
+    }
+    return "???";
+}
+
+int main() {
+    int light = 0;
+    std::println("{}", light_name(light));
+    light = 7;                            // compiles: 7 is an int like any other
+    std::println("{}", light_name(light));
+    light = light * 2;                    // what is "red times two"? it compiles too
+    std::println("{}", light_name(light));
+
+    const int wednesday = 2;              // a weekday, numbered from Monday = 0
+    std::println("{}", light_name(wednesday));   // a day where a light was meant
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="light_int.cpp"><code>red
+???
+???
+green
+</code></pre>
+
+<p>Every line compiled. <code>light = 7</code> is accepted because 7 is an <code>int</code>, and so is red times two. The last call hands a weekday to a function about lights, and it answers "green", because Wednesday happens to be numbered 2. The agreement "0 is red" lives in a comment, and the compiler does not read comments. This is chapter 1's problem again, in a different shape: there it was three numbers that meant one thing; here it is one number that can mean only three things, and the type says it can mean four billion.</p>
+
+<h2>enum class: a type with a fixed list of values</h2>
+<p>An <strong>enumeration</strong> is a type whose values are a list of names you write out. In C++ you declare one with <code>enum class</code>, and each name in the list is an <strong>enumerator</strong>:</p>
+
+<pre class="code" data-lang="cpp" data-file="light_enum.cpp" data-check="run"><code>#include &lt;print&gt;
+
+enum class Light { Red, Amber, Green };
+
+int main() {
+    Light now = Light::Red;
+    if (now == Light::Red) {
+        std::println("stop");
+    }
+
+    now = Light::Green;
+    if (now != Light::Red) {
+        std::println("not red any more");
+    }
+
+    std::println("Red is {}, Amber is {}, Green is {}", static_cast&lt;int&gt;(Light::Red),
+                 static_cast&lt;int&gt;(Light::Amber), static_cast&lt;int&gt;(Light::Green));
+    std::println("now is {}", static_cast&lt;int&gt;(now));
+    std::println("sizeof(Light) = {}", sizeof(Light));
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="light_enum.cpp"><code>stop
+not red any more
+Red is 0, Amber is 1, Green is 2
+now is 2
+sizeof(Light) = 4
+</code></pre>
+
+<p><code>enum class Light { Red, Amber, Green };</code> makes a new type, <code>Light</code>, with exactly three values (note the <code>;</code> after the brace, as for a struct). You write a value with the type name in front, <code>Light::Red</code>: the enumerators are <strong>scoped</strong>, which means they live inside the type's name, so <code>Red</code> on its own means nothing and another enumeration can have its own <code>Red</code> without a clash. Two <code>Light</code>s compare with <code>==</code> and <code>!=</code> straight away; unlike a struct, an enumeration needs no extra line for that.</p>
+<p>Underneath, each enumerator is a whole number, counted from 0 in the order you wrote them: <code>Red</code> is 0, <code>Amber</code> 1, <code>Green</code> 2. A <code>Light</code> is stored as an <code>int</code>, 4 bytes, and costs exactly what the <code>int</code> version cost. What changed is what the compiler allows:</p>
+
+<pre class="code" data-lang="cpp" data-file="light_errors.cpp" data-check="error"><code>#include &lt;print&gt;
+
+enum class Light { Red, Amber, Green };
+
+int main() {
+    Light a = 2;                 // an int where a Light is wanted
+    int n = Light::Green;        // a Light where an int is wanted
+    Light b = Red;               // the name without its type in front
+    std::println("{} {}", n, static_cast&lt;int&gt;(a) + static_cast&lt;int&gt;(b));
+    return 0;
+}
+</code></pre>
+<pre class="output"><code>light_errors.cpp:6:11: error: cannot initialize a variable of type 'Light' with an rvalue of type 'int'
+    6 |     Light a = 2;                 // an int where a Light is wanted
+      |           ^   ~
+light_errors.cpp:7:9: error: cannot initialize a variable of type 'int' with an rvalue of type 'Light'
+    7 |     int n = Light::Green;        // a Light where an int is wanted
+      |         ^   ~~~~~~~~~~~~
+light_errors.cpp:8:15: error: use of undeclared identifier 'Red'
+    8 |     Light b = Red;               // the name without its type in front
+      |               ^~~
+3 errors generated.
+</code></pre>
+
+<p>Three errors, three holes closed. An <code>int</code> cannot become a <code>Light</code> by accident, so <code>light = 7</code> is impossible. A <code>Light</code> cannot quietly become an <code>int</code> either, so it cannot be added, multiplied or passed where a number is wanted. And the bare name <code>Red</code> is an "undeclared identifier": only <code>Light::Red</code> exists. (An <strong>rvalue</strong>, in the first two messages, is a value that is not a variable, such as <code>2</code> or <code>Light::Green</code>; you can read it as "a value".)</p>
+<p>When you do want the number, for printing or for an index, say so with <code>static_cast&lt;int&gt;(now)</code>, the deliberate conversion from <a href="../week1/02-values-and-types.html">Week 1, chapter 2</a>. You need it for printing, too: <code>std::println("{}", now)</code> fails with the same "not formattable" error as a struct did in <a href="01-structs.html">chapter 1</a>. A function that turns each value into a name is the better fix, and it is the first job for a <code>switch</code>.</p>
+
+<div class="callout principle"><span class="label">First principle</span><p>An <code>enum class</code> costs nothing at run time: it is an <code>int</code> in memory and in the processor. All of its value is at compile time, where it turns "a number that should be 0, 1 or 2" into "one of three named values, and nothing else". Use one whenever a variable means one of a fixed list of things.</p></div>
+
+<h3>The old enum, without class</h3>
+<p>You will meet <code>enum Light { Red, Amber, Green };</code>, without the word <code>class</code>, in older C++ and in every C library. It is the original version, and it has both holes: its names are not scoped (<code>Red</code> alone means <code>0</code> everywhere in the file) and its values convert to <code>int</code> silently. C has nothing else, so ggml, the C library under llama.cpp, uses it. In your own code, write <code>enum class</code>.</p>
+
+<h2>switch: one value, many branches</h2>
+<p>With an <code>if</code> chain you would test <code>light == Light::Red</code>, then <code>light == Light::Amber</code>, and so on. When one value decides between many branches, C++ has a statement made for it:</p>
+
+<pre class="code" data-lang="cpp" data-file="light_switch.cpp" data-check="run"><code>#include &lt;print&gt;
+#include &lt;string&gt;
+
+enum class Light { Red, Amber, Green };
+
+void advise(Light light) {
+    switch (light) {
+    case Light::Red:
+        std::println("stop");
+        break;
+    case Light::Amber:
+        std::println("stop if you safely can");
+        break;
+    case Light::Green:
+        std::println("go if the way is clear");
+        break;
+    }
+    std::println("(advice given)");
+}
+
+// Each case returns, so no break is needed: return leaves the whole function.
+std::string light_name(Light light) {
+    switch (light) {
+    case Light::Red:
+        return "red";
+    case Light::Amber:
+        return "amber";
+    case Light::Green:
+        return "green";
+    }
+    return "?";   // only reached if light holds a number that is none of the three
+}
+
+int main() {
+    advise(Light::Amber);
+    advise(Light::Green);
+    std::println("the light is {}", light_name(Light::Red));
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="light_switch.cpp"><code>stop if you safely can
+(advice given)
+go if the way is clear
+(advice given)
+the light is red
+</code></pre>
+
+<p><code>switch (light)</code> looks at one value, once. Each <code>case Light::Red:</code> is a <strong>case label</strong>: a marked place in the switch's body. The program jumps straight to the label that matches the value and runs the statements from there. <code>break;</code> means "leave the switch now", and the program carries on after its closing brace, which is why <code>(advice given)</code> is printed every time. A switch works on whole-number types: <code>int</code>, <code>char</code>, and enumerations. It does not work on a <code>std::string</code> or a <code>double</code>.</p>
+<p><code>light_name</code> shows the other common shape: every case ends with <code>return</code>. A <code>return</code> leaves the whole function, so it leaves the switch too, and no <code>break</code> is needed. Notice the <code>return "?";</code> after the switch. Every enumerator is handled, so it should never run, and clang does not demand it. It is there because a <code>Light</code> is only an <code>int</code> underneath: a cast in the other direction, or a corrupted byte, can make it hold 7, and then no case matches. Without the last line the function would reach its closing brace without returning a value, which is undefined behaviour. With it, the worst case is a <code>"?"</code> on screen. The <code>text_of</code> functions at the top of <code>tests/snake_test.cpp</code> follow the same pattern.</p>
+
+<h3>Several labels, and default</h3>
+<p>Two labels can share one block, and <code>default:</code> is the label for "every value not listed":</p>
+
+<pre class="code" data-lang="cpp" data-file="weekend.cpp" data-check="run"><code>#include &lt;print&gt;
+#include &lt;vector&gt;
+
+enum class Day { Monday, Tuesday, Wednesday, Thursday, Friday, Saturday, Sunday };
+
+bool is_weekend(Day day) {
+    switch (day) {
+    case Day::Saturday:
+    case Day::Sunday:          // two labels, one block: Saturday OR Sunday
+        return true;
+    default:                   // every other value
+        return false;
+    }
+}
+
+int main() {
+    const std::vector&lt;Day&gt; week = {Day::Monday, Day::Tuesday, Day::Wednesday, Day::Thursday,
+                                   Day::Friday, Day::Saturday, Day::Sunday};
+    for (Day d : week) {
+        std::println("day {}: weekend {}", static_cast&lt;int&gt;(d), is_weekend(d));
+    }
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="weekend.cpp"><code>day 0: weekend false
+day 1: weekend false
+day 2: weekend false
+day 3: weekend false
+day 4: weekend false
+day 5: weekend true
+day 6: weekend true
+</code></pre>
+
+<p><code>case Day::Saturday:</code> has no statements of its own, so Saturday runs on into Sunday's statements: two labels, one answer. <code>default:</code> catches the five weekdays without naming them. It is convenient here, because seven cases would say nothing more. Hold on to that word "convenient", because the section after next shows what it costs.</p>
+
+<h2>The fallthrough trap</h2>
+<p>The Saturday-and-Sunday trick works because a case label is only a marker. The program jumps to the matching label and then runs <em>every</em> statement below it until something leaves the switch, labels included. Usually that something is a <code>break</code>. Forget one and the program does not stop at the next label:</p>
+
+<pre class="code" data-lang="cpp" data-file="fallthrough.cpp" data-check="run"><code>#include &lt;print&gt;
+
+enum class Suit { Clubs, Diamonds, Hearts, Spades };
+
+void describe(Suit suit) {
+    switch (suit) {
+    case Suit::Hearts:
+        std::println("hearts are red");
+    case Suit::Diamonds:
+        std::println("diamonds are red");
+        break;
+    case Suit::Clubs:
+        std::println("clubs are black");
+    case Suit::Spades:
+        std::println("spades are black");
+        break;
+    }
+}
+
+int main() {
+    std::println("-- hearts:");
+    describe(Suit::Hearts);
+    std::println("-- diamonds:");
+    describe(Suit::Diamonds);
+    std::println("-- clubs:");
+    describe(Suit::Clubs);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="fallthrough.cpp"><code>-- hearts:
+hearts are red
+diamonds are red
+-- diamonds:
+diamonds are red
+-- clubs:
+clubs are black
+spades are black
+</code></pre>
+
+<p>Hearts printed two lines, one of them about diamonds; clubs printed two, one about spades. The missing <code>break</code> after each first line let the program <strong>fall through</strong> into the next case. It compiled without a warning: <code>-Wall -Wextra -Wpedantic</code> do not include the check for this. Falling through on purpose is occasionally useful, so C++ allows it, and the marker <code>[[fallthrough]];</code> exists to say "I meant this" where it happens. Clang can warn about every unmarked fallthrough with <code>-Wimplicit-fallthrough</code>, but that flag is not in this course's CMake recipe, so the habit has to be yours.</p>
+
+<div class="callout trap"><span class="label">Trap</span><p>Every case that has statements ends with <code>break;</code> or <code>return</code>. No exceptions this week. When a switch prints or does more than you expect, look for the case above the extra output: its <code>break</code> is missing. Empty labels stacked on top of each other, like Saturday and Sunday, are the one shape that falls through safely, because there is nothing between them to run twice.</p></div>
+
+<div class="callout analogy"><span class="label">Analogy</span><p>A switch is a corridor of doors with the case labels painted on the floor. The value tells you where to start walking; <code>break</code> is the exit sign. If there is no exit sign after your section, you keep walking past the next label into someone else's room. <em>Where it breaks:</em> in a corridor you would notice. The program does not notice anything; it only follows the instructions that are there.</p></div>
+
+<h2>Let the compiler check you: -Wswitch</h2>
+<p>A pelican crossing needs a fourth state: amber flashing, "go if the crossing is clear". Add it to the enumeration and forget to add it to the switch:</p>
+
+<pre class="code" data-lang="cpp" data-file="wswitch.cpp" data-check="fragment"><code>#include &lt;print&gt;
+#include &lt;string&gt;
+
+// A pelican crossing adds a fourth state: amber flashing, go if the crossing is clear.
+enum class Light { Red, Amber, Green, FlashingAmber };
+
+std::string light_name(Light light) {
+    switch (light) {
+    case Light::Red:
+        return "red";
+    case Light::Amber:
+        return "amber";
+    case Light::Green:
+        return "green";
+    }
+    return "?";
+}
+
+int main() {
+    std::println("{}", light_name(Light::FlashingAmber));
+    return 0;
+}
+</code></pre>
+<pre class="output"><code>wswitch.cpp:8:13: warning: enumeration value 'FlashingAmber' not handled in switch [-Wswitch]
+    8 |     switch (light) {
+      |             ^~~~~
+wswitch.cpp:8:13: note: add missing switch cases
+    8 |     switch (light) {
+      |             ^
+    9 |     case Light::Red:
+   10 |         return "red";
+   11 |     case Light::Amber:
+   12 |         return "amber";
+   13 |     case Light::Green:
+   14 |         return "green";
+   15 |     }
+1 warning generated.
+</code></pre>
+
+<p>The compiler noticed. <code>-Wswitch</code>, which clang turns on even without <code>-Wall</code>, checks every switch over an enumeration: if an enumerator has no case, it names the enumerator and the line. In a real program the enumeration lives in a header and the switches are spread over many files; add one value and the compiler hands you the list of every switch that must learn about it. The program still builds (it is a warning), and if you ran it, it would print <code>?</code>. In this course a warning counts as a bug, so you fix it.</p>
+<p>Now the same switch with a <code>default:</code>:</p>
+
+<pre class="code" data-lang="cpp" data-file="wswitch_default.cpp" data-check="run"><code>#include &lt;print&gt;
+#include &lt;string&gt;
+
+enum class Light { Red, Amber, Green, FlashingAmber };
+
+std::string light_name(Light light) {
+    switch (light) {
+    case Light::Red:
+        return "red";
+    case Light::Amber:
+        return "amber";
+    case Light::Green:
+        return "green";
+    default:
+        return "?";       // catches FlashingAmber too, so the compiler says nothing
+    }
+}
+
+int main() {
+    std::println("{}", light_name(Light::FlashingAmber));
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="wswitch_default.cpp"><code>?
+</code></pre>
+
+<p>Silence. <code>default</code> handles every value not listed, <code>FlashingAmber</code> included, so there is nothing to warn about. The program is just as wrong, it prints <code>?</code> for a perfectly good state, and now nothing tells you. That is the cost of "convenient".</p>
+
+<div class="callout principle"><span class="label">First principle</span><p>In a switch over an <code>enum class</code>, list every enumerator and write no <code>default</code>. Then the compiler checks your switch every time the enumeration changes. Put the fallback for impossible values <em>after</em> the switch, as <code>light_name</code> does. Keep <code>default</code> for switches over plain numbers and characters, where listing every value is impossible, and for the rare enum switch where "every other value" really is one answer, like the weekdays.</p></div>
+
+<div class="callout try"><span class="label">Try it</span><p>In <code>weekend.cpp</code>, replace <code>default:</code> with the five weekday labels stacked on top of each other, so the switch lists all seven days. Then add <code>Holiday</code> to the end of <code>Day</code> and compile both versions, with and without <code>default</code>. Which one warns? Which behaviour would you want if the enumeration lived in a header that someone else edits?</p></div>
+
+<h2>State machines</h2>
+<p>A traffic light does not only <em>have</em> a state; it moves from one state to the next in a fixed order. A program that keeps one value saying which state it is in, plus rules for which state comes next, is a <strong>state machine</strong>. An <code>enum class</code> holds the state; a <code>switch</code> holds the rules. Here is the British sequence, in which red and amber show together before green:</p>
+
+<pre class="code" data-lang="cpp" data-file="traffic_cycle.cpp" data-check="run"><code>#include &lt;print&gt;
+#include &lt;string&gt;
+
+// The British sequence: red, red and amber together, green, amber, then red again.
+enum class Light { Red, RedAmber, Green, Amber };
+
+std::string light_name(Light light) {
+    switch (light) {
+    case Light::Red:
+        return "red";
+    case Light::RedAmber:
+        return "red+amber";
+    case Light::Green:
+        return "green";
+    case Light::Amber:
+        return "amber";
+    }
+    return "?";
+}
+
+// The state that comes after this one.
+Light next_light(Light light) {
+    switch (light) {
+    case Light::Red:
+        return Light::RedAmber;
+    case Light::RedAmber:
+        return Light::Green;
+    case Light::Green:
+        return Light::Amber;
+    case Light::Amber:
+        return Light::Red;
+    }
+    return Light::Red;   // the safe state, if light ever held anything else
+}
+
+// How long the light stays in this state, in seconds.
+int seconds_in(Light light) {
+    switch (light) {
+    case Light::Red:
+        return 30;
+    case Light::RedAmber:
+        return 2;
+    case Light::Green:
+        return 25;
+    case Light::Amber:
+        return 3;
+    }
+    return 0;
+}
+
+int main() {
+    Light light = Light::Red;
+    int clock = 0;
+    for (int change = 0; change &lt; 6; ++change) {
+        std::println("t = {:3} s  {}", clock, light_name(light));
+        clock += seconds_in(light);
+        light = next_light(light);
+    }
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="traffic_cycle.cpp"><code>t =   0 s  red
+t =  30 s  red+amber
+t =  32 s  green
+t =  57 s  amber
+t =  60 s  red
+t =  90 s  red+amber
+</code></pre>
+
+<p>Three small functions, each a switch, each answering one question about a state: what is it called, what comes next, how long does it last. The loop in <code>main</code> asks the questions in order. Notice that <code>next_light</code>'s fallback after the switch is <code>Light::Red</code>: when a traffic light does not know what state it is in, red is the safe answer, and choosing the fallback is a design decision, not an afterthought.</p>
+<p>Some machines also take an input, and some reach a state they never leave. A washing machine runs a <strong>programme</strong> (cotton, quick), moves through its phases, and stops at <code>Finished</code>:</p>
+
+<pre class="code" data-lang="cpp" data-file="washing.cpp" data-check="run"><code>#include &lt;print&gt;
+#include &lt;string&gt;
+
+enum class Programme { Cotton, Quick };
+enum class Phase { Filling, Washing, Rinsing, Spinning, Finished };
+
+std::string phase_name(Phase phase) {
+    switch (phase) {
+    case Phase::Filling:
+        return "filling";
+    case Phase::Washing:
+        return "washing";
+    case Phase::Rinsing:
+        return "rinsing";
+    case Phase::Spinning:
+        return "spinning";
+    case Phase::Finished:
+        return "finished";
+    }
+    return "?";
+}
+
+Phase after(Phase phase) {
+    switch (phase) {
+    case Phase::Filling:
+        return Phase::Washing;
+    case Phase::Washing:
+        return Phase::Rinsing;
+    case Phase::Rinsing:
+        return Phase::Spinning;
+    case Phase::Spinning:
+    case Phase::Finished:
+        return Phase::Finished;   // once finished, it stays finished
+    }
+    return Phase::Finished;
+}
+
+int minutes_in(Phase phase, Programme programme) {
+    switch (phase) {
+    case Phase::Filling:
+        return 3;
+    case Phase::Washing:
+        if (programme == Programme::Cotton) {
+            return 50;
+        }
+        return 15;
+    case Phase::Rinsing:
+        return 10;
+    case Phase::Spinning:
+        if (programme == Programme::Cotton) {
+            return 12;
+        }
+        return 5;
+    case Phase::Finished:
+        return 0;
+    }
+    return 0;
+}
+
+void run(Programme programme) {
+    Phase phase = Phase::Filling;
+    int minute = 0;
+    while (phase != Phase::Finished) {
+        std::println("  minute {:3}: {}", minute, phase_name(phase));
+        minute += minutes_in(phase, programme);
+        phase = after(phase);
+    }
+    std::println("  minute {:3}: {}", minute, phase_name(phase));
+}
+
+int main() {
+    std::println("cotton:");
+    run(Programme::Cotton);
+    std::println("quick:");
+    run(Programme::Quick);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="washing.cpp"><code>cotton:
+  minute   0: filling
+  minute   3: washing
+  minute  53: rinsing
+  minute  63: spinning
+  minute  75: finished
+quick:
+  minute   0: filling
+  minute   3: washing
+  minute  18: rinsing
+  minute  28: spinning
+  minute  33: finished
+</code></pre>
+
+<p>Two enumerations work together: <code>Phase</code> is the state, <code>Programme</code> is a setting that changes how long some phases last. <code>minutes_in</code> shows that a case can contain ordinary statements, an <code>if</code> here, as long as every path ends in a <code>return</code>. <code>after</code> shows a <strong>final state</strong>: <code>Finished</code> leads to <code>Finished</code>, so once the loop condition <code>phase != Phase::Finished</code> fails, nothing can start the machine again. A Snake game has the same kind of state, <code>State</code> in <code>snake.hpp</code>: its comment says a game starts <code>Playing</code> and ends <code>Lost</code> or <code>Won</code>, and never goes back.</p>
+
+<div class="callout try"><span class="label">Try it</span><p>Add a <code>Drying</code> phase between <code>Spinning</code> and <code>Finished</code> in <code>washing.cpp</code>, and compile before you change any switch. Read the warnings: they are your to-do list, one line per switch that has not heard of drying. Fix each one (40 minutes of drying for cotton, none for quick) and check the new timeline. Then change the traffic light so that it starts on <code>Green</code> and prints ten changes; the clock column should still add up.</p></div>
+
+<h2>What the processor does with a switch</h2>
+<p>This section is for Saturday's measurement strand. A <code>switch</code> is a description of a decision; the compiler chooses the machine instructions that make it. There are three shapes you will see.</p>
+<ul>
+<li>A <strong>compare chain</strong>: compare the value with the first case, branch there if equal; otherwise compare with the second, and so on. It is exactly the <code>if</code> chain you would have written. Its cost grows with the position of the matching case. A cleverer variant compares against the middle case first and halves the range each time, like looking up a word in a dictionary; that is a <strong>tree of compares</strong>.</li>
+<li>A <strong>jump table</strong>: an array, built by the compiler, with one entry per possible value, each saying where that case's code starts. The processor checks the value is in range, loads the entry, and jumps to it: one jump straight to the right case however many cases there are. The price is an <strong>indirect branch</strong>, a jump to an address the processor only learns at run time, which it has to guess in advance to stay fast.</li>
+<li>A <strong>lookup table</strong>: when every case only produces a value, the compiler can skip the code and store the answers themselves in an array. The switch becomes "load element number <em>value</em>". No compare per case and no jump at all.</li>
+</ul>
+<p>You do not choose between them; the optimiser does, and you can only look. Here is a vending machine's coin switch to look at:</p>
+
+<pre class="code" data-lang="cpp" data-file="pence.cpp" data-check="run"><code>#include &lt;print&gt;
+
+enum class Coin {
+    OnePenny, TwoPence, FivePence, TenPence, TwentyPence, FiftyPence, OnePound, TwoPounds
+};
+
+int pence(Coin coin) {
+    switch (coin) {
+    case Coin::OnePenny:
+        return 1;
+    case Coin::TwoPence:
+        return 2;
+    case Coin::FivePence:
+        return 5;
+    case Coin::TenPence:
+        return 10;
+    case Coin::TwentyPence:
+        return 20;
+    case Coin::FiftyPence:
+        return 50;
+    case Coin::OnePound:
+        return 100;
+    case Coin::TwoPounds:
+        return 200;
+    }
+    return 0;
+}
+
+int main() {
+    const int price = 135;   // a sandwich, in pence
+    int paid = 0;
+    paid += pence(Coin::OnePound);
+    paid += pence(Coin::TwentyPence);
+    paid += pence(Coin::TenPence);
+    paid += pence(Coin::TenPence);
+    std::println("paid {}p for {}p, change {}p", paid, price, paid - price);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="pence.cpp"><code>paid 140p for 135p, change 5p
+</code></pre>
+
+<div class="callout note"><span class="label">Looking at a switch in Compiler Explorer</span><p><strong>Compiler Explorer</strong> (godbolt.org) shows the machine instructions a compiler produces for your code, line by line. Open it, choose C++ as the language, and paste the <code>enum class Coin</code> and the function <code>pence</code> into the left pane (leave out <code>main</code>, which only adds noise). In the right pane, pick the compiler: type <code>armv8-a clang</code> and take the highest version number. Those are clang builds for <strong>AArch64</strong>, the 64-bit Arm instruction set your M5 runs. In the options box next to it, type <code>-std=c++23 -O2</code>. The output is <strong>assembly</strong>: one machine instruction per line, written as text. Each source line and the instructions made from it share a background colour, and hovering over either side highlights the other. You can also make the same listing on your Mac, without the colours: <code>clang++ -std=c++23 -O2 -S -o - pence.cpp</code>, where <code>-S</code> means "stop at assembly" and <code>-o -</code> means "print it".</p></div>
+
+<div class="callout try"><span class="label">Try it</span><p>Before you look: which of the three shapes will clang choose for <code>pence</code> at <code>-O2</code>? Write your prediction down, with one sentence of why. Then predict again for <code>-O0</code>, the setting of a Debug build. Only then open the answer.</p></div>
+<details class="answer"><summary>What clang made of pence, on this Mac</summary>
+<p>At <code>-O2</code>, a lookup table. This is the listing from <code>clang++ -std=c++23 -O2 -S</code> on this Mac, with Apple's linker-hint lines (<code>Lloh</code>) and the assembler's housekeeping lines left out:</p>
+<pre class="code" data-lang="text" data-file="pence at -O2"><code>__Z5pence4Coin:
+	cmp	w0, #7
+	b.hi	LBB0_2
+	adrp	x8, l_switch.table._Z5pence4Coin@PAGE
+	add	x8, x8, l_switch.table._Z5pence4Coin@PAGEOFF
+	ldr	w0, [x8, w0, uxtw #2]
+	ret
+LBB0_2:
+	mov	w0, #0
+	ret
+l_switch.table._Z5pence4Coin:
+	.long	1
+	.long	2
+	.long	5
+	.long	10
+	.long	20
+	.long	50
+	.long	100
+	.long	200
+</code></pre>
+<p>Read it top to bottom. <code>__Z5pence4Coin</code> is the function's name as the linker sees it: the compiler encodes the parameter types into the name ("<code>pence</code>, taking a <code>Coin</code>"); Compiler Explorer turns it back into <code>pence(Coin)</code> for you. The coin arrives in register <code>w0</code> as its number, 0 to 7. <code>cmp w0, #7</code> and <code>b.hi</code> mean "if it is above 7, jump to <code>LBB0_2</code>", which returns 0: that is your <code>return 0;</code> after the switch, kept for impossible values. Otherwise <code>adrp</code> and <code>add</code> put the address of the table in <code>x8</code>, and <code>ldr w0, [x8, w0, uxtw #2]</code> loads entry number <code>w0</code> (each entry is 4 bytes, which is what <code>#2</code>, "times 4", means) into <code>w0</code>, where an <code>int</code> result is returned. The table is the eight <code>.long</code> lines: your eight <code>return</code> values, in enumerator order. Eight cases became one load.</p>
+<p>At <code>-O0</code>, a compare chain. The listing is three times longer; its shape is this, cut where marked:</p>
+<pre class="code" data-lang="text" data-file="pence at -O0"><code>__Z5pence4Coin:
+	sub	sp, sp, #16
+	str	w0, [sp, #8]
+	ldr	w8, [sp, #8]
+	str	w8, [sp, #4]
+	cbz	w8, LBB0_8
+	b	LBB0_1
+LBB0_1:
+	ldr	w8, [sp, #4]
+	subs	w8, w8, #1
+	b.eq	LBB0_9
+	b	LBB0_2
+LBB0_2:
+	ldr	w8, [sp, #4]
+	subs	w8, w8, #2
+	b.eq	LBB0_10
+	b	LBB0_3
+...
+LBB0_8:
+	mov	w8, #1
+	str	w8, [sp, #12]
+	b	LBB0_17
+...
+</code></pre>
+<p><code>cbz w8, LBB0_8</code> is "if the coin is 0, go to the code for <code>return 1</code>"; then "subtract 1; if the result is zero, it was coin 1, go to <code>return 2</code>"; then the same for 2, and so on up to 7. A Debug build translates your switch almost literally, so a two-pound coin takes eight tests. This is one reason chapter 13 of the Week 1 book never times a Debug build.</p>
+<p>A jump table needs bigger switches whose cases do different work. A 12-case switch over the buttons of a vending machine, each case calling a different motor function, gave this at <code>-O2</code> (the start only):</p>
+<pre class="code" data-lang="text" data-file="vend at -O2"><code>__Z4vend6Button:
+	cmp	w0, #11
+	b.hi	LBB0_15
+	...
+	adrp	x9, lJTI0_0@PAGE
+	add	x9, x9, lJTI0_0@PAGEOFF
+	adr	x10, LBB0_2
+	ldrb	w11, [x9, x8]
+	add	x10, x10, x11, lsl #2
+	br	x10
+LBB0_2:
+	bl	__Z8motor_a1v
+	b	LBB0_14
+...
+lJTI0_0:
+	.byte	(LBB0_2-LBB0_2)>>2
+	.byte	(LBB0_9-LBB0_2)>>2
+	...
+</code></pre>
+<p>The table <code>lJTI0_0</code> holds one byte per button: how far that case's code is from <code>LBB0_2</code>, counted in instructions. <code>ldrb</code> loads the byte for this button, <code>add ... lsl #2</code> turns it into an address (an instruction is 4 bytes), and <code>br x10</code> is the indirect branch: jump to it. The same switch with eight buttons became a tree of compares instead: on this Mac's clang, jump tables started at about a dozen cases. Another compiler version may draw that line elsewhere, which is exactly why you look instead of assuming.</p>
+<p>Compiler Explorer runs on Linux, so its names differ a little (<code>pence(Coin):</code>, <code>.LBB0_2</code>, <code>:lo12:</code> in place of <code>@PAGEOFF</code>); the instructions are the same kind.</p>
+</details>
+
+<p>On Saturday you will do the same with one switch from your own Snake code. Write your prediction before you look, and do not ask the book for one: the point is to find out how far your picture of the machine is from the machine.</p>
+
+<div class="callout twin"><span class="label">Inference twin</span><p>A tensor knows its element type: 32-bit floats, 16-bit floats, or one of the quantised block formats such as Q8_0 from <a href="01-structs.html">chapter 1</a>'s twin. In ggml that type is an enumeration, <code>enum ggml_type</code>, with values like <code>GGML_TYPE_F32</code>, <code>GGML_TYPE_F16</code> and <code>GGML_TYPE_Q8_0</code>, written as a plain C enum because ggml is C. An operation such as "add two tensors" begins with a <code>switch</code> on its input's type, and each case calls the kernel written for that type: the float loop for <code>GGML_TYPE_F32</code>, a dequantise-then-add path for the block formats. Unlike this chapter's advice, those switches end with a <code>default</code> that stops the program with an error, because with dozens of types and most operations supporting only a few of them, a loud failure at run time is the honest choice. For its hottest operation, the matrix multiply, ggml goes one step further and looks the type up in a table of per-type functions: the lookup-table idea of the last section, applied to code instead of numbers. You build your own op library with a kernel per type in week 16 and read ggml's in week 27.</p></div>
+
+<h2>Check yourself</h2>
+<div class="quiz">
+<div class="q"><p>With <code>enum class Light { Red, Amber, Green };</code>, which of these compile: <code>Light a = Light::Amber;</code>, <code>Light b = 1;</code>, <code>int c = Light::Green;</code>, <code>int d = static_cast&lt;int&gt;(Light::Green);</code>? What is <code>d</code>?</p><details class="answer"><summary>Answer</summary><p>The first and the last. An <code>int</code> does not convert to a <code>Light</code> and a <code>Light</code> does not convert to an <code>int</code> without a cast. <code>d</code> is 2: enumerators are numbered from 0 in the order written.</p></details></div>
+<div class="q"><p>What does this print for <code>Suit::Hearts</code>, and how do you fix it? <code>switch (s) { case Suit::Hearts: std::println("red"); case Suit::Spades: std::println("black"); break; default: break; }</code></p><details class="answer"><summary>Answer</summary><p><code>red</code> and then <code>black</code>: there is no <code>break</code> after the hearts line, so the program falls through into the spades case. Add <code>break;</code> after <code>std::println("red");</code>.</p></details></div>
+<div class="q"><p>Why can a switch over an <code>enum class</code> without <code>default</code> be safer than one with it?</p><details class="answer"><summary>Answer</summary><p>Without <code>default</code>, <code>-Wswitch</code> (on by default in clang) warns about every enumerator that has no case, so when someone adds a value to the enumeration the compiler lists every switch that needs updating. A <code>default</code> handles the new value silently, often wrongly, and the warning never appears.</p></details></div>
+<div class="q"><p>A function returns a value from every case of a switch that lists all enumerators. Why write a <code>return</code> after the switch as well?</p><details class="answer"><summary>Answer</summary><p>Because an enumeration is an <code>int</code> underneath and can, through a cast or corrupted memory, hold a number that matches no case. Then the switch does nothing, and a function that reaches its closing brace without returning a value is undefined behaviour. The extra <code>return</code> gives that impossible case a defined, safe answer, such as <code>"?"</code> or <code>Light::Red</code>.</p></details></div>
+<div class="q"><p>What is a state machine, and which two C++ tools from this chapter build one?</p><details class="answer"><summary>Answer</summary><p>A program that keeps one value saying which state it is in, plus rules for which state comes next (sometimes depending on an input). The state is an <code>enum class</code>; the rules are <code>switch</code>es over it, such as <code>next_light</code> or <code>after</code>.</p></details></div>
+<div class="q"><p>Name the three shapes a compiler can give a switch, and say which one has no branch at all.</p><details class="answer"><summary>Answer</summary><p>A compare chain (or tree of compares), a jump table, and a lookup table. The lookup table has no branch per case: when every case only produces a value, the answers are stored in an array and the switch becomes one load.</p></details></div>
+<div class="q"><p>Why did <code>pence</code> become eight compares at <code>-O0</code> and one load at <code>-O2</code>, though the source is identical?</p><details class="answer"><summary>Answer</summary><p><code>-O0</code> asks the compiler to translate almost literally, so the debugger can follow every line; a switch becomes the chain of tests it describes. <code>-O2</code> asks it to optimise, and it noticed that every case only returns a constant, so it built a table of the eight answers instead.</p></details></div>
+</div>
+
+<h2>What you can do now</h2>
+<ul>
+<li>Explain why an <code>int</code> is the wrong type for a value with a fixed list of meanings.</li>
+<li>Declare an <code>enum class</code>, use its scoped enumerators, compare them, and print one with <code>static_cast&lt;int&gt;</code> or a name function.</li>
+<li>Write a <code>switch</code> with <code>case</code>, <code>break</code>, <code>return</code> from a case, stacked labels and <code>default</code>, and say what the fallthrough trap looks like in output.</li>
+<li>Use <code>-Wswitch</code> on purpose: list every enumerator, leave out <code>default</code>, and put the fallback after the switch.</li>
+<li>Build a state machine from an enumeration and a few switches, including a final state it never leaves.</li>
+<li>Paste a function into Compiler Explorer with AArch64 clang and <code>-O2</code>, and tell a compare chain, a jump table and a lookup table apart.</li>
+</ul>
+</main>
+</body>
+</html>

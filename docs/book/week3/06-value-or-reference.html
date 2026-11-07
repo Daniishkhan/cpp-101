@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>06 · By value or by reference — C++ from Life to Snake</title>
+<link rel="stylesheet" href="../week1/assets/book.css?v=9">
+<link rel="stylesheet" href="../week1/assets/tutor.css?v=9">
+<script src="../week1/assets/theme.js?v=9"></script>
+<script defer src="assets/book.js?v=9"></script>
+<script defer src="assets/tutor.js?v=9"></script>
+</head>
+<body>
+<nav class="sidebar" aria-label="Chapters"></nav>
+<main>
+<p class="chapter-kicker">Chapter 06</p>
+<h1>By value or by reference</h1>
+<p class="lede">At the end of this chapter you will choose between <code>T</code>, <code>const T&amp;</code> and <code>T&amp;</code> on purpose for structs, containers and random engines, and back the choice with a measurement. You will also have seen the one bug a reference makes that the compiler cannot warn about: a reference into a vector that has moved.</p>
+
+<div class="callout note"><span class="label">In this chapter</span>
+<ul>
+<li>What a copy of a struct or a container really costs, and why <code>sizeof</code> does not tell the whole story.</li>
+<li>Small structs by value: a <code>Date</code> and a <code>Colour</code>.</li>
+<li>Big containers by <code>const&amp;</code>: a million-int deque, timed both ways.</li>
+<li>Changing the caller's object through <code>&amp;</code>, or returning a new one; returning structs by value.</li>
+<li>The engine trap: dice that roll the same number every time, and <code>std::uniform_int_distribution</code>.</li>
+<li>A reference into a vector that dies when the vector grows, and what AddressSanitizer says.</li>
+<li>The decision table, and how an inference engine makes the same choices.</li>
+</ul>
+</div>
+
+<h2>The same question, with real types</h2>
+<p><a href="../week1/05-references-and-const.html">Week 1 chapter 5</a> gave you three ways to hand a value to a function and a table of rules for choosing. <code>int v</code>: a copy. <code>int&amp; v</code>: the caller's own box, which the function may change. <code>const int&amp; v</code>: the caller's own box, read-only. Small things by value, big read-only things by <code>const&amp;</code>, things to change by <code>&amp;</code>. In Week 1 the examples were <code>int</code>s and one big string, and the big thing in Life was a grid.</p>
+<p>This week you own real types: structs from <a href="01-structs.html">chapter 1</a>, a <code>std::deque</code> from <a href="04-deque.html">chapter 4</a>, optionals from <a href="05-optional.html">chapter 5</a>, and a random engine. The rules do not change, but applying them now takes a judgement: is this struct small? Is this container big? Does the function change it? This chapter makes each judgement once, with numbers, so that you can make it quickly for the rest of the course.</p>
+
+<div class="callout principle"><span class="label">First principle</span><p>Passing by value copies every byte of the object, and for a container that includes every element it owns. Passing by reference copies nothing but costs a detour: the function reaches the object through its address. Neither is free. Which one is cheaper depends on how many bytes the copy would move, and which one is right depends first on whether the function should be able to change the caller's object.</p></div>
+
+<h2>Small structs: by value</h2>
+<p>A struct of a few numbers is small. Copying it moves a handful of bytes, which is as cheap as anything the machine does. Here are two such structs and two functions that take them by value:</p>
+
+<pre class="code" data-lang="cpp" data-file="small_by_value.cpp" data-check="run"><code>#include &lt;print>
+
+struct Date {
+    int year = 2026;
+    int month = 1;
+    int day = 1;
+};
+
+struct Colour {
+    int red = 0;  // each channel from 0 to 255
+    int green = 0;
+    int blue = 0;
+};
+
+// Small and read-only: by value. Each call copies two 12-byte Dates.
+bool same_month(Date a, Date b) {
+    return a.year == b.year &amp;&amp; a.month == b.month;
+}
+
+// Small, and the function wants a changed copy anyway: by value in, by value out.
+Colour inverted(Colour c) {
+    c.red = 255 - c.red;
+    c.green = 255 - c.green;
+    c.blue = 255 - c.blue;
+    return c;
+}
+
+int main() {
+    std::println("sizeof(Date) = {}, sizeof(Colour) = {}", sizeof(Date), sizeof(Colour));
+
+    const Date today{2026, 11, 26};
+    const Date deadline{2026, 11, 28};
+    std::println("same month: {}", same_month(today, deadline));
+
+    const Colour orange{255, 165, 0};
+    const Colour opposite = inverted(orange);
+    std::println("orange {} {} {}, inverted {} {} {}", orange.red, orange.green, orange.blue,
+                 opposite.red, opposite.green, opposite.blue);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="small_by_value.cpp"><code>sizeof(Date) = 12, sizeof(Colour) = 12
+same month: true
+orange 255 165 0, inverted 0 90 255
+</code></pre>
+
+<p>A <code>Date</code> is three <code>int</code>s, 12 bytes, and so is <a href="01-structs.html">chapter 1</a>'s <code>Colour</code>. Calling <code>same_month(today, deadline)</code> copies 24 bytes in all.</p>
+<p>Why not <code>const Date&amp;</code>, to save the copy? Because a reference is not free either. Under the hood it is the object's address, 8 bytes on this Mac, so passing a reference to a 12-byte <code>Date</code> saves 4 bytes of copying and in exchange makes every use of <code>a.month</code> inside the function a trip to memory through that address. A small struct passed by value can travel to the function inside the processor itself, in <strong>registers</strong>: the processor's own handful of tiny storage slots, each 8 bytes, much faster than memory. On your Mac's processor a struct of up to 16 bytes is handed over in at most two of them. You will look at this in the machine code in week 4; for now take the rule of thumb: <strong>a struct of a few numbers, up to about 16 bytes, goes by value.</strong> It is also simpler to read: <code>Date a</code> says "a date", while <code>const Date&amp; a</code> makes the reader wonder whether the function cares about which date object it was.</p>
+<p><code>inverted</code> shows the second reason to take a small struct by value: the function wants a changed copy anyway. The parameter <em>is</em> the copy. It turns each channel of its own <code>c</code> into 255 minus itself and returns it, and the caller's <code>orange</code> is untouched, which is why it can be <code>const</code>.</p>
+
+<div class="callout analogy"><span class="label">Analogy</span><p>Passing by value is handing someone a photocopy; passing by reference is telling them which drawer the original is in. For a postcard, the photocopy is quicker: no walking to the drawer. For a phone book, giving directions to the drawer is far quicker than copying a thousand pages.</p>
+<p>Where it breaks: a photocopier's cost depends on the pages you can see. A C++ copy's cost depends on what the object <em>owns</em>, which you often cannot see from outside. The next section has an object whose box is 48 bytes and whose copy is four million.</p></div>
+
+<h2>Big containers: by const&amp;</h2>
+<p>The program below fills a <code>std::deque&lt;int&gt;</code> with a million numbers and sums it twenty times through each of two functions. They are identical except for the parameter: one takes the deque by value, the other by <code>const&amp;</code>. It times both with <code>steady_clock</code>, exactly as <a href="../week1/09-terminal.html">Week 1 chapter 9</a> timed a frame.</p>
+
+<pre class="code" data-lang="cpp" data-file="deque_timing.cpp" data-check="run"><code>#include &lt;chrono>
+#include &lt;deque>
+#include &lt;print>
+
+long long sum_copy(std::deque&lt;int> numbers) {  // by value: copies every element
+    long long total = 0;
+    for (int n : numbers) {
+        total += n;
+    }
+    return total;
+}
+
+long long sum_view(const std::deque&lt;int>&amp; numbers) {  // by const&amp;: copies nothing
+    long long total = 0;
+    for (int n : numbers) {
+        total += n;
+    }
+    return total;
+}
+
+int main() {
+    using clock = std::chrono::steady_clock;
+    using std::chrono::duration_cast;
+    using std::chrono::microseconds;
+
+    std::deque&lt;int> numbers;
+    for (int i = 0; i &lt; 1000000; ++i) {
+        numbers.push_back(i % 100);
+    }
+    std::println("{} ints, sizeof(numbers) = {} bytes", numbers.size(), sizeof(numbers));
+
+    const int calls = 20;
+    long long check = 0;
+
+    const auto copy_start = clock::now();
+    for (int i = 0; i &lt; calls; ++i) {
+        check += sum_copy(numbers);
+    }
+    const auto copy_time = duration_cast&lt;microseconds>(clock::now() - copy_start);
+
+    const auto view_start = clock::now();
+    for (int i = 0; i &lt; calls; ++i) {
+        check += sum_view(numbers);
+    }
+    const auto view_time = duration_cast&lt;microseconds>(clock::now() - view_start);
+
+    std::println("by value:  {:6} microseconds per call", copy_time.count() / calls);
+    std::println("by const&amp;: {:6} microseconds per call", view_time.count() / calls);
+    std::println("(both sums together: {})", check);
+    return 0;
+}
+</code></pre>
+
+<p>One run with <code>tools/run.sh</code>, the Debug build with sanitizers that you develop in, and one with <code>-O2</code>, the optimised kind of build you benchmark with (<a href="../week1/13-timing-and-benchmark.html">Week 1 chapter 13</a>). These are real numbers from this Mac; yours will differ, and so will two runs here.</p>
+<pre class="shell"><code>$ tools/run.sh scratch/deque_timing.cpp
+1000000 ints, sizeof(numbers) = 48 bytes
+by value:   31670 microseconds per call
+by const&amp;:  10228 microseconds per call
+(both sums together: 1980000000)
+$ clang++ -std=c++23 -Wall -Wextra -O2 scratch/deque_timing.cpp -o scratch/deque_timing
+$ ./scratch/deque_timing
+1000000 ints, sizeof(numbers) = 48 bytes
+by value:     540 microseconds per call
+by const&amp;:    261 microseconds per call
+(both sums together: 1980000000)
+</code></pre>
+<p>Start with the first line, because it is the surprise. <code>sizeof(numbers)</code> is 48 bytes, for a deque holding four million bytes of <code>int</code>s. <code>sizeof</code> measures the variable's own box: the bookkeeping that says where the elements are and how many there are. The elements live elsewhere, on the heap, in blocks the deque owns (<a href="../week1/06-vector.html#who-owns-the-elements">Week 1 chapter 6</a> showed the same for a vector, whose box was 24 bytes). Copying the deque copies what it owns: the copy asks the heap for new blocks and copies all four million bytes into them, and at the end of <code>sum_copy</code> it gives every block back.</p>
+<p>That work is the difference between the two lines. In the Debug build the copy turned 10 milliseconds per call into 32. In the optimised build both got much faster, and the copy still more than doubled the time. Summing has to read every element anyway, so a copy "only" doubles or triples the cost here; a function that reads a single element of the deque would pay the whole four-megabyte copy to look at four bytes.</p>
+
+<div class="callout trap"><span class="label">Trap</span><p><code>sizeof</code> is not the cost of a copy. For a <code>std::string</code>, a <code>std::vector</code>, a <code>std::deque</code>, or a struct that contains any of them, <code>sizeof</code> counts only the box, and the copy also duplicates everything the box points at. When you judge "small or big", ask how much the object <em>owns</em>, not how big its box is.</p></div>
+
+<div class="callout try"><span class="label">Try it</span><p>Add a third function, <code>int first_of(std::deque&lt;int&gt; numbers)</code>, that returns <code>numbers.front()</code>, and time it the same way. Predict the number before you run: closer to the by-value sum or to zero? Then change its parameter to <code>const std::deque&lt;int&gt;&amp;</code> and time it again. (Use <code>-O2</code> for both, and expect the second to print 0 microseconds: it is too fast for this clock to see.)</p></div>
+
+<h2>Changing the caller's object, or returning a new one</h2>
+<p>The third kind of parameter, <code>T&amp;</code>, is for a function whose job is to change something the caller owns. A bank account is the classic case. Here are two functions that add money: one changes the caller's account, the other leaves it alone and returns a changed copy.</p>
+
+<pre class="code" data-lang="cpp" data-file="bank.cpp" data-check="run"><code>#include &lt;print>
+#include &lt;string>
+
+struct Account {
+    std::string owner;
+    int balance_cents = 0;  // whole cents: a double cannot hold 0.10 exactly
+};
+
+// The function's job is to change the caller's account: by reference.
+void deposit(Account&amp; account, int cents) {
+    account.balance_cents += cents;
+}
+
+// The caller wants a changed copy and keeps the original: by value, and return it.
+Account with_deposit(Account account, int cents) {
+    account.balance_cents += cents;
+    return account;
+}
+
+int main() {
+    Account mine{"Danish", 10000};
+    deposit(mine, 2550);
+    std::println("after deposit:     {} has {} cents", mine.owner, mine.balance_cents);
+
+    const Account what_if = with_deposit(mine, 100000);
+    std::println("what if:           {} cents", what_if.balance_cents);
+    std::println("the real account:  {} cents", mine.balance_cents);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="bank.cpp"><code>after deposit:     Danish has 12550 cents
+what if:           112550 cents
+the real account:  12550 cents
+</code></pre>
+
+<p><code>deposit(mine, 2550)</code> binds <code>account</code> to <code>mine</code> itself, so the 25.50 lands in the caller's account; no copy of the struct is made. <code>with_deposit(mine, 100000)</code> works on a private copy, returns it, and <code>mine</code> is the same afterwards. Both are correct; they answer different questions. "Put this money in my account" is <code>deposit</code>. "What would my account look like after a big deposit?" is <code>with_deposit</code>, and there a copy is not a cost to avoid but the whole point.</p>
+<p>The money is in whole cents, an <code>int</code>, because a <code>double</code> cannot hold 0.10 exactly (<a href="../week1/02-values-and-types.html">Week 1 chapter 2</a>) and a bank that loses a fraction of a cent per deposit is a bank in trouble.</p>
+<p>Notice the two signatures. <code>void deposit(Account&amp; account, int cents)</code> reads aloud as "give me your account itself; I will change it". <code>Account with_deposit(Account account, int cents)</code> reads as "give me a copy; I hand back a new account". As <a href="../week1/05-references-and-const.html">Week 1 chapter 5</a> warned, the two calls look the same at the call site, so the signature is the only place this promise is written. That is why the declarations in <code>snake.hpp</code> are worth reading slowly: <code>void tick(Game&amp; game, ...)</code> promises to change the game you pass it, and <code>std::string render(const Game&amp; game)</code> promises only to look.</p>
+
+<h3>Returning a struct by value is fine</h3>
+<p><code>with_deposit</code> and <code>inverted</code> both return a whole struct. Does that cost a second copy, from the function's variable into the caller's? Usually not. When a function returns an object by value, the caller sets aside room for the result in its own frame, and the compiler builds the result directly in that room. For a freshly made value, such as <code>return Date{2026, 11, 26};</code>, C++17 guarantees it, and for a named local variable compilers do it almost always. A parameter, like <code>account</code> in <code>with_deposit</code>, is the one case where it cannot happen, because the parameter already existed before the function started; there the compiler hands the result over with something cheaper than a copy, a <strong>move</strong>, which week 4 explains (for a 12-byte <code>Colour</code>, a move is simply a copy of its 12 bytes). So the rule from Week 1 stands: one result, return it by value; never return a reference to a local (<a href="07-lifetime-and-raii.html">chapter 7</a> shows that bug again with an object you can watch die).</p>
+
+<h2>The engine trap: dice that always roll a 4</h2>
+<p>You want a function that rolls a six-sided die. <a href="../week1/08-strings-and-args.html">Week 1 chapter 8</a> introduced <code>std::mt19937</code>, the generator, and <code>std::uniform_real_distribution&lt;double&gt;</code>, which shapes its raw numbers into a real number in a range. Its integer sibling is <strong><code>std::uniform_int_distribution&lt;int&gt;</code></strong>: <code>std::uniform_int_distribution&lt;int&gt; die(1, 6);</code> gives whole numbers from 1 to 6 inclusive, each equally likely, every time you hand it the engine. Here is the roll with the engine taken by value, which looks harmless: the function only uses the engine, and it has no intention of changing anything the caller owns.</p>
+
+<pre class="code" data-lang="cpp" data-file="dice_copy.cpp" data-check="run"><code>#include &lt;print>
+#include &lt;random>
+
+// The engine arrives BY VALUE: `rng` is a copy of the caller's engine.
+int roll(std::mt19937 rng) {
+    std::uniform_int_distribution&lt;int> die(1, 6);
+    return die(rng);
+}
+
+int main() {
+    std::mt19937 rng(23);
+    for (int i = 0; i &lt; 8; ++i) {
+        std::print("{} ", roll(rng));
+    }
+    std::println();
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="dice_copy.cpp"><code>4 4 4 4 4 4 4 4 
+</code></pre>
+
+<p>Eight rolls, eight 4s. Run it again and you get eight 4s again; seed it differently and you get eight of some other number. Now the same program with one character added, an <code>&amp;</code>:</p>
+
+<pre class="code" data-lang="cpp" data-file="dice_ref.cpp" data-check="run"><code>#include &lt;print>
+#include &lt;random>
+
+// The engine arrives BY REFERENCE: `rng` is another name for the caller's engine.
+int roll(std::mt19937&amp; rng) {
+    std::uniform_int_distribution&lt;int> die(1, 6);
+    return die(rng);
+}
+
+int main() {
+    std::mt19937 rng(23);
+    for (int i = 0; i &lt; 8; ++i) {
+        std::print("{} ", roll(rng));
+    }
+    std::println();
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="dice_ref.cpp"><code>4 1 2 1 6 5 4 3 
+</code></pre>
+
+<p>Here is the mechanism. An engine is a variable full of state: 2,504 bytes, which <a href="../week1/08-strings-and-args.html">Week 1 chapter 8</a> printed with <code>sizeof</code>. Every number it gives you stirs that state, and the next number comes from the stirred state. In <code>dice_copy.cpp</code>, each call to <code>roll</code> copies the caller's engine into the parameter, draws one number from the copy, stirring the copy, and then the copy dies at the closing brace. The caller's engine was never touched. The next call copies the same unstirred state again and draws the same first number again. The copy's state moved on; the original's did not.</p>
+<p>In <code>dice_ref.cpp</code>, <code>rng</code> inside <code>roll</code> is another name for <code>main</code>'s engine, so every draw stirs the one engine that lives on. Its first roll is the same 4 (same seed, same first draw), and from then on each call continues the sequence. As a bonus, nothing is copied: the by-value version moved 2,504 bytes per roll to produce a wrong answer.</p>
+
+<div class="callout principle"><span class="label">First principle</span><p>A random engine is never read-only: giving you a number <em>is</em> changing it. So it can be neither a copy, which makes the change vanish, nor a <code>const&amp;</code>, which forbids the change. If you try <code>const std::mt19937&amp;</code>, the compiler refuses with a long message whose last note ends <code>but method is not marked const</code>: the function that draws a number is allowed to change the engine, so it cannot be called on a read-only one. A random engine always goes by plain <code>&amp;</code>.</p></div>
+
+<p>That is why every function in <code>snake.hpp</code> that draws a random number takes <code>std::mt19937&amp; rng</code>, and why the comment above <code>place_food</code> says the reference is there on purpose. The test <code>"place_food: the same seed gives the same food, and the engine moves on"</code> checks both halves of this section: two engines with one seed give one sequence, and ten calls on one engine do not give the same cell ten times.</p>
+
+<div class="callout trap"><span class="label">Trap</span><p>The by-value engine compiles without a warning and gives numbers that look random in any single call. It only shows itself when you look at many calls together. When a game always puts the food in the same place, or a "random" test always draws the same case, look for an engine passed by value, or for an engine created inside the function (Week 1 chapter 8's trap), which is the same mistake in another form.</p></div>
+
+<h2>A reference into a vector that moves</h2>
+<p>A reference is a second name for an existing box. All the bugs with references are one bug: the box stops existing while the name is still in use. <a href="07-lifetime-and-raii.html">Chapter 7</a> shows the version where the box is a local variable. Here is the version where the box is an element of a vector, and the vector moves.</p>
+
+<pre class="code" data-lang="cpp" data-file="dangling_score.cpp" data-check="compile"><code>#include &lt;print>
+#include &lt;vector>
+
+int main() {
+    std::vector&lt;int> scores = {7, 9, 4};
+    int&amp; best = scores[1];  // a second name for the 9
+    std::println("best = {}, capacity = {}", best, scores.capacity());
+
+    scores.push_back(10);  // no room left: the vector moves
+    std::println("capacity now {}", scores.capacity());
+
+    best += 1;  // the 9 is not where it was
+    std::println("best = {}", best);
+    return 0;
+}
+</code></pre>
+<pre class="shell"><code>$ tools/run.sh scratch/dangling_score.cpp
+</code></pre>
+<pre class="output"><code>best = 9, capacity = 3
+capacity now 6
+=================================================================
+==27689==ERROR: AddressSanitizer: heap-use-after-free on address 0x6020000000f4 at pc 0x000104eb0cbc bp 0x00016af4da10 sp 0x00016af4da08
+READ of size 4 at 0x6020000000f4 thread T0
+    #0 0x000104eb0cb8 in main dangling_score.cpp:12:10
+    #1 0x000186c214e0 in start (/usr/lib/dyld:arm64e+0x204e0)
+
+0x6020000000f4 is located 4 bytes inside of 12-byte region [0x6020000000f0,0x6020000000fc)
+freed by thread T0 here:
+    #0 0x000105968358 in _ZdlPv (libclang_rt.asan_osx_dynamic.dylib:arm64e+0x50358)
+    ...
+    #8 0x000104eb147c in std::__1::vector&lt;int, std::__1::allocator&lt;int>>::push_back[abi:nqe210106](int&amp;&amp;) vector.h:457:90
+    #9 0x000104eb0c0c in main dangling_score.cpp:9:12
+    #10 0x000186c214e0 in start (/usr/lib/dyld:arm64e+0x204e0)
+
+previously allocated by thread T0 here:
+    #0 0x000105967f50 in _Znwm (libclang_rt.asan_osx_dynamic.dylib:arm64e+0x4ff50)
+    ...
+    #10 0x000104eb0b04 in main dangling_score.cpp:5:31
+    #11 0x000186c214e0 in start (/usr/lib/dyld:arm64e+0x204e0)
+
+SUMMARY: AddressSanitizer: heap-use-after-free dangling_score.cpp:12:10 in main
+Shadow bytes around the buggy address:
+  ...
+==27689==ABORTING
+</code></pre>
+
+<p>(Real output, trimmed: library frames are cut to <code>...</code>, long paths are shortened, and the frames on your Mac may show <code>dangling_score.cpp:12</code> without the column. The addresses and the process number will differ.)</p>
+<p>The first two lines explain everything. A vector keeps its elements in one block on the heap, and <strong><code>capacity()</code></strong> is how many elements fit in that block before it is full. This vector started with exactly 3. The call to <code>push_back</code> needed a fourth slot, so the vector did what a vector does: it asked the heap for a bigger block (room for 6), copied the three elements across, added the 10, and gave the old block back. <code>best</code> still names the slot in the old block, and line 12 reads it.</p>
+<p>Read the report in the order <a href="../week1/06-vector.html">Week 1 chapter 6</a> taught. The kind: <code>heap-use-after-free</code>, a heap block used after it was given back. What: <code>READ of size 4</code>, one <code>int</code>, the read half of <code>best += 1</code>. Where: <code>#0 ... in main dangling_score.cpp:12</code>. Then the two sections that make this kind of report so useful. <code>freed by thread T0 here</code> tells you who gave the block back: entry <code>#9</code>, line 9, the <code>push_back</code> (entries <code>#0</code> to <code>#8</code> are the library at work; <code>_ZdlPv</code> is the compiler's internal name for the function that returns memory to the heap). <code>previously allocated by thread T0 here</code> tells you who asked for it: line 5, where the vector was made (<code>_Znwm</code> is the internal name of the function that asks the heap for memory). The block was 12 bytes, three <code>int</code>s, and the read was 4 bytes inside it: element 1, the 9.</p>
+<p>Without the sanitizers, compiled plainly, the same program printed <code>best = 1</code> on this Mac and exited with status 0. Not 9, not 10: the heap had already reused the freed bytes for its own bookkeeping, the program added 1 to whatever was there, and the vector's real 9 was never touched. Nothing in the source looks wrong; the reference was valid when it was made.</p>
+<p>The cure is to not hold a reference to an element across anything that can make the container move. Keep the element's <em>position</em> instead, and look it up again after the change:</p>
+
+<pre class="code" data-lang="cpp" data-file="index_not_reference.cpp" data-check="run"><code>#include &lt;cstddef>
+#include &lt;print>
+#include &lt;vector>
+
+int main() {
+    std::vector&lt;int> scores = {7, 9, 4};
+    const std::size_t best = 1;  // a position, not a reference
+
+    scores.push_back(10);  // the vector moves; positions do not
+    scores[best] += 1;
+    std::println("scores[{}] = {}", best, scores[best]);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="index_not_reference.cpp"><code>scores[1] = 10
+</code></pre>
+
+<p>A position survives the move because it is just a number: element 1 is element 1 in the old block and in the new one.</p>
+
+<div class="callout note"><span class="label">A deque is different, but do not build on it</span><p>The C++ standard says that adding an element at either end of a <code>std::deque</code>, with <code>push_back</code> or <code>push_front</code>, keeps references to the existing elements valid: a deque grows by adding blocks, and it never moves the elements it already has. (It does invalidate iterators, which you meet in week 5.) Inserting in the middle or removing elements can break references, and the rule is different for every container. So in this course, treat every reference into a container as valid only until the container next changes, deque included. Positions and fresh look-ups are always safe.</p></div>
+
+<div class="callout try"><span class="label">Try it</span><p>In <code>dangling_score.cpp</code>, add the line <code>scores.reserve(10);</code> straight after the vector is made. <code>reserve</code> asks the vector to make room for 10 elements at once. Predict what both <code>capacity</code> lines print and whether the report still appears; then run it under <code>tools/run.sh</code>. Why is "it works now" not the same as "it is correct now"?</p></div>
+<details class="answer"><summary>Show the answer</summary><p>The capacity is 10 both times, the vector never needs to move, and the report disappears: <code>best</code> now really does refer to the 9 and the last line prints <code>best = 10</code>. It works, but only because of a promise made a few lines earlier. Push a few more scores one day, or change the 10 to a 3, and the bug returns with no change near the line that fails. Holding a position instead of a reference does not depend on anything else in the program.</p></details>
+
+<h2>The decision table</h2>
+<p>Everything in this chapter, in one place. It is Week 1's table, grown up.</p>
+
+<table>
+<thead><tr><th>The parameter is...</th><th>Declare it as</th><th>Examples</th></tr></thead>
+<tbody>
+<tr><td>Small and read-only: a few numbers, up to about 16 bytes, owning nothing on the heap</td><td><code>T</code> (by value)</td><td><code>int</code>, <code>double</code>, <code>Date</code>, <code>Colour</code>, <code>std::optional&lt;double&gt;</code>, an enumerator</td></tr>
+<tr><td>Big and read-only: anything that owns heap memory, or any big struct</td><td><code>const T&amp;</code></td><td><code>const std::deque&lt;int&gt;&amp;</code>, <code>const std::string&amp;</code>, <code>const std::vector&lt;Entry&gt;&amp;</code>, a struct that contains any of them</td></tr>
+<tr><td>Changed by the function, for the caller</td><td><code>T&amp;</code></td><td><code>Account&amp;</code> in <code>deposit</code></td></tr>
+<tr><td>A random engine</td><td><code>std::mt19937&amp;</code>, always</td><td><code>roll(std::mt19937&amp; rng)</code></td></tr>
+<tr><td>A copy the function wants to change and hand back</td><td><code>T</code> in, <code>T</code> returned</td><td><code>inverted</code>, <code>with_deposit</code></td></tr>
+<tr><td>The function's result</td><td>return by value</td><td>a struct, a string, an optional</td></tr>
+</tbody>
+</table>
+
+<p>Two of the examples in the table own heap memory without looking like it: a <code>std::string</code> always may, and a struct such as <code>Account</code>, which contains one, is "big" by the same reasoning even though its <code>sizeof</code> is 32. When in doubt, ask "does it own a container?". If yes, <code>const&amp;</code>.</p>
+
+<div class="callout twin"><span class="label">Inference twin</span><p>An inference engine makes exactly these three choices, at a scale that turns mistakes into disasters. The weights of SmolLM2-135M, the model you run from week 17, are about 135 million numbers; at fp32, four bytes each, that is about 540 MB. Every function that computes with them takes them through a <code>const</code> reference or a view (a reference plus a shape, week 15), and a single by-value parameter in the wrong place would copy half a gigabyte per token. The <strong>KV cache</strong>, the memory where the model keeps what it has computed for earlier tokens (week 18), is the opposite case: it is written in place on every step, through a plain reference, exactly like <code>deposit</code>. And the small settings that steer generation, a temperature, a top-k, a seed, travel together in a small struct by value, like <code>Date</code>. Big and read-only, changed in place, small and copied: the table above is the parameter list of a decode step.</p></div>
+
+<h2>Check yourself</h2>
+<div class="quiz">
+<div class="q"><p>A struct <code>Reading</code> holds a <code>double</code> temperature and an <code>int</code> minute. How would you pass it to a function that only prints it, and why?</p><details class="answer"><summary>Answer</summary><p>By value: <code>void show(Reading r)</code>. It is two numbers, 16 bytes with padding, owns nothing on the heap, and the function only reads it. Copying it is as cheap as going through a reference, and it can travel in registers.</p></details></div>
+
+<div class="q"><p><code>sizeof(std::deque&lt;int&gt;)</code> printed 48 for a deque holding a million <code>int</code>s. Why does passing it by value still cost milliseconds?</p><details class="answer"><summary>Answer</summary><p><code>sizeof</code> counts only the deque's own box, the bookkeeping. The million elements live in heap blocks the deque owns, and a copy duplicates what it owns: it asks the heap for new blocks, copies four million bytes and gives the blocks back when the copy dies.</p></details></div>
+
+<div class="q"><p><code>int roll(std::mt19937 rng)</code> returns the same number on every call with the same engine. Explain in terms of the engine's state, and give the one-character fix.</p><details class="answer"><summary>Answer</summary><p>Each call copies the caller's engine state into <code>rng</code>, draws from the copy (which stirs the copy) and throws the copy away. The caller's engine never changes, so every call starts from the same state and draws the same number. Add <code>&amp;</code>: <code>int roll(std::mt19937&amp; rng)</code>, so every draw stirs the caller's engine.</p></details></div>
+
+<div class="q"><p>Why can the engine not be passed as <code>const std::mt19937&amp;</code>?</p><details class="answer"><summary>Answer</summary><p>Drawing a number changes the engine's state, and <code>const</code> forbids changes, so the compiler refuses the draw (its message ends <code>but method is not marked const</code>). A random engine is never read-only.</p></details></div>
+
+<div class="q"><p>A function takes <code>Account&amp; account</code> and another takes <code>Account account</code> and returns an <code>Account</code>. At the call site both look like <code>f(mine, 100)</code>. Which one changes <code>mine</code>, and where do you find out?</p><details class="answer"><summary>Answer</summary><p>Only the one with <code>Account&amp;</code> changes <code>mine</code>; the other changes a copy and returns it. The call site cannot tell you; the declaration, with or without the <code>&amp;</code>, is the only place the promise is written.</p></details></div>
+
+<div class="q"><p>After <code>int&amp; r = v[0];</code> the program calls <code>v.push_back(5)</code> and then reads <code>r</code>. Under the sanitizers it sometimes reports <code>heap-use-after-free</code> and sometimes does not. Why the difference, and what is the robust fix?</p><details class="answer"><summary>Answer</summary><p>It depends on the capacity. If the vector was full, <code>push_back</code> moved the elements to a new block and freed the old one, and <code>r</code> names a slot in the freed block: use after free. If there was spare capacity, nothing moved and <code>r</code> is still fine, by luck. The fix that does not depend on luck is to keep the position, <code>std::size_t i = 0;</code>, and use <code>v[i]</code> after the change.</p></details></div>
+
+<div class="q"><p>Fill in the parameter types for <code>bool on_weekend(? date)</code>, <code>double average(? readings)</code> where <code>readings</code> is a <code>std::deque&lt;double&gt;</code>, <code>void add_reading(? readings, double value)</code>, and <code>int draw_card(? rng)</code>.</p><details class="answer"><summary>Answer</summary><p><code>Date date</code> (small, read-only), <code>const std::deque&lt;double&gt;&amp; readings</code> (big, read-only), <code>std::deque&lt;double&gt;&amp; readings</code> (changed for the caller), <code>std::mt19937&amp; rng</code> (an engine, always by reference).</p></details></div>
+</div>
+
+<h2>What you can do now</h2>
+<ul>
+<li>Judge whether a type is small or big by what it owns, not by its <code>sizeof</code>.</li>
+<li>Pass small structs such as a <code>Date</code> or a <code>Colour</code> by value, and say why that is as cheap as a reference or cheaper.</li>
+<li>Pass containers by <code>const&amp;</code>, and show with <code>steady_clock</code> what a by-value copy of a million-element deque costs.</li>
+<li>Choose between changing the caller's object through <code>&amp;</code> and returning a new value, and read that choice off a signature.</li>
+<li>Return structs by value without worrying about copies.</li>
+<li>Roll dice with <code>std::uniform_int_distribution&lt;int&gt;</code>, and explain why an engine passed by value repeats itself while one passed by <code>&amp;</code> moves on.</li>
+<li>Read a <code>heap-use-after-free</code> report, find who freed the block and who allocated it, and avoid holding references into a container across a change.</li>
+</ul>
+</main>
+</body>
+</html>

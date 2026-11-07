@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""book-check.py — verify the Week 1 book.
+"""book-check.py — verify the books: every docs/book/weekN folder (Week 1, Week 3, ...).
 
-For every chapter HTML file (or the ones given on the command line):
+For every chapter HTML file of every week (or the files and week folders given on the command line):
   * extracts every <pre class="code" data-lang="cpp"> block
   * data-check="run"      -> must compile (C++23, -Wall -Wextra, ASan+UBSan) AND run with exit 0 (10 s timeout)
   * data-check="compile"  -> must compile only (programs that sleep, wait for input, or loop forever)
@@ -10,17 +10,20 @@ For every chapter HTML file (or the ones given on the command line):
   * if a <pre class="output" data-for="FILE"> follows a "run" block, stdout must match it exactly
     (trailing whitespace on each line and at the end is ignored)
   * data-lang="cmake" / "shell" / "text" -> never compiled
-  * checks that every internal link (href="*.html[#id]") points at an existing file and anchor
+  * checks that every internal link (href="*.html[#id]") points at an existing file and anchor,
+    across weeks too (a Week 3 chapter may link to docs/book/week1/07-flat-grid.html#row-major),
+    and that every stylesheet and script a page loads (<link href>, <script src>) exists
   * warns about code blocks that lost their '<' to HTML parsing (e.g. "#include " followed by newline)
 
-Usage:  python3 tools/book-check.py                 # all chapters
+Usage:  python3 tools/book-check.py                 # every chapter of every week
+        python3 tools/book-check.py docs/book/week3     # one week
         python3 tools/book-check.py docs/book/week1/03-control-flow.html
 Exit code 0 = all good, 1 = problems (listed).
 """
 import html, os, re, subprocess, sys, tempfile
 from html.parser import HTMLParser
 
-BOOK = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'docs', 'book', 'week1')
+BOOKS = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'docs', 'book'))
 CXX = os.environ.get('CXX', 'clang++')
 BASE_FLAGS = ['-std=c++23', '-Wall', '-Wextra']
 SAN_FLAGS = ['-g', '-fsanitize=address,undefined', '-fno-omit-frame-pointer']
@@ -46,6 +49,8 @@ class Collector(HTMLParser):
                              'file': a.get('data-file'), 'for': a.get('data-for'),
                              'check': a.get('data-check'), 'text': '', 'line': self.getpos()[0]}
         if tag == 'a' and a.get('href'): self.links.append((a['href'], self.getpos()[0]))
+        if tag == 'link' and a.get('href'): self.links.append((a['href'], self.getpos()[0]))
+        if tag == 'script' and a.get('src'): self.links.append((a['src'], self.getpos()[0]))
         if tag in ('h2', 'h3') and self._in_heading is None: self._in_heading = tag; self._heading_text = ''
     def handle_endtag(self, tag):
         if tag == 'pre' and self._cur is not None:
@@ -60,11 +65,24 @@ class Collector(HTMLParser):
 def norm(s):
     return '\n'.join(l.rstrip() for l in s.replace('\r', '').split('\n')).rstrip() + '\n'
 
+def week_dirs():
+    """docs/book/week1, docs/book/week3, ... in week order."""
+    names = [d for d in os.listdir(BOOKS) if re.fullmatch(r'week\d+', d) and os.path.isdir(os.path.join(BOOKS, d))]
+    return [os.path.join(BOOKS, d) for d in sorted(names, key=lambda d: int(d[4:]))]
+
+def chapters(folder):
+    return sorted(os.path.join(folder, f) for f in os.listdir(folder) if f.endswith('.html'))
+
+def label_of(path):
+    """week3/01-structs.html for a chapter inside docs/book, else the plain file name."""
+    rel = os.path.relpath(path, BOOKS)
+    return rel.replace(os.sep, '/') if not rel.startswith('..') else os.path.basename(path)
+
 def check_file(path, tmp, all_files):
     problems = []
     src = open(path, encoding='utf-8').read()
     p = Collector(); p.feed(src)
-    name = os.path.basename(path)
+    name = label_of(path)
     outputs = {b['for']: b for b in p.blocks if b['kind'] == 'output' and b['for']}
     n_code = 0
     for b in p.blocks:
@@ -109,6 +127,7 @@ def check_file(path, tmp, all_files):
     for href, line in p.links:
         if re.match(r'^[a-z]+:', href) or href.startswith('mailto:'): continue
         target, _, frag = href.partition('#')
+        target = target.partition('?')[0]       # assets/book.css?v=9 is the file assets/book.css
         if target:
             tpath = os.path.normpath(os.path.join(os.path.dirname(path), target))
             if not os.path.exists(tpath):
@@ -121,9 +140,11 @@ def check_file(path, tmp, all_files):
     return problems, n_code
 
 def main():
-    files = sys.argv[1:] or sorted(os.path.join(BOOK, f) for f in os.listdir(BOOK) if f.endswith('.html'))
+    files = []
+    for arg in sys.argv[1:] or week_dirs():
+        files += chapters(arg) if os.path.isdir(arg) else [arg]
     files = [os.path.abspath(f) for f in files]
-    all_html = sorted(os.path.abspath(os.path.join(BOOK, f)) for f in os.listdir(BOOK) if f.endswith('.html'))
+    all_html = [os.path.abspath(f) for d in week_dirs() for f in chapters(d)]
     all_ids = {}
     for f in all_html:
         c = Collector(); c.feed(open(f, encoding='utf-8').read()); all_ids[f] = c.ids
@@ -132,7 +153,7 @@ def main():
         for f in files:
             probs, n = check_file(f, tmp, all_ids)
             total_code += n
-            print(f"{'FAIL' if probs else 'ok  '} {os.path.basename(f)}  ({n} C++ blocks)")
+            print(f"{'FAIL' if probs else 'ok  '} {label_of(f)}  ({n} C++ blocks)")
             for pr in probs: print('   - ' + pr)
             total_problems += len(probs)
     print(f"\n{total_code} C++ blocks checked, {total_problems} problem(s)")

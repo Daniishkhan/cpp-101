@@ -32,9 +32,9 @@ teaches them.
 | Value semantics (a vector copy is a copy) | Language core | Weeks 1 and 2 / 01-life, [ch. 5](docs/book/week1/05-references-and-const.html), [ch. 6](docs/book/week1/06-vector.html) | week 4 (copy and move) | in progress |
 | Compilation model: headers, sources, translation units, the linker | Language core | Weeks 1 and 2 / 01-life, [ch. 10](docs/book/week1/10-headers-and-files.html) | week 4 (header-only vs compiled), week 13 (module boundaries of a 2 to 3k-line program) | in progress |
 | `#pragma once`, `using Name = Type;` | Language core | Weeks 1 and 2 / 01-life, [ch. 7](docs/book/week1/07-flat-grid.html), [ch. 10](docs/book/week1/10-headers-and-files.html) | every week | in progress |
-| `struct`, `enum class`, `switch` | Language core | Week 3 / 02-snake | weeks 4, 5, 13 | planned |
-| Scope and lifetime, RAII (a guard that restores the terminal) | Language core | Week 3 / 02-snake | week 10 (RAII at scale), week 22 (device memory) | planned |
-| `std::optional` for "no value" | Language core | Week 3 / 02-snake | week 17 | planned |
+| `struct`, `enum class`, `switch` | Language core | Week 3 / 02-snake, [ch. 1](docs/book/week3/01-structs.html), [ch. 2](docs/book/week3/02-enum-class-and-switch.html) | weeks 4, 5, 13 | planned |
+| Scope and lifetime, RAII (a guard that restores the terminal) | Language core | Week 3 / 02-snake, [ch. 7](docs/book/week3/07-lifetime-and-raii.html) | week 10 (RAII at scale), week 22 (device memory) | planned |
+| `std::optional` for "no value" | Language core | Week 3 / 02-snake, [ch. 5](docs/book/week3/05-optional.html) | week 17 | planned |
 | Classes with invariants, constructors, destructors | Language core | Week 4 / 03-tetris | weeks 10, 15 | planned |
 | Copy and move, operator overloading (a tiny `Vec2`), `static` | Language core | Week 4 / 03-tetris | week 10 (rule of five), week 15 | planned |
 
@@ -50,7 +50,7 @@ teaches them.
 | `argc` / `argv`, parsing `--flags` | Standard library | Weeks 1 and 2 / 01-life, [ch. 8](docs/book/week1/08-strings-and-args.html) | every program from week 3 | in progress |
 | `std::mt19937`, `uniform_real_distribution`, seeded randomness (minimal) | Standard library | Weeks 1 and 2 / 01-life, [ch. 8](docs/book/week1/08-strings-and-args.html) | week 5 (deep dive: `discrete_distribution`, sampling) | in progress |
 | `std::chrono`: durations, `steady_clock`, `sleep_for` | Standard library | Weeks 1 and 2 / 01-life, [ch. 9](docs/book/week1/09-terminal.html), [ch. 13](docs/book/week1/13-timing-and-benchmark.html) | week 3 (frame budget), week 12 (benchmark methodology) | in progress |
-| `std::deque` | Standard library | Week 3 / 02-snake | | planned |
+| `std::deque` | Standard library | Week 3 / 02-snake, [ch. 4](docs/book/week3/04-deque.html) | | planned |
 | `std::array` (nested vs flat) | Standard library | Week 4 / 03-tetris | week 12 | planned |
 | Iterators, `<algorithm>` (sort, partial_sort, accumulate, transform), lambdas; `std::priority_queue` (A* stretch only) | Standard library | Week 5 / 04-roguelike | weeks 8, 15 | planned |
 | `std::span<const float>` to pass views | Standard library | Week 15 / tensor | weeks 16 to 19 | planned |
@@ -92,8 +92,9 @@ teaches them.
 | Sanitizers (ASan, UBSan) in Debug builds | Systems | Weeks 1 and 2 / 01-life, [ch. 11](docs/book/week1/11-cmake.html) | every week; ThreadSanitizer week 11 | in progress |
 | Unit testing with doctest: `TEST_CASE`, `CHECK`, red to green | Systems | Weeks 1 and 2 / 01-life, [ch. 12](docs/book/week1/12-testing.html) | every week | in progress |
 | CI with GitHub Actions | Systems | Weeks 1 and 2 / 01-life (macOS runner) | three runners from week 6, release workflow week 13, weeks 29 and 30 (the public record) | in progress |
-| Raw terminal mode and keyboard input | Systems | Week 3 / 02-snake | weeks 4 to 6, 13 | planned |
-| Debugger (lldb / gdb): breakpoints, step over and into, conditional breakpoints, backtrace, tests under lldb with ASan | Systems | Week 3 / 02-snake (Tue 24 Nov session) | checkpoints: Buffer A (week 7, addresses), week 11 (threads, a TSan report), week 17 (raw mmap'd memory), week 22 (cuda-gdb or compute-sanitizer) | planned |
+| Raw terminal mode and keyboard input | Systems | Week 3 / 02-snake, [ch. 7](docs/book/week3/07-lifetime-and-raii.html), [ch. 8](docs/book/week3/08-keys-and-the-loop.html) | weeks 4 to 6, 13 | planned |
+| Signals: Ctrl-C as `SIGINT`, a handler that only sets a `volatile std::sig_atomic_t` flag, why a killed program runs no destructors | Systems | Week 3 / 02-snake, [ch. 7](docs/book/week3/07-lifetime-and-raii.html) | weeks 4 to 6, 13 (every raw-mode game) | planned |
+| Debugger (lldb / gdb): breakpoints, step over and into, conditional breakpoints, backtrace, tests under lldb with ASan | Systems | Week 3 / 02-snake (Tue 24 Nov session), [ch. 3](docs/book/week3/03-debugger.html) | checkpoints: Buffer A (week 7, addresses), week 11 (threads, a TSan report), week 17 (raw mmap'd memory), week 22 (cuda-gdb or compute-sanitizer) | planned |
 | File I/O, binary formats with a header, endianness | Systems | Weeks 3 and 5 (replay and dungeon save, both stretch), otherwise Week 17 / loader | week 17 (safetensors, GGUF in miniature), week 19 | planned |
 | Linux container parity (arm64 OrbStack), cachegrind, gdb; no AVX2 and no perf counters in the container | Systems | Week 6 / particles | weeks 12, 13 (arm64 build), 17 (arm64 binary with runtime dispatch), 18 | planned |
 | `mmap`, page faults, UTF-8 | Systems | Week 17 / loader | week 28 | planned |
@@ -172,7 +173,7 @@ the strand week, not a challenge.
 | Concept | Area | Introduced | Reused | Status |
 |---|---|---|---|---|
 | Hz, ms per frame, why 60 fps is 16.7 ms | Maths | Week 2 (strand) | week 3 (frame budget), week 18 (tokens/s) | planned |
-| Expected count of 10,000 random draws vs the observed count | Maths | Week 3 (strand) | week 5 (loot draws vs the table), week 18 (sampling) | planned |
+| Expected count of 10,000 random draws vs the observed count | Maths | Week 3 (strand), [ch. 9](docs/book/week3/09-build-snake.html#saturday-the-strands), `snake_bench draws` | week 5 (loot draws vs the table), week 18 (sampling) | planned |
 | 2x2 matrices as transformations, composition as product; the Tetris rotations on paper | Maths | Week 4 (strand) | week 16 (RoPE as rotation on dimension pairs) | planned |
 | Distributions, inverse-CDF sampling, expected value; temperature, top-k and top-p as truncation plus renormalisation | Maths | Week 5 (strand) | week 18 | planned |
 | Velocity, Euler integration, dot product as projection; one particle for three steps by hand | Maths | Week 6 (strand) | weeks 9, 12 (dot kernels), 15 (matmul) | planned |

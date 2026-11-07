@@ -1,0 +1,566 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>04 · std::deque — C++ from Life to Snake</title>
+<link rel="stylesheet" href="../week1/assets/book.css?v=9">
+<link rel="stylesheet" href="../week1/assets/tutor.css?v=9">
+<script src="../week1/assets/theme.js?v=9"></script>
+<script defer src="assets/book.js?v=9"></script>
+<script defer src="assets/tutor.js?v=9"></script>
+</head>
+<body>
+<nav class="sidebar" aria-label="Chapters"></nav>
+<main>
+<p class="chapter-kicker">Chapter 04</p>
+<h1>std::deque</h1>
+<p class="lede">At the end of this chapter you will be able to keep a sequence that grows and shrinks cheaply at both ends, explain why a <code>std::vector</code> cannot do that, and prove it with a measurement. You will use the new container as a queue, as a sliding window over a stream of readings and as something to search, and you will know the one mistake that this container punishes silently.</p>
+
+<div class="callout note"><span class="label">In this chapter</span>
+<ul>
+<li>The problem: a queue at a counter, and what the front of a vector costs, shifted by hand.</li>
+<li>A measurement: 100,000 insertions at the front, vector against deque.</li>
+<li>The deque's interface: both ends, <code>[]</code>, <code>size</code>, <code>empty</code>, <code>clear</code>, range-for.</li>
+<li>The rule: never look at or remove from an empty deque.</li>
+<li>How a deque is laid out: fixed-size blocks and a small table, and why its <code>[]</code> is slower than a vector's.</li>
+<li>A sliding window: the moving average of the last five readings.</li>
+<li>Searching a deque, passing one by <code>const&amp;</code>, and choosing between a deque and a vector.</li>
+</ul>
+</div>
+
+<h2>The problem: a queue at a counter</h2>
+<p>A post office counter has a queue. People take a ticket and join at the back; the clerk serves the person at the front, who leaves. Two ends, two jobs. Store the tickets in a <code>std::vector&lt;int&gt;</code> and the back is easy: <code>push_back</code>, which you have used since Week 1. The front is another story. A vector has no <code>push_front</code>, and no cheap way to remove its first element, because its elements must stay in one unbroken block in order: element 0 first, then element 1, and so on. Change who is first and everyone's position changes.</p>
+<p>Here is what that means, done by hand with index loops. Someone with an appointment goes to the front, and then the first person is served:</p>
+
+<pre class="code" data-lang="cpp" data-file="front_by_hand.cpp" data-check="run"><code>#include &lt;cstddef&gt;
+#include &lt;print&gt;
+#include &lt;vector&gt;
+
+void print_queue(const std::vector&lt;int&gt;&amp; queue) {
+    std::print("queue:");
+    for (int ticket : queue) {
+        std::print(" {}", ticket);
+    }
+    std::println("");
+}
+
+// Put a ticket at the front: every ticket already waiting moves one place back.
+int insert_at_front(std::vector&lt;int&gt;&amp; queue, int ticket) {
+    queue.push_back(0);                       // one more place, at the back
+    int moves = 0;
+    for (std::size_t i = queue.size() - 1; i &gt; 0; --i) {
+        queue[i] = queue[i - 1];              // from the back: each ticket steps back one place
+        ++moves;
+    }
+    queue[0] = ticket;
+    return moves;
+}
+
+// Serve the first ticket: every ticket behind it moves one place forward.
+int serve_front(std::vector&lt;int&gt;&amp; queue) {
+    int moves = 0;
+    for (std::size_t i = 0; i + 1 &lt; queue.size(); ++i) {
+        queue[i] = queue[i + 1];
+        ++moves;
+    }
+    queue.resize(queue.size() - 1);           // the last place is now a duplicate: drop it
+    return moves;
+}
+
+int main() {
+    std::vector&lt;int&gt; queue = {41, 42, 43, 44, 45};
+    print_queue(queue);
+
+    int moves = insert_at_front(queue, 40);   // ticket 40 has an appointment
+    print_queue(queue);
+    std::println("moves to put one ticket at the front: {}", moves);
+
+    moves = serve_front(queue);
+    print_queue(queue);
+    std::println("moves to serve the first ticket:      {}", moves);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="front_by_hand.cpp"><code>queue: 41 42 43 44 45
+queue: 40 41 42 43 44 45
+moves to put one ticket at the front: 5
+queue: 41 42 43 44 45
+moves to serve the first ticket:      5
+</code></pre>
+
+<p><code>insert_at_front</code> makes room at the back with a <code>push_back</code>, then walks from the back to the front, copying each ticket one place back, and only then writes the new ticket into place 0. It must walk from the back: walk from the front and you would copy ticket 41 over 42, then that 41 over 43, and so on down the line. <code>serve_front</code> is the mirror image: everyone steps forward one place, and <code>resize</code> drops the last place, which now holds a duplicate. Each operation moved all five waiting tickets. With a thousand people in the queue, it is a thousand moves to serve one person.</p>
+<p>(A vector does have a function, <code>insert</code>, that puts an element anywhere, including the front. It takes an <strong>iterator</strong>, a way of naming a position that this course meets later, and inside it does the same shifting. It is shorter to write, not faster to run.)</p>
+
+<div class="callout principle"><span class="label">First principle</span><p>A vector promises one unbroken block with element 0 at its start. That promise is what makes <code>v[i]</code> one multiplication and one addition, and it is also why the front is expensive: anything that changes which element is first must move every element. A container that wants a cheap front has to give up that promise.</p></div>
+
+<h2>Timing it</h2>
+<p>The C++ library has a container that gave up the promise: <code>std::deque</code>, from the header <code>&lt;deque&gt;</code>. Its name is short for <strong>double-ended queue</strong> and is pronounced "deck". Before learning its interface, measure it against the vector on the one operation that matters here, putting a value at the front, with the <code>steady_clock</code> pattern from Week 1's chapter 9:</p>
+
+<pre class="code" data-lang="cpp" data-file="front_timing.cpp" data-check="compile"><code>#include &lt;chrono&gt;
+#include &lt;cstddef&gt;
+#include &lt;deque&gt;
+#include &lt;print&gt;
+#include &lt;vector&gt;
+
+// Put value at the front of v by hand: every element moves one place towards the back.
+void shift_in_front(std::vector&lt;int&gt;&amp; v, int value) {
+    v.push_back(0);
+    for (std::size_t i = v.size() - 1; i &gt; 0; --i) {
+        v[i] = v[i - 1];
+    }
+    v[0] = value;
+}
+
+int main() {
+    using clock = std::chrono::steady_clock;
+    using std::chrono::duration_cast;
+    using std::chrono::microseconds;
+
+    const std::vector&lt;int&gt; sizes = {25000, 50000, 100000};
+    for (int n : sizes) {
+        std::vector&lt;int&gt; v;
+        const auto t0 = clock::now();
+        for (int i = 0; i &lt; n; ++i) {
+            shift_in_front(v, i);
+        }
+        const auto t1 = clock::now();
+
+        std::deque&lt;int&gt; d;
+        const auto t2 = clock::now();
+        for (int i = 0; i &lt; n; ++i) {
+            d.push_front(i);
+        }
+        const auto t3 = clock::now();
+
+        // Print the front of each, so that the compiler cannot skip the work.
+        std::println("{:6} at the front: vector {:8} us, deque {:4} us  (front: {} and {})", n,
+                     duration_cast&lt;microseconds&gt;(t1 - t0).count(),
+                     duration_cast&lt;microseconds&gt;(t3 - t2).count(), v[0], d[0]);
+    }
+    return 0;
+}
+</code></pre>
+<pre class="shell"><code>$ clang++ -std=c++23 -Wall -Wextra -O2 front_timing.cpp -o front_timing
+$ ./front_timing
+ 25000 at the front: vector    12026 us, deque   47 us  (front: 24999 and 24999)
+ 50000 at the front: vector    60243 us, deque   86 us  (front: 49999 and 49999)
+100000 at the front: vector   271607 us, deque  172 us  (front: 99999 and 99999)
+</code></pre>
+
+<p>Those numbers are from this Mac, built with <code>-O2</code> as Week 1's chapter 13 taught for any measurement; yours will differ. (The first run of the program gave 30 ms instead of 12 for the smallest vector case, the first-run effect chapter 13 warned about, which is why you run a measurement more than once.) Under two tenths of a millisecond for the deque, more than a quarter of a second for the vector: about 1,600 times. In a Debug build with the sanitizers, as <code>tools/run.sh</code> makes, the same program took 40 seconds for the vector at 100,000 and 10 ms for the deque, so build this one with <code>-O2</code>.</p>
+<p>The ratio is not a constant, and that is the real lesson. Look at how each column grows as <code>n</code> doubles. The deque goes 47, 86, 172: twice the work, twice the time. The vector goes 12, 60, 272 ms: four to five times for each doubling. Count the moves to see why. The first insertion moves 0 elements, the second 1, the third 2, and the last one <code>n - 1</code>. The total is 0 + 1 + 2 + ... + (n - 1), which is n × (n - 1) / 2: for 100,000 insertions, almost 5 billion moves. Double <code>n</code> and that total roughly quadruples. A cost that grows with the square of the size is called <strong>quadratic</strong>; one that grows in proportion to the size, like the deque's, is <strong>linear</strong>. At 10 elements nobody can tell them apart. At 100,000 one of them is unusable.</p>
+
+<div class="callout analogy"><span class="label">Analogy</span><p>A deque is a train. You can couple a carriage at the front or at the back, and the carriages already in the train do not move. A vector is a row of cinema seats bolted to the floor: someone arriving for seat 1 means everyone gets up and moves along. <em>Where it breaks:</em> a train's carriages are all the same size and hold one passenger list each. A deque's "carriages" are blocks of memory that each hold many elements, and a train has no index: you cannot ask a train for carriage 7 without walking along it, whereas a deque can find element 7 directly, with a little arithmetic. The layout section below shows both.</p></div>
+
+<h2>The deque's interface</h2>
+<p>A deque does everything a vector does with its back, the same things at its front, and keeps <code>[]</code>:</p>
+
+<pre class="code" data-lang="cpp" data-file="deque_tour.cpp" data-check="run"><code>#include &lt;deque&gt;
+#include &lt;print&gt;
+
+void show(const std::deque&lt;int&gt;&amp; waiting) {
+    std::print("waiting ({}):", waiting.size());
+    for (int ticket : waiting) {
+        std::print(" {}", ticket);
+    }
+    std::println("");
+}
+
+int main() {
+    std::deque&lt;int&gt; waiting;                 // empty at opening time
+    std::println("empty: {}", waiting.empty());
+
+    waiting.push_back(41);                   // people join at the back
+    waiting.push_back(42);
+    waiting.push_back(43);
+    show(waiting);
+
+    waiting.push_front(40);                  // an appointment goes straight to the front
+    show(waiting);
+
+    std::println("first: {}, last: {}, second: {}", waiting.front(), waiting.back(), waiting[1]);
+
+    waiting.pop_front();                     // 40 is served and leaves from the front
+    show(waiting);
+
+    waiting.pop_back();                      // 43 gives up and leaves from the back
+    show(waiting);
+
+    waiting[0] = 99;                         // [] can change an element, as in a vector
+    show(waiting);
+
+    waiting.clear();                         // closing time: everyone goes home
+    std::println("size: {}, empty: {}", waiting.size(), waiting.empty());
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="deque_tour.cpp"><code>empty: true
+waiting (3): 41 42 43
+waiting (4): 40 41 42 43
+first: 40, last: 43, second: 41
+waiting (3): 41 42 43
+waiting (2): 41 42
+waiting (2): 99 42
+size: 0, empty: true
+</code></pre>
+
+<table>
+<thead><tr><th>Operation</th><th>What it does</th></tr></thead>
+<tbody>
+<tr><td><code>d.push_back(x)</code>, <code>d.push_front(x)</code></td><td>Add <code>x</code> at the back, or at the front. Nothing already in the deque moves.</td></tr>
+<tr><td><code>d.pop_back()</code>, <code>d.pop_front()</code></td><td>Remove the last, or the first, element. They return nothing: read the element first if you need it.</td></tr>
+<tr><td><code>d.front()</code>, <code>d.back()</code></td><td>The first and the last element, by reference: you can read them or assign to them.</td></tr>
+<tr><td><code>d[i]</code></td><td>Element <code>i</code>, counted from the front, from 0, like a vector. After a <code>push_front</code>, every element's number goes up by one.</td></tr>
+<tr><td><code>d.size()</code>, <code>d.empty()</code></td><td>How many elements (a <code>std::size_t</code>), and whether there are none.</td></tr>
+<tr><td><code>d.clear()</code></td><td>Remove every element. The size becomes 0.</td></tr>
+<tr><td><code>for (int x : d)</code></td><td>Every element, front to back. By <code>const&amp;</code> for big elements, as with a vector.</td></tr>
+</tbody>
+</table>
+
+<p>A deque can also be built from a list in braces, <code>std::deque&lt;int&gt; waiting = {41, 42, 43};</code>, and compared with <code>==</code> against another deque of the same type: equal when the sizes and every element match, as for vectors. Notice that the two <code>pop</code>s return nothing. To serve the first person you read <code>front()</code> and then <code>pop_front()</code>, two steps, and that order matters, because of the rule in the next section.</p>
+
+<h2>Never ask an empty deque</h2>
+<p>What is the first element of an empty queue? There is none, and C++ does not check for you: <code>front()</code>, <code>back()</code>, <code>pop_front()</code> and <code>pop_back()</code> on an empty deque are undefined behaviour. Here is the version that does the most damage, a queue that has just been emptied by serving everyone:</p>
+
+<pre class="code" data-lang="cpp" data-file="emptied_front.cpp" data-check="compile"><code>#include &lt;deque&gt;
+#include &lt;print&gt;
+
+int main() {
+    std::deque&lt;int&gt; waiting;
+    waiting.push_back(41);
+    waiting.push_back(42);
+    waiting.pop_front();                // 41 served
+    waiting.pop_front();                // 42 served: nobody is waiting now
+    std::println("empty: {}", waiting.empty());
+    std::println("serving ticket {}", waiting.front());   // undefined behaviour
+    return 0;
+}
+</code></pre>
+<pre class="shell"><code>$ clang++ -std=c++23 -Wall -Wextra emptied_front.cpp -o emptied_front &amp;&amp; ./emptied_front
+empty: true
+serving ticket 0
+</code></pre>
+
+<p>The deque says it is empty, and then <code>front()</code> serves ticket 0, a ticket nobody ever took, and the program ends normally. The deque's memory is still there after the last <code>pop_front</code>, so <code>front()</code> read a place that held no element and returned whatever it contained. On a deque that had never held anything, the same call crashed here instead, with a segmentation fault: undefined behaviour does not promise to be consistent. Under the sanitizers, the silent version is caught:</p>
+
+<pre class="shell"><code>$ tools/run.sh scratch/emptied_front.cpp
+</code></pre>
+<pre class="output"><code>=================================================================
+==28636==ERROR: AddressSanitizer: container-overflow on address 0x621000000108 at pc 0x00010031ed8c bp 0x00016fb61490 sp 0x00016fb61488
+READ of size 4 at 0x621000000108 thread T0
+    #0 0x00010031ed88 in ... __create_format_arg ... format_arg_store.h:191:63
+    ... (six more frames inside std::println)
+    #8 0x00010029cbb8 in main emptied_front.cpp:11:5
+    #9 0x000186c214e0 in start (/usr/lib/dyld:arm64e+0x204e0)
+</code></pre>
+
+<p>A new kind for your collection: <code>container-overflow</code>. The read was inside memory the deque owns, so it is not a heap-buffer-overflow, but the library has told the sanitizer which parts of its blocks hold real elements, and this place held none. The read itself happens inside <code>std::println</code>, because <code>front()</code> hands back a reference and <code>println</code> reads through it; your line is frame #8 (captured on this Mac; the frame list is cut where marked).</p>
+
+<div class="callout trap"><span class="label">Trap</span><p>Check <code>empty()</code> before every <code>front()</code>, <code>back()</code>, <code>pop_front()</code> or <code>pop_back()</code>, unless the line just above it guarantees an element. Without the sanitizers this mistake can return a believable number, and the program carries on with a ticket that never existed.</p></div>
+
+<p>The safe shape asks first and has an answer for "nobody":</p>
+
+<pre class="code" data-lang="cpp" data-file="safe_front.cpp" data-check="run"><code>#include &lt;deque&gt;
+#include &lt;print&gt;
+
+// Serve the next person, if there is one. Returns the ticket, or 0 when nobody is waiting.
+int serve_next(std::deque&lt;int&gt;&amp; waiting) {
+    if (waiting.empty()) {
+        return 0;                            // ask first: front() on an empty deque is undefined
+    }
+    const int ticket = waiting.front();
+    waiting.pop_front();
+    return ticket;
+}
+
+int main() {
+    std::deque&lt;int&gt; waiting = {41, 42};
+    for (int call = 0; call &lt; 3; ++call) {
+        const int ticket = serve_next(waiting);
+        if (ticket == 0) {
+            std::println("nobody is waiting");
+        } else {
+            std::println("now serving {}", ticket);
+        }
+    }
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="safe_front.cpp"><code>now serving 41
+now serving 42
+nobody is waiting
+</code></pre>
+
+<p>Returning 0 for "nobody" works only because no ticket is numbered 0, and the caller has to know that agreement, the same weakness as the traffic light stored in an <code>int</code> in <a href="02-enum-class-and-switch.html">chapter 2</a>. <a href="05-optional.html">Chapter 5</a> gives C++'s proper way to say "maybe a value, maybe nothing".</p>
+
+<h2>How a deque is laid out</h2>
+<p>How can a deque add at the front without moving anything? It does not keep one block. It keeps its elements in several <strong>blocks</strong> of the same fixed size, plus a small table, often called the <strong>map</strong>, that lists where each block is, in order. On your Mac (libc++, Apple's C++ library) a block is 4,096 bytes: 1,024 <code>int</code>s or 512 <code>double</code>s. The figure uses blocks of four to fit on the page:</p>
+
+<pre class="grid-figure">               the table: where each block is, in order
+               +---------+---------+---------+
+               | block 0 | block 1 | block 2 |
+               +----+----+----+----+----+----+
+                    |         |         |
+        +-----------+         |         +-----------+
+        v                     v                     v
+  +----+----+----+----+ +----+----+----+----+ +----+----+----+----+
+  |    |    | 40 | 41 | | 42 | 43 | 44 | 45 | | 46 | 47 |    |    |
+  +----+----+----+----+ +----+----+----+----+ +----+----+----+----+
+              ^ front                                   ^ back
+   free places for push_front              free places for push_back
+</pre>
+
+<p>The deque itself, the variable, remembers where the table is, where in the first block the front element sits, and how many elements there are. <code>push_front(39)</code> writes 39 into the free place just before 40: nothing moves. When the first block has no free place left, the deque allocates a new block, writes 39 into its last place, and adds the new block's address at the front of the table. The table may itself have to grow now and then, but it is tiny (one entry per 1,024 <code>int</code>s), so copying it is cheap. The back works the same way. No element ever moves when you push or pop at either end. That is the trade the deque makes: it gives up "one unbroken block" and gets two cheap ends.</p>
+
+<pre class="code" data-lang="cpp" data-file="sizes.cpp" data-check="run"><code>#include &lt;deque&gt;
+#include &lt;print&gt;
+#include &lt;vector&gt;
+
+int main() {
+    std::vector&lt;int&gt; v;
+    std::deque&lt;int&gt; d;
+    std::println("sizeof(std::vector&lt;int&gt;) = {}", sizeof(v));
+    std::println("sizeof(std::deque&lt;int&gt;)  = {}", sizeof(d));
+    for (int i = 0; i &lt; 100000; ++i) {
+        v.push_back(i);
+        d.push_back(i);
+    }
+    std::println("with 100000 ints each: {} and {}", sizeof(v), sizeof(d));
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="sizes.cpp"><code>sizeof(std::vector&lt;int&gt;) = 24
+sizeof(std::deque&lt;int&gt;)  = 48
+with 100000 ints each: 24 and 48
+</code></pre>
+
+<p>Like a vector, the variable is a fixed-size handle with the elements elsewhere: 48 bytes here against the vector's 24, because it records more (the table's extent, the position of the front and the size), and it stays 48 bytes with 100,000 elements.</p>
+
+<h3>Why its [] is slower</h3>
+<p>The price of the blocks is paid in <code>[]</code>. For a vector, <code>v[i]</code> is "the start, plus <code>i</code> elements": one address calculation and one read. For a deque, <code>d[i]</code> first adds the position of the front element within its block, then splits the result with <code>/</code> and <code>%</code> into a block number and a place in that block, exactly the inverse of Week 1's flat index, reads the block's address from the table, and only then reads the element. In the figure, <code>d[3]</code>: the front sits at place 2 of block 0, so 2 + 3 = 5, block 5 / 4 = 1, place 5 % 4 = 1: block 1, place 1, which holds 43. Because 1,024 is a power of two, the compiler turns the division and remainder into cheap bit operations, but the extra read of the table remains. How much does it cost? Sum ten million <code>int</code>s each way:</p>
+
+<pre class="code" data-lang="cpp" data-file="index_timing.cpp" data-check="compile"><code>#include &lt;chrono&gt;
+#include &lt;cstddef&gt;
+#include &lt;deque&gt;
+#include &lt;print&gt;
+#include &lt;vector&gt;
+
+int main() {
+    using clock = std::chrono::steady_clock;
+    using std::chrono::duration_cast;
+    using std::chrono::microseconds;
+
+    const int n = 10000000;
+    std::vector&lt;int&gt; v;
+    std::deque&lt;int&gt; d;
+    for (int i = 0; i &lt; n; ++i) {
+        v.push_back(i % 7);
+        d.push_back(i % 7);
+    }
+
+    long long a = 0;
+    const auto t0 = clock::now();
+    for (std::size_t i = 0; i &lt; v.size(); ++i) {
+        a += v[i];
+    }
+    const auto t1 = clock::now();
+
+    long long b = 0;
+    for (std::size_t i = 0; i &lt; d.size(); ++i) {
+        b += d[i];
+    }
+    const auto t2 = clock::now();
+
+    long long c = 0;
+    for (int x : d) {
+        c += x;
+    }
+    const auto t3 = clock::now();
+
+    std::println("vector [] : {:6} us  (sum {})", duration_cast&lt;microseconds&gt;(t1 - t0).count(), a);
+    std::println("deque  [] : {:6} us  (sum {})", duration_cast&lt;microseconds&gt;(t2 - t1).count(), b);
+    std::println("deque for : {:6} us  (sum {})", duration_cast&lt;microseconds&gt;(t3 - t2).count(), c);
+    return 0;
+}
+</code></pre>
+<pre class="shell"><code>$ clang++ -std=c++23 -Wall -Wextra -O2 index_timing.cpp -o index_timing
+$ ./index_timing
+vector [] :   1139 us  (sum 29999994)
+deque  [] :   2464 us  (sum 29999994)
+deque for :   2861 us  (sum 29999994)
+$ ./index_timing
+vector [] :   1064 us  (sum 29999994)
+deque  [] :   2305 us  (sum 29999994)
+deque for :   2467 us  (sum 29999994)
+</code></pre>
+
+<p>On this Mac, at <code>-O2</code>, the deque took two to two and a half times as long as the vector for the same sum, by <code>[]</code> or by range-for. Part of that is the work above. The other part is that the elements of a vector are one unbroken block, and the compiler used that: the assembly of the vector loop contains the processor's vector instructions, which add several numbers in one go (week 12 is about them), and neither deque loop does. For a queue, where you mostly touch the two ends, none of this matters. For a big array you read again and again, it does: that is still a vector's job.</p>
+
+<h2>A sliding window: the moving average</h2>
+<p>A weather station sends a temperature every hour. A single reading jumps about; the average of the last five is steadier, and it is the number you would put on a display. Keep the last five readings in a deque: each new reading joins at the back, and once there are more than five, the oldest leaves from the front. The readings inside are a <strong>sliding window</strong>: a fixed-length view that slides along the stream one value at a time.</p>
+
+<pre class="code" data-lang="cpp" data-file="moving_average.cpp" data-check="run"><code>#include &lt;cstddef&gt;
+#include &lt;deque&gt;
+#include &lt;print&gt;
+#include &lt;vector&gt;
+
+double mean_of(const std::deque&lt;double&gt;&amp; window) {
+    double sum = 0.0;
+    for (double t : window) {
+        sum += t;
+    }
+    return sum / static_cast&lt;double&gt;(window.size());
+}
+
+int main() {
+    const std::vector&lt;double&gt; hourly = {3.5, 4.0, 5.5, 7.0, 8.5, 9.0, 8.0, 6.5, 5.0, 4.5};
+    const std::size_t window_size = 5;
+
+    std::deque&lt;double&gt; window;              // the last few readings, oldest at the front
+    for (double t : hourly) {
+        window.push_back(t);                // the newest reading joins at the back
+        if (window.size() &gt; window_size) {
+            window.pop_front();             // the oldest one leaves from the front
+        }
+        std::println("new {:4.1f}   {} in the window   moving average {:5.2f}", t,
+                     window.size(), mean_of(window));
+    }
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="moving_average.cpp"><code>new  3.5   1 in the window   moving average  3.50
+new  4.0   2 in the window   moving average  3.75
+new  5.5   3 in the window   moving average  4.33
+new  7.0   4 in the window   moving average  5.00
+new  8.5   5 in the window   moving average  5.70
+new  9.0   5 in the window   moving average  6.80
+new  8.0   5 in the window   moving average  7.60
+new  6.5   5 in the window   moving average  7.80
+new  5.0   5 in the window   moving average  7.40
+new  4.5   5 in the window   moving average  6.60
+</code></pre>
+
+<p>For the first four readings the window is still filling; from the fifth on it always holds five, and each line's average covers the five most recent hours. (<code>{:4.1f}</code> combines Week 1's width and decimals codes: four characters wide, one decimal.) Notice what each new reading costs: one <code>push_back</code>, at most one <code>pop_front</code> and a sum of five numbers. The work per reading never grows, however long the station runs: the window keeps the memory and the time of each step fixed. Keep that sentence for the inference twin at the end.</p>
+
+<div class="callout try"><span class="label">Try it</span><p>Change <code>window_size</code> to 3 and to 10, and predict the first line where the window is full before you run it. Then build an <strong>undo history</strong> with a limit: a <code>std::deque&lt;std::string&gt;</code> of the last ten actions a text editor performed. Each new action is <code>push_back</code>ed and, beyond ten, the oldest is <code>pop_front</code>ed; "undo" reads <code>back()</code> and <code>pop_back</code>s it, after checking <code>empty()</code>. Feed it twelve actions and undo three: which actions are left, and which two were forgotten?</p></div>
+
+<h2>Searching a deque</h2>
+<p>A customer at the back of the queue asks the clerk: "Is ticket 42 still waiting, or have I missed my friend?" A deque has no built-in answer, so you write one with range-for: look at every ticket, and stop at the first that matches.</p>
+
+<pre class="code" data-lang="cpp" data-file="ticket_search.cpp" data-check="run"><code>#include &lt;deque&gt;
+#include &lt;print&gt;
+
+// Is this ticket still in the queue? Compare it with every ticket until one matches.
+bool is_waiting(const std::deque&lt;int&gt;&amp; waiting, int ticket) {
+    for (int t : waiting) {
+        if (t == ticket) {
+            return true;
+        }
+    }
+    return false;
+}
+
+int main() {
+    std::deque&lt;int&gt; waiting = {39, 40, 41, 42, 43};
+    std::println("is 42 waiting? {}", is_waiting(waiting, 42));
+
+    for (int served = 0; served &lt; 4; ++served) {   // 39, 40, 41 and 42 are served
+        waiting.pop_front();
+    }
+    std::println("is 42 waiting? {}", is_waiting(waiting, 42));
+    std::println("is 43 waiting? {}", is_waiting(waiting, 43));
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="ticket_search.cpp"><code>is 42 waiting? true
+is 42 waiting? false
+is 43 waiting? true
+</code></pre>
+
+<p>The <code>return true</code> inside the loop leaves the function at the first match; only if the loop finishes without one does the function reach <code>return false</code>. That makes the cost uneven. Finding a ticket near the front is quick. "No, it is not here" is the slowest answer of all, because it can only be given after comparing with every ticket: a queue of a thousand people means a thousand comparisons for every "no". The cost of a search grows linearly with the length of what you search, and if you search once for every new arrival, the total grows with the square, the vector's problem from the start of this chapter in a new place.</p>
+
+<div class="callout try"><span class="label">Try it</span><p>Write <code>int people_ahead_of(const std::deque&lt;int&gt;&amp; waiting, int ticket)</code> with an index loop and <code>[]</code>: the number of tickets in front of <code>ticket</code>, or -1 if it is not waiting. Test it with 39 (0 ahead), 43 (4 ahead) and 50 (-1). What does the -1 have in common with the 0 of <code>serve_next</code>?</p></div>
+
+<h2>Passing a deque to a function</h2>
+<p><code>is_waiting</code> takes its deque by <code>const&amp;</code>, the same choice as for a vector in Week 1's chapter 5, for the same two reasons: no copy is made, and the compiler stops the function from changing the queue. Here are the three choices side by side:</p>
+
+<pre class="code" data-lang="cpp" data-file="by_ref.cpp" data-check="run"><code>#include &lt;cstddef&gt;
+#include &lt;deque&gt;
+#include &lt;print&gt;
+
+// Only looks: const&amp;, no copy, and the compiler stops it from changing the queue.
+std::size_t length_of(const std::deque&lt;int&gt;&amp; waiting) {
+    return waiting.size();
+}
+
+// Changes the caller's queue: a plain &amp;.
+void serve(std::deque&lt;int&gt;&amp; waiting) {
+    if (!waiting.empty()) {
+        waiting.pop_front();
+    }
+}
+
+// By value: the function gets a whole copy of the queue and serves the copy.
+void serve_a_copy(std::deque&lt;int&gt; waiting) {
+    if (!waiting.empty()) {
+        waiting.pop_front();
+    }
+    std::println("  inside serve_a_copy: {} waiting", waiting.size());
+}
+
+int main() {
+    std::deque&lt;int&gt; waiting = {41, 42, 43};
+    serve(waiting);
+    std::println("after serve:        {} waiting", length_of(waiting));
+    serve_a_copy(waiting);
+    std::println("after serve_a_copy: {} waiting", length_of(waiting));
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="by_ref.cpp"><code>after serve:        2 waiting
+  inside serve_a_copy: 1 waiting
+after serve_a_copy: 2 waiting
+</code></pre>
+
+<p><code>serve</code> takes a plain <code>&amp;</code> and really serves someone. <code>serve_a_copy</code> takes the deque by value: it receives a complete copy, every block and the table included, serves the copy, and the copy is destroyed when the function ends, so the real queue still has two people. That is rarely what you want, and for a long queue the copy is expensive. How expensive, and when a copy is exactly right, is the subject of <a href="06-value-or-reference.html">chapter 6</a>, which times a big deque passed both ways.</p>
+
+<h2>Vector or deque?</h2>
+<table>
+<thead><tr><th>You need</th><th>vector</th><th>deque</th></tr></thead>
+<tbody>
+<tr><td>Add or remove at the back</td><td>cheap</td><td>cheap</td></tr>
+<tr><td>Add or remove at the front</td><td>moves every element</td><td>cheap</td></tr>
+<tr><td><code>[]</code> anywhere</td><td>one read</td><td>a little arithmetic and two reads</td></tr>
+<tr><td>A long loop over every element</td><td>fastest: one block, vector instructions</td><td>slower: block by block</td></tr>
+<tr><td>Elements in one unbroken block</td><td>yes</td><td>no</td></tr>
+</tbody>
+</table>
+<p>The default is still the vector. Choose a deque when the front of your sequence changes: queues, windows, histories with a limit, anything that grows at one end and shrinks at the other. The Snake body in <code>phase1-terminal/02-snake/src/snake.hpp</code> is declared as <code>using Body = std::deque&lt;Point&gt;;</code>, head first. With this chapter you can say why its author chose a deque, and the README's twin section says what it has in common with the window above.</p>
+
+<div class="callout twin"><span class="label">Inference twin</span><p>When a language model writes a word, it looks back at every earlier word through attention. To avoid recomputing the past, it keeps two vectors of numbers per earlier token, its key and its value: the <strong>KV cache</strong>, which week 18 builds. With full attention the cache grows by one entry per token and every step reads all of it, so the attention in step 4,000 does about 4,000 times the work it did in step 1: a growing context makes each step cost more, like the search above. <strong>Sliding-window attention</strong> keeps only the last W tokens (Mistral 7B used W = 4,096): the newest token's key and value join at one end, the oldest leave at the other, and every step costs the same, exactly <code>moving_average.cpp</code> with bigger numbers. Engines do not use <code>std::deque</code> for it: the cache is large, often lives on a GPU, and must be one block, so they keep W fixed slots and wrap the position with <code>%</code>, Week 1's clock face. The shape is the deque's; the storage is the ring's.</p></div>
+
+<h2>Check yourself</h2>
+<div class="quiz">
+<div class="q"><p>Why does putting one element at the front of a vector of n elements move n elements, while a deque moves none?</p><details class="answer"><summary>Answer</summary><p>A vector keeps its elements in one unbroken block starting with element 0, so a new first element means every existing element must shift one place back. A deque keeps fixed-size blocks and a table of where they are; the first block has free places before the front element, so <code>push_front</code> writes into one, or into a new block whose address is added to the table. Nothing that is already stored moves.</p></details></div>
+<div class="q"><p>Putting 25,000 values at the front of a vector took 12 ms. Roughly how long would 100,000 take, and why not 48 ms?</p><details class="answer"><summary>Answer</summary><p>Around 200 ms (the measured value was 272 ms). The total number of moves is n × (n - 1) / 2, which grows with the square of n: four times as many insertions means about sixteen times as many moves. That is quadratic growth; 48 ms would be linear.</p></details></div>
+<div class="q"><p>What happens when you call <code>front()</code> on an empty deque?</p><details class="answer"><summary>Answer</summary><p>Undefined behaviour. On this Mac it returned 0 for a deque that had been emptied by popping, and crashed for one that had never held anything; the sanitizers report <code>container-overflow</code> for the first. Check <code>empty()</code> first.</p></details></div>
+<div class="q"><p>Explain, with the figure's blocks of four, how a deque whose front element sits at place 2 of block 0 finds <code>d[6]</code>.</p><details class="answer"><summary>Answer</summary><p>Add the front's position: 2 + 6 = 8. Block 8 / 4 = 2, place 8 % 4 = 0. Read the address of block 2 from the table, then place 0 of that block (in the figure, 46). A vector would need only "start plus 6".</p></details></div>
+<div class="q"><p>In <code>moving_average.cpp</code>, why do the work and the memory per reading stay the same however many readings arrive?</p><details class="answer"><summary>Answer</summary><p>The window never holds more than five readings: each new one is pushed at the back and, once there are more than five, the oldest is popped from the front. So each step does one push, at most one pop and a sum of at most five numbers.</p></details></div>
+<div class="q"><p>Why is "ticket 50 is not waiting" the slowest answer <code>is_waiting</code> can give?</p><details class="answer"><summary>Answer</summary><p>The search returns at the first match, so it can say "yes" early, but it can only say "no" after comparing with every ticket in the queue. The cost of a "no" is the length of the queue.</p></details></div>
+<div class="q"><p>A function only needs to read a big deque. Which parameter type do you give it, and what would by value cost?</p><details class="answer"><summary>Answer</summary><p><code>const std::deque&lt;T&gt;&amp;</code>: no copy, and the compiler stops the function from changing it. By value would copy every element, block by block, plus the table, on every call; <a href="06-value-or-reference.html">chapter 6</a> measures that.</p></details></div>
+</div>
+
+<h2>What you can do now</h2>
+<ul>
+<li>Explain why the front of a vector is expensive, and shift elements by hand to prove it.</li>
+<li>Measure a vector against a deque with <code>steady_clock</code>, and tell quadratic from linear growth by doubling the size.</li>
+<li>Use a deque's two ends, <code>front</code>, <code>back</code>, <code>[]</code>, <code>size</code>, <code>empty</code>, <code>clear</code> and range-for.</li>
+<li>Guard every <code>front</code>, <code>back</code> and <code>pop</code> with <code>empty()</code>, and recognise <code>container-overflow</code>.</li>
+<li>Draw a deque's blocks and table, and say why its <code>[]</code> costs more than a vector's.</li>
+<li>Keep a sliding window over a stream with <code>push_back</code> and <code>pop_front</code>.</li>
+<li>Search a deque with range-for, and pass it by <code>const&amp;</code> or <code>&amp;</code> on purpose.</li>
+</ul>
+</main>
+</body>
+</html>

@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>08 · Raw keys and the game loop — C++ from Life to Snake</title>
+<link rel="stylesheet" href="../week1/assets/book.css?v=9">
+<link rel="stylesheet" href="../week1/assets/tutor.css?v=9">
+<script src="../week1/assets/theme.js?v=9"></script>
+<script defer src="assets/book.js?v=9"></script>
+<script defer src="assets/tutor.js?v=9"></script>
+</head>
+<body>
+<nav class="sidebar" aria-label="Chapters"></nav>
+<main>
+<p class="chapter-kicker">Chapter 08</p>
+<h1>Raw keys and the game loop</h1>
+<p class="lede">At the end of this chapter you will be able to switch line mode off so that every key reaches your program the moment it is pressed, see the exact bytes each key sends, ask whether a key is waiting without stopping to wait for one, and run a loop that keeps its own time with deadlines. You will also see why that loop is the same loop that streams words out of a language model.</p>
+
+<div class="callout note"><span class="label">In this chapter</span>
+<ul>
+<li>What line mode does to your keys before your program sees them.</li>
+<li>Line mode off with <code>ICANON</code>, and the <code>VMIN</code> and <code>VTIME</code> settings that decide how long a read waits.</li>
+<li>A key logger: the bytes of letters, Enter, Backspace and the arrow keys, and the Escape problem.</li>
+<li>What <code>read</code> returns: 1, 0 or -1.</li>
+<li>Asking whether a key is waiting, with a time limit: <code>poll</code>.</li>
+<li>Deadlines: <code>steady_clock::time_point</code>, <code>sleep_until</code>, <code>next += period</code>, and counting late beats.</li>
+<li>A metronome you play with <code>+</code>, <code>-</code> and <code>q</code>, and the decode loop it is a twin of.</li>
+</ul>
+</div>
+
+<h2>What line mode does to your keys</h2>
+<p><a href="07-lifetime-and-raii.html">Chapter 7</a> named the terminal driver's line mode: it collects your typing into a line and hands your program nothing until you press Enter. Here is the evidence. This program reads one line and prints the bytes it received:</p>
+
+<pre class="code" data-lang="cpp" data-file="line_bytes.cpp" data-check="compile"><code>#include &lt;cstdio>
+#include &lt;iostream>
+#include &lt;print>
+#include &lt;string>
+
+int main() {
+    std::print("type a word, then Enter: ");
+    std::fflush(stdout);
+    std::string line;
+    std::getline(std::cin, line);
+    std::print("your program received {} bytes:", line.size());
+    for (char c : line) {
+        std::print(" {}", static_cast&lt;int>(c));
+    }
+    std::println();
+    return 0;
+}
+</code></pre>
+<pre class="shell"><code>$ ./line_bytes
+type a word, then Enter: hello
+your program received 5 bytes: 104 101 108 108 111
+</code></pre>
+<p>What was typed (checked by driving the program from a script) was <code>h</code> <code>e</code> <code>l</code> <code>o</code>, then Backspace, then <code>l</code> <code>o</code> and Enter. The screen shows <code>hello</code>, and the program received <code>hello</code>: five bytes, no wrong <code>o</code>, no Backspace. The driver kept the line in its own buffer, let Backspace rub out the mistake, drew every change on the screen itself, and released the finished line when Enter came. Your program slept through all of it, inside <code>std::getline</code>.</p>
+<p>For a form, that is perfect. For a game it is useless: nobody presses Enter after every arrow key, and a snake cannot wait while you edit your move. The game needs each key the moment it is pressed, and it needs to keep running while no key is pressed at all.</p>
+
+<h2>Line mode off: every byte as it is typed</h2>
+<p>Line mode is one more switch in <code>c_lflag</code>, called <strong><code>ICANON</code></strong> ("canonical"). Switch it off and the driver stops collecting lines: each byte goes to your program as soon as it arrives, and nothing is edited on the way, so Backspace arrives as a byte like any other. That raises a question line mode used to answer for you: when your program asks to read, and no byte has arrived, how long should the read wait? Two more settings answer it. They live in <code>c_cc</code>, a row of 20 small numbers inside <code>termios</code> that you index with <code>[]</code> like a vector; <strong><code>VMIN</code></strong> and <strong><code>VTIME</code></strong> are two positions in it. <code>VMIN</code> is the number of bytes a read waits for, and <code>VTIME</code> is a time limit, counted in tenths of a second. They only matter when <code>ICANON</code> is off.</p>
+
+<table>
+<thead><tr><th><code>VMIN</code></th><th><code>VTIME</code></th><th>A read of one byte...</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>0</td><td>waits until a byte arrives, for ever if need be. "Block until a key."</td></tr>
+<tr><td>0</td><td>0</td><td>never waits. It returns at once with a byte if one is already there, and with nothing if not.</td></tr>
+<tr><td>0</td><td><em>t</em></td><td>waits at most <em>t</em> tenths of a second (so 5 means half a second) for a byte, and returns with nothing if none came.</td></tr>
+</tbody>
+</table>
+<p>(A fourth combination, both non-zero, waits for the first byte for ever and then times the gaps between bytes; this course does not use it.) The first row is the friendliest to learn with, so the next program uses it.</p>
+
+<h2>A key logger</h2>
+<p>The guard below is chapter 7's <code>EchoOff</code> with more to do. It switches two bits off at once, <code>ECHO | ICANON</code> being a mask with both bits set, and puts 1 and 0 into <code>VMIN</code> and <code>VTIME</code>. Then the program reads one byte at a time with <strong><code>read(STDIN_FILENO, &amp;byte, 1)</code></strong>, from <code>&lt;unistd.h&gt;</code>: "read from standard input into <code>byte</code>, at most 1 byte". It is the C function underneath <code>std::getline</code>, so it is handed <code>&amp;byte</code>, the location of the variable, as <code>tcgetattr</code> was. Each byte is printed as a number, and as a character if it has a visible one.</p>
+
+<pre class="code" data-lang="cpp" data-file="key_logger.cpp" data-check="compile"><code>#include &lt;cstdint>
+#include &lt;print>
+#include &lt;termios.h>
+#include &lt;unistd.h>
+
+// While a KeyByKey exists: no echo, no line mode, and a read waits for one byte.
+struct KeyByKey {
+    termios original{};
+
+    KeyByKey() {
+        tcgetattr(STDIN_FILENO, &amp;original);
+        termios changed = original;
+        changed.c_lflag &amp;= ~(ECHO | ICANON);  // two switches off at once
+        changed.c_cc[VMIN] = 1;               // a read returns when 1 byte has arrived...
+        changed.c_cc[VTIME] = 0;              // ...and waits as long as it takes
+        tcsetattr(STDIN_FILENO, TCSANOW, &amp;changed);
+    }
+
+    ~KeyByKey() {
+        tcsetattr(STDIN_FILENO, TCSANOW, &amp;original);
+    }
+};
+
+int main() {
+    KeyByKey keys;
+    std::println("press keys; q quits");
+    while (true) {
+        std::uint8_t byte = 0;
+        const auto got = read(STDIN_FILENO, &amp;byte, 1);  // 1 byte, 0 at end of input, -1 error
+        if (got != 1) {
+            std::println("read returned {}", got);
+            break;
+        }
+        if (byte >= 32 &amp;&amp; byte &lt; 127) {
+            std::println("{:3}  {}", byte, static_cast&lt;char>(byte));
+        } else {
+            std::println("{:3}", byte);
+        }
+        if (byte == 'q') {
+            break;
+        }
+    }
+    return 0;
+}
+</code></pre>
+<p>Here is what it printed for a session of <code>a</code>, <code>A</code>, Enter, the four arrow keys, Escape, Backspace, Tab and finally <code>q</code>. (The keys were sent by a script through a terminal, so this is real output; on your keyboard you can press the same keys.)</p>
+<pre class="shell"><code>$ ./key_logger
+press keys; q quits
+ 97  a
+ 65  A
+ 10
+ 27
+ 91  [
+ 65  A
+ 27
+ 91  [
+ 66  B
+ 27
+ 91  [
+ 67  C
+ 27
+ 91  [
+ 68  D
+ 27
+127
+  9
+113  q
+</code></pre>
+<p>Read the bytes. Letters are their codes from <a href="../week1/08-strings-and-args.html">Week 1 chapter 8</a>: <code>a</code> is 97, <code>A</code> is 65. Enter arrives as 10, the newline; the key actually sends 13, carriage return, and a switch you did not touch on the driver's input side turns it into 10 on the way. Backspace is 127 now that the driver no longer handles it, and Tab is 9. Nothing was echoed: the numbers are the program's own output.</p>
+<p>An arrow key is three bytes: 27, 91, then a letter. 27 is the escape byte and 91 is <code>[</code>, the same two bytes that start the escape sequences you <em>print</em> (<a href="../week1/09-terminal.html">Week 1 chapter 9</a>): the keyboard talks back in the same language. Up is <code>27 91 65</code>, that is <code>\x1b[A</code>; down is <code>27 91 66</code>, right <code>27 91 67</code>, left <code>27 91 68</code>. The three bytes arrive together, so the three reads return one after another without waiting.</p>
+
+<div class="callout trap"><span class="label">Trap</span><p>Look at the line after <code>68</code>: the Escape key on its own sends a single 27. A program that has just read a 27 cannot tell from that byte whether the Escape key was pressed or an arrow key has begun. It only knows by what comes next, and maybe nothing comes next. Every terminal program faces this ambiguity; most look at what has already arrived together with the 27, or wait a few milliseconds for more. Write down now what you would want a lone 27 to mean in a game. The comment above <code>parse_key</code> in <code>snake.hpp</code> has its own answer.</p></div>
+
+<div class="callout note"><span class="label">Two things this guard leaves alone</span><p>Ctrl-C is still a signal, so it kills the key logger before its destructor can run: press <code>q</code>. (zsh then switches echo and line mode back on, as chapter 7 showed; the Try it below adds chapter 7's flag instead.) And the output side is untouched, so <code>\n</code> still means "start of the next line". <a href="../week1/09-terminal.html">Week 1 chapter 9</a> mentioned a staircase of lines that each start where the last one ended: you get that only if output processing is switched off too, a setting in a different flag word, which neither this guard nor Snake needs.</p></div>
+
+<div class="callout try"><span class="label">Try it</span><p>Run the key logger and press keys the book did not: Shift with an arrow, a function key, Delete, <code>é</code> or <code>€</code> (several bytes each: that is UTF-8, week 17), and Ctrl with a letter (Ctrl-A is 1, Ctrl-B is 2: Ctrl clears all but the last five bits of the letter). Then add chapter 7's <code>std::signal</code> flag and make the loop stop when it is set. Why does Ctrl-C now end the program only at the next key press? (Chapter 7 explained what happens to a read that is waiting when the handler runs.)</p></div>
+
+<h2>What read returns</h2>
+<p><code>read</code> returns how many bytes it put into your variable, and the type of that number is <code>ssize_t</code>, a signed cousin of <code>std::size_t</code>, so that it can also be negative. With a one-byte request there are three possible answers:</p>
+<ul>
+<li><strong>1</strong>: one byte arrived and is in <code>byte</code>.</li>
+<li><strong>0</strong>: no byte. With a file or a pipe as standard input, it means the input has ended. With <code>VMIN</code> 0, it means "nothing has arrived (yet)".</li>
+<li><strong>-1</strong>: the read failed, and <code>byte</code> means nothing.</li>
+</ul>
+<p>The key logger checks for exactly 1 before it uses the byte, and stops otherwise. You can see the 0 by giving it a file instead of a keyboard:</p>
+<pre class="shell"><code>$ ./key_logger &lt; /dev/null
+press keys; q quits
+read returned 0
+</code></pre>
+<p><code>/dev/null</code> is an empty file, so the very first read reports the end of input. (The guard's two calls quietly fail, because there is no terminal to set, and nothing is harmed.) A loop that ignored the 0 would spin for ever, printing a stale byte.</p>
+
+<div class="callout principle"><span class="label">First principle</span><p>A read hands back two things: some bytes, and a count of them. The bytes mean something only when the count says they do. Check the count first, every time.</p></div>
+
+<h2>Is a key waiting? poll</h2>
+<p>A game needs a third behaviour, between "wait for ever" and "do not wait": wait for a key, but only up to a time limit, and tell me which of the two happened. The function for that is <strong><code>poll</code></strong>, from <code>&lt;poll.h&gt;</code>. You describe what to watch in a small struct, a <strong><code>pollfd</code></strong>: its <code>fd</code> member is which input (<code>STDIN_FILENO</code>), and its <code>events</code> member is what you are waiting for, <strong><code>POLLIN</code></strong>, "there is something to read". Then <code>poll(&amp;keyboard, 1, 3000)</code> means: watch this one input for at most 3000 milliseconds. (The 1 says how many <code>pollfd</code>s you are handing it; a program can watch several inputs at once.) It returns 1 if the input became ready, 0 if the time ran out, and -1 on failure.</p>
+
+<pre class="code" data-lang="cpp" data-file="wait_for_key.cpp" data-check="compile"><code>#include &lt;cstdint>
+#include &lt;poll.h>
+#include &lt;print>
+#include &lt;termios.h>
+#include &lt;unistd.h>
+
+struct KeyByKey {
+    termios original{};
+    KeyByKey() {
+        tcgetattr(STDIN_FILENO, &amp;original);
+        termios changed = original;
+        changed.c_lflag &amp;= ~(ECHO | ICANON);
+        changed.c_cc[VMIN] = 1;
+        changed.c_cc[VTIME] = 0;
+        tcsetattr(STDIN_FILENO, TCSANOW, &amp;changed);
+    }
+    ~KeyByKey() {
+        tcsetattr(STDIN_FILENO, TCSANOW, &amp;original);
+    }
+};
+
+int main() {
+    KeyByKey keys;
+    std::println("press any key within 3 seconds");
+
+    pollfd keyboard{};
+    keyboard.fd = STDIN_FILENO;                  // which input to watch
+    keyboard.events = POLLIN;                    // what to wait for: "there is something to read"
+    const int ready = poll(&amp;keyboard, 1, 3000);  // wait at most 3000 ms
+
+    if (ready == 1) {
+        std::uint8_t byte = 0;
+        if (read(STDIN_FILENO, &amp;byte, 1) == 1) {  // will not wait: a byte is there
+            std::println("in time: byte {}", byte);
+        }
+    } else if (ready == 0) {
+        std::println("too slow: nothing in 3 seconds");
+    } else {
+        std::println("poll failed");
+    }
+    return 0;
+}
+</code></pre>
+<pre class="shell"><code>$ ./wait_for_key
+press any key within 3 seconds
+in time: byte 120
+$ ./wait_for_key
+press any key within 3 seconds
+too slow: nothing in 3 seconds
+</code></pre>
+<p>The first run got an <code>x</code> within the time; the second got nothing for three seconds. When <code>poll</code> returns 1, the following <code>read</code> does not wait, because the byte is already there. <code>poll</code> answers "is there something?" and <code>read</code> fetches it: two separate jobs. One more fact for later: if a signal handler runs while <code>poll</code> is waiting, <code>poll</code> stops at once and returns -1. Unlike <code>std::getline</code>, it is not quietly restarted.</p>
+
+<h2>Keeping time with deadlines</h2>
+<p><a href="../week1/09-terminal.html">Week 1 chapter 9</a> paced a loop like this: note when the frame started, do the work, then <code>sleep_for(budget - spent)</code>. That measured each frame from when that frame began, and the sum came out late: 30 frames took 3130 ms instead of 3000, because every sleep woke up a little after it was asked to and each frame started from wherever the last one had really ended. The errors added up.</p>
+<p>The fix is to plan the times in advance. A <strong>deadline</strong> is a moment in time by which something should happen. <code>std::chrono::steady_clock::time_point</code> is the type of such a moment: <code>clock::now()</code> returns one, a time point plus a duration is a later time point, and the difference of two time points is a duration. <strong><code>std::this_thread::sleep_until(t)</code></strong> sleeps until the moment <code>t</code>, and returns at once if <code>t</code> has already passed. A loop that keeps its own time then has three lines at its heart: <code>next = clock::now()</code> once before the loop; <code>sleep_until(next)</code> at the top of each round; and <code>next += period</code> at the end. The schedule is fixed by the plan, not by how the previous round went.</p>
+<div class="callout analogy"><span class="label">Analogy</span><p><code>sleep_for</code> pacing is a bus driver told "leave ten minutes after you got back"; deadline pacing is a driver with a timetable that says 9:00, 9:10, 9:20. One slow trip makes the first driver late for the rest of the day. The second is late once, then leaves at 9:20 as printed.</p>
+<p>Where it breaks: a real timetable has slack, and a bus that is twenty minutes late simply skips a slot. A loop that falls several periods behind finds several deadlines already in the past, and with <code>next += period</code> it runs the missed rounds back to back to catch up, unless you write code that decides otherwise.</p></div>
+
+<p>Here is a metronome that beats 12 times, four beats a second, and measures how late each beat started. On beat 6 something slow happens: the program sleeps 400 milliseconds, longer than a whole period.</p>
+
+<pre class="code" data-lang="cpp" data-file="metronome.cpp" data-check="compile"><code>#include &lt;chrono>
+#include &lt;print>
+#include &lt;thread>
+
+int main() {
+    using namespace std::chrono_literals;
+    using clock = std::chrono::steady_clock;
+    using std::chrono::duration_cast;
+    using std::chrono::microseconds;
+    using std::chrono::milliseconds;
+
+    const milliseconds period = 250ms;    // 240 beats per minute
+    const milliseconds tolerance = 20ms;  // later than this, you would hear it
+    const int beats = 12;
+    int late = 0;
+
+    const clock::time_point start = clock::now();
+    clock::time_point next = start;  // the deadline of the first beat
+    for (int beat = 1; beat &lt;= beats; ++beat) {
+        std::this_thread::sleep_until(next);  // sleep until the deadline itself
+        const microseconds lateness = duration_cast&lt;microseconds>(clock::now() - next);
+        if (lateness > tolerance) {
+            ++late;
+        }
+        std::println("beat {:2}  {:6} microseconds late", beat, lateness.count());
+
+        if (beat == 6) {
+            std::this_thread::sleep_for(400ms);  // something slow happens during beat 6
+        }
+        next += period;  // the next deadline, fixed in advance
+    }
+
+    const milliseconds total = duration_cast&lt;milliseconds>(clock::now() - start);
+    std::println("{} beats in {} ms (the plan: {} ms), {} late", beats, total.count(),
+                 (beats - 1) * period.count(), late);
+    return 0;
+}
+</code></pre>
+<pre class="shell"><code>$ ./metronome
+beat  1       1 microseconds late
+beat  2    8880 microseconds late
+beat  3    1365 microseconds late
+beat  4    5885 microseconds late
+beat  5    7434 microseconds late
+beat  6    8515 microseconds late
+beat  7  168625 microseconds late
+beat  8    2481 microseconds late
+beat  9    8178 microseconds late
+beat 10    5882 microseconds late
+beat 11    8369 microseconds late
+beat 12    7355 microseconds late
+12 beats in 2757 ms (the plan: 2750 ms), 1 late
+</code></pre>
+
+<p>Real numbers from this Mac; yours will differ. Three things to see. First, even the on-time beats started a few milliseconds late: the operating system wakes a sleeping program when it gets round to it, and on a laptop it deliberately bundles wake-ups together to save power. Second, beat 7 was 169 ms late, because beat 6 overran its 250 ms budget, and beat 8 was back on time: beat 7's late start did not push beat 8 back, because beat 8's deadline was fixed by the plan, and <code>sleep_until</code> simply slept less. Third, the total: 2757 ms for a plan of 2750, despite a 400 ms stall. With Week 1's <code>sleep_for</code> every wake-up error would have been added on, and the stall never made up.</p>
+<p>Counting late beats needs a definition of late, and the program writes it down: more than 20 ms after the deadline, which is roughly where a musician would hear it. The comparison <code>lateness > tolerance</code> mixes microseconds and milliseconds, and the compiler converts, as Week 1 promised. By that definition, this run had exactly one late beat.</p>
+
+<div class="callout try"><span class="label">Try it</span><p>Replace <code>sleep_until(next)</code> with <code>sleep_for(period)</code>, keep everything else, and compare the lateness column and the total. (On this Mac the lateness grew by a few milliseconds on every beat, and 12 beats took 3488 ms.) Then put <code>sleep_until</code> back and make beat 6 stall for 1200 ms instead of 400. Predict which beats come late, and how close together, before you run. Is catching up in a burst what a metronome should do? What else could the loop do when it finds itself several periods behind?</p></div>
+
+<h2>A metronome you can play</h2>
+<p>Now put the pieces together: the key-by-key guard, a deadline, and <code>poll</code>. While the metronome waits for its next beat, it should also notice a key, so that <code>+</code> and <code>-</code> change the tempo by 20 beats per minute and <code>q</code> quits. The trick is to give <code>poll</code> as its time limit exactly the time left until the next beat. Then the loop sleeps inside <code>poll</code> until whichever comes first: a key, or the deadline.</p>
+
+<pre class="code" data-lang="cpp" data-file="metronome_keys.cpp" data-check="compile"><code>#include &lt;chrono>
+#include &lt;cstdint>
+#include &lt;poll.h>
+#include &lt;print>
+#include &lt;termios.h>
+#include &lt;unistd.h>
+
+struct KeyByKey {
+    termios original{};
+    KeyByKey() {
+        tcgetattr(STDIN_FILENO, &amp;original);
+        termios changed = original;
+        changed.c_lflag &amp;= ~(ECHO | ICANON);
+        changed.c_cc[VMIN] = 1;
+        changed.c_cc[VTIME] = 0;
+        tcsetattr(STDIN_FILENO, TCSANOW, &amp;changed);
+    }
+    ~KeyByKey() {
+        tcsetattr(STDIN_FILENO, TCSANOW, &amp;original);
+    }
+};
+
+int main() {
+    using namespace std::chrono_literals;
+    using clock = std::chrono::steady_clock;
+    using std::chrono::milliseconds;
+
+    KeyByKey keys;
+    std::println("+ faster, - slower, q quits");
+
+    int bpm = 120;
+    int beat = 0;
+    int late = 0;
+    bool running = true;
+    clock::time_point next = clock::now();
+
+    while (running) {
+        const clock::time_point now = clock::now();
+        if (now >= next) {  // the deadline has come: beat
+            beat += 1;
+            if (now - next > 20ms) {
+                late += 1;
+            }
+            std::println("beat {:3}   {:3} bpm", beat, bpm);
+            next += milliseconds(60000 / bpm);  // the next deadline
+            continue;
+        }
+
+        // Not yet: wait for a key, but never past the deadline.
+        const milliseconds left = std::chrono::ceil&lt;milliseconds>(next - now);
+        pollfd keyboard{};
+        keyboard.fd = STDIN_FILENO;
+        keyboard.events = POLLIN;
+        if (poll(&amp;keyboard, 1, static_cast&lt;int>(left.count())) == 1) {
+            std::uint8_t key = 0;
+            if (read(STDIN_FILENO, &amp;key, 1) == 1) {
+                if (key == '+' &amp;&amp; bpm &lt; 240) {
+                    bpm += 20;
+                } else if (key == '-' &amp;&amp; bpm > 40) {
+                    bpm -= 20;
+                } else if (key == 'q') {
+                    running = false;
+                }
+            }
+        }
+    }
+    std::println("{} beats, {} late", beat, late);
+    return 0;
+}
+</code></pre>
+<pre class="shell"><code>$ ./metronome_keys
++ faster, - slower, q quits
+beat   1   120 bpm
+beat   2   120 bpm
+beat   3   140 bpm
+beat   4   140 bpm
+beat   5   140 bpm
+beat   6   160 bpm
+beat   7   160 bpm
+beat   8   140 bpm
+beat   9   140 bpm
+9 beats, 0 late
+</code></pre>
+
+<p>(Real output; the keys <code>+</code>, <code>+</code>, <code>-</code> and <code>q</code> were sent by a script about a second apart.) Each time round, the loop asks one question: has the deadline come? If so, it beats, moves the deadline on by one period at the current tempo, and goes round again. If not, it computes the time left and hands it to <code>poll</code>. <code>std::chrono::ceil</code> rounds that time up to whole milliseconds; rounding down would wake <code>poll</code> up to a millisecond early, and the loop would find the beat not yet due and go round again. When <code>poll</code> reports a key, the loop reads that one byte and acts on it; when it times out, the next round finds the deadline due and beats. A new tempo takes effect from the next deadline, which is why beat 3 shows 140 bpm but arrived on the old schedule.</p>
+<p>Notice the shape. The loop does nothing at all until something happens, a key or a deadline, and then reacts. That is an <strong>event loop</strong>, and <code>poll</code> with a time limit is how it waits for two kinds of event at once. Snake's loop has a different shape, the one in the comment at the top of <code>phase1-terminal/02-snake/src/main.cpp</code>: it does the same work on every tick, whether or not a key came. Both keep time with deadlines.</p>
+
+<div class="callout try"><span class="label">Try it</span><p>Make the program print a <code>!</code> next to every late beat. Then start it at 240 bpm (a 250 ms period) and make it slow on purpose: add <code>std::this_thread::sleep_for(300ms)</code> straight after the beat is printed (with <code>#include &lt;thread&gt;</code>). Predict the late count, then run. Finally, add chapter 7's Ctrl-C flag: why does <code>poll</code> returning -1 make the metronome answer Ctrl-C at once, where the key logger had to wait for a key?</p></div>
+
+<h2>The decode loop</h2>
+<p>A language model writes its answer one <strong>token</strong> at a time: a token is a word or a piece of a word, and generating one means running the whole model once. The loop that does it is called the <strong>decode loop</strong>, and it has the shape of everything in this chapter: take the input, update the state (the KV cache, chapter 6's twin), emit one token, and go round again. Two numbers describe how fast it is. <strong>Tokens per second</strong> is the rate, the number on every inference engine's README. <strong>Per-token latency</strong> is how long one token takes: your tick, your beat. They are two views of one fact, but they hide different things, and the difference is the most important idea in measuring latency.</p>
+<p>A user reading the answer does not experience the average. They experience the stalls. Here are 1,000 token latencies, almost all between 20 and 24 ms, except that one token in 50 takes 400 ms:</p>
+
+<pre class="code" data-lang="cpp" data-file="latency_tail.cpp" data-check="run"><code>#include &lt;cstddef>
+#include &lt;print>
+#include &lt;vector>
+
+// The latency that `percent` per cent of the tokens beat or match: count[ms] says how many
+// tokens took exactly ms milliseconds; walk up from 0 ms until enough tokens are counted.
+int percentile(const std::vector&lt;int>&amp; count, int tokens, int percent) {
+    const int needed = (tokens * percent + 99) / 100;  // round up
+    int seen = 0;
+    for (std::size_t ms = 0; ms &lt; count.size(); ++ms) {
+        seen += count[ms];
+        if (seen >= needed) {
+            return static_cast&lt;int>(ms);
+        }
+    }
+    return static_cast&lt;int>(count.size()) - 1;
+}
+
+int main() {
+    // 1000 per-token latencies in milliseconds: 20 to 24 ms each, except that every
+    // 50th token waits 400 ms, because something else needed the machine.
+    std::vector&lt;int> latency_ms;
+    for (int i = 0; i &lt; 1000; ++i) {
+        if (i % 50 == 49) {
+            latency_ms.push_back(400);
+        } else {
+            latency_ms.push_back(20 + i % 5);
+        }
+    }
+
+    int total_ms = 0;
+    std::vector&lt;int> count(1001, 0);  // count[ms], for 0 to 1000 ms
+    for (int ms : latency_ms) {
+        total_ms += ms;
+        count[static_cast&lt;std::size_t>(ms)] += 1;
+    }
+    const int tokens = static_cast&lt;int>(latency_ms.size());
+    const double mean = static_cast&lt;double>(total_ms) / tokens;
+
+    std::println("tokens:        {}", tokens);
+    std::println("total time:    {:.2f} s, so {:.1f} tokens per second", total_ms / 1000.0,
+                 tokens / (total_ms / 1000.0));
+    std::println("mean latency:  {:.2f} ms", mean);
+    std::println("p50 (median):  {} ms", percentile(count, tokens, 50));
+    std::println("p90:           {} ms", percentile(count, tokens, 90));
+    std::println("p99:           {} ms", percentile(count, tokens, 99));
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="latency_tail.cpp"><code>tokens:        1000
+total time:    29.52 s, so 33.9 tokens per second
+mean latency:  29.52 ms
+p50 (median):  22 ms
+p90:           24 ms
+p99:           400 ms
+</code></pre>
+
+<p>The mean, 29.5 ms, and the rate, 33.9 tokens per second, both look healthy. The <strong>percentiles</strong> tell the truth. <code>p50</code>, the median, is the latency that half the tokens beat or match: 22 ms. <code>p99</code> is the latency that 99% of tokens beat or match, and here it is 400 ms: 2% of the tokens are stalls, more than the 1% that p99 is allowed to ignore. A reader sees the text freeze for almost half a second about every two seconds. The function <code>percentile</code> works by counting, not sorting: <code>count[ms]</code> holds how many tokens took exactly that many milliseconds, and walking up from 0 ms until enough tokens have been counted finds the answer, the way you would find the median height in a class by calling out 150 cm, 151 cm, 152 cm and counting the hands until half the class has answered.</p>
+<p>That is why serving teams quote p99 (and p99.9) and not the mean, and why Snake's last line counts late ticks rather than reporting an average. A late tick in a game, a late beat in a metronome and a late token in a chat window are the same event: work that missed its deadline, which a person notices.</p>
+
+<div class="callout twin"><span class="label">Inference twin</span><p>The game loop is a decode loop: one update per tick on a fixed time budget. Snake's tick is one step of the model: read the input, update the state, emit one frame where the model emits one token, then wait for the next deadline. A tick whose work overruns its budget is a dropped frame, and in a chat window the same thing is a latency spike. In week 18 your SmolLM2-135M engine streams tokens to the terminal through this loop, and you will measure its tokens per second and its per-token latencies with the <code>steady_clock</code> pattern from this chapter. Report p50 and p99 there, not just the mean.</p></div>
+
+<h2>Check yourself</h2>
+<div class="quiz">
+<div class="q"><p>You type <code>cat</code>, Backspace, <code>r</code>, Enter into a program that reads a line in line mode. What bytes does the program receive? And with <code>ICANON</code> off?</p><details class="answer"><summary>Answer</summary><p>In line mode it receives the finished line <code>car</code> (and the newline, which <code>std::getline</code> removes): the driver applied the Backspace. With <code>ICANON</code> off it receives every byte as typed: 99, 97, 116, 127, 114, 10.</p></details></div>
+
+<div class="q"><p>Give <code>VMIN</code> and <code>VTIME</code> for: a read that waits for a key for ever; a read that never waits; a read that waits at most half a second.</p><details class="answer"><summary>Answer</summary><p>1 and 0; 0 and 0; 0 and 5 (<code>VTIME</code> counts tenths of a second). All three need <code>ICANON</code> off.</p></details></div>
+
+<div class="q"><p>The key logger prints 27, 91, 66. Which key was it? And what do you know when it prints a 27 and nothing else arrives?</p><details class="answer"><summary>Answer</summary><p>The down arrow, <code>\x1b[B</code>. A lone 27 is the Escape key, but at the moment the 27 is read the program cannot be sure: the same byte starts every arrow key. Only what does or does not come with it, or soon after, tells them apart.</p></details></div>
+
+<div class="q"><p><code>read(STDIN_FILENO, &amp;byte, 1)</code> returned 0. Name two situations that produce this, and say what the program must not do next.</p><details class="answer"><summary>Answer</summary><p>The input has ended (standard input is a file or a pipe, for example <code>/dev/null</code>), or the terminal is set to <code>VMIN</code> 0 and no byte has arrived. In either case <code>byte</code> was not filled, so the program must not use it as if a key had been pressed.</p></details></div>
+
+<div class="q"><p><code>poll(&amp;keyboard, 1, 50)</code> returned 0. What happened, and how long did the call take?</p><details class="answer"><summary>Answer</summary><p>No byte arrived on standard input within the time limit, so <code>poll</code> timed out; the call took about 50 milliseconds (plus however late the operating system woke the program).</p></details></div>
+
+<div class="q"><p>A loop sleeps with <code>sleep_for(period)</code> each round; another sleeps with <code>sleep_until(next)</code> and then does <code>next += period</code>. Both oversleep by about 3 ms every time. After 1,000 rounds, how far behind the plan is each?</p><details class="answer"><summary>Answer</summary><p>The <code>sleep_for</code> loop is about 3 seconds behind (1,000 times 3 ms, plus all the work time), because each round starts from where the last one really ended. The deadline loop is only about 3 ms behind, because each sleep aims at a moment fixed in advance: a late wake-up makes the next sleep shorter.</p></details></div>
+
+<div class="q"><p>1,000 tokens: 990 take 10 ms and 10 take 1,000 ms. What are the mean, the p50 and the p99? Which one would you put in a report to a user?</p><details class="answer"><summary>Answer</summary><p>Mean: (990 × 10 + 10 × 1000) / 1000 = 19.9 ms. p50: 10 ms. p99: also 10 ms, because exactly 1% of the tokens are slow and p99 is allowed to ignore the slowest 1%; the 990th smallest latency is still 10 ms. Only p99.9 (1,000 ms) or the maximum shows the stalls. So none of the first three belongs alone in a report: a one-second freeze every hundred tokens is what the user notices, and you need the tail number, p99.9 or the maximum, to see it.</p></details></div>
+</div>
+
+<h2>What you can do now</h2>
+<ul>
+<li>Explain what line mode does to keys before your program sees them, and switch it off with <code>ICANON</code>.</li>
+<li>Choose <code>VMIN</code> and <code>VTIME</code> for "wait for a key", "never wait" and "wait at most this long".</li>
+<li>Read single bytes with <code>read</code>, check what it returned, and recognise letters, Enter, Backspace, Tab, Escape and the arrow keys by their bytes.</li>
+<li>Explain why a lone Escape byte is ambiguous.</li>
+<li>Wait for a key with a time limit using <code>poll</code>, and tell a key from a timeout.</li>
+<li>Keep a loop on schedule with <code>steady_clock::time_point</code>, <code>sleep_until</code> and <code>next += period</code>, and count the rounds that started late.</li>
+<li>Say why a decode loop is judged by its p99 latency, not its mean, and compute percentiles by counting.</li>
+</ul>
+</main>
+</body>
+</html>

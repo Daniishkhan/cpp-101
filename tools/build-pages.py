@@ -9,7 +9,15 @@ OUT/week1/, and on the way:
     tutor instead of looking for a server that is not there. The tutor needs tools/serve-book.py and
     your own API key on your own computer (docs/tutor.md); a key never goes into a published page;
   * leaves out the author files (assets/*.md, assets/TEMPLATE.html), which are not pages;
-  * writes OUT/index.html, which forwards to the newest week's book.
+  * writes OUT/index.html, which lists every week's book and forwards to the newest one that has
+    started. A book whose front page carries <meta name="book-week-starts" content="2026-11-23">
+    is published at OUT/weekN/ straight away (so a spec ritual can read it), but the site root
+    keeps forwarding to the week before it until that date. A front page without the tag counts as
+    started. Today's date comes from the build machine (UTC on GitHub Actions); BOOK_TODAY=YYYY-MM-DD
+    overrides it, for checking what the site will do on a given day.
+
+Nothing rebuilds the site by itself when a start date arrives: the forward moves on the first build
+on or after that date (any push that touches the book, or a manual run of the book workflow).
 
 The source files are never modified: opening the book from a file or with tools/serve-book.py works
 exactly as before. Exit code 0 = built, 1 = a link pointed at something that does not exist.
@@ -20,6 +28,7 @@ Usage:  python3 tools/build-pages.py [OUT]
 GitHub Actions sets GITHUB_SERVER_URL, GITHUB_REPOSITORY and GITHUB_REF_NAME; outside Actions the
 links point at https://github.com/Daniishkhan/cpp-101 on main.
 """
+import datetime
 import os
 import posixpath
 import re
@@ -31,6 +40,8 @@ BOOK = 'docs/book'                      # repo-relative, with forward slashes
 MARKER = '.build-pages'                 # proves an existing OUT folder is ours to replace
 LEAVE_ALONE = ('#', '/', 'http:', 'https:', 'mailto:', 'data:', 'javascript:')
 ATTR = re.compile(r'\b(href|src)="([^"]*)"')
+STARTS = re.compile(r'<meta\s+name="book-week-starts"\s+content="(\d{4}-\d{2}-\d{2})"\s*/?>')
+TITLE = re.compile(r'<title>([^<]*)</title>')
 
 
 def is_author_file(rel):
@@ -81,15 +92,47 @@ def rewrite_page(rel, text, base_url, ref, problems):
     return text, count
 
 
-def write_index(out, weeks):
-    newest = weeks[-1]
-    links = '\n'.join(f'    <li><a href="{w}/">{w.replace("week", "Week ")}</a></li>' for w in weeks)
+def book_facts(book_dir, week):
+    """(title, start date or None) from a week's index.html."""
+    try:
+        with open(os.path.join(book_dir, week, 'index.html'), encoding='utf-8') as f:
+            text = f.read()
+    except OSError:
+        return week.replace('week', 'Week '), None
+    title = TITLE.search(text)
+    starts = STARTS.search(text)
+    return (title.group(1).strip() if title else week.replace('week', 'Week '),
+            datetime.date.fromisoformat(starts.group(1)) if starts else None)
+
+
+def today():
+    forced = os.environ.get('BOOK_TODAY')
+    return datetime.date.fromisoformat(forced) if forced else datetime.datetime.now(datetime.timezone.utc).date()
+
+
+def current_week(weeks, facts, on):
+    """The newest week whose book has started on date `on` (the first week if none has)."""
+    started = [w for w in weeks if facts[w][1] is None or facts[w][1] <= on]
+    return started[-1] if started else weeks[0]
+
+
+def write_index(out, weeks, facts, on):
+    newest = current_week(weeks, facts, on)
+
+    def item(w):
+        title, starts = facts[w]
+        label = f'{w.replace("week", "Week ")}: {title}'
+        if starts and starts > on:
+            label += f' (starts {starts.strftime("%a %d %b %Y")})'
+        return f'    <li><a href="{w}/">{label}</a></li>'
+
+    links = '\n'.join(item(w) for w in weeks)
     page = f"""<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>C++ from zero to Life</title>
+  <title>{facts[newest][0]}</title>
   <meta http-equiv="refresh" content="0; url={newest}/">
   <link rel="canonical" href="{newest}/">
   <style>
@@ -98,8 +141,8 @@ def write_index(out, weeks):
   </style>
 </head>
 <body>
-  <h1>C++ from zero to Life</h1>
-  <p>Opening <a href="{newest}/">the newest book</a>.</p>
+  <h1>{facts[newest][0]}</h1>
+  <p>Opening <a href="{newest}/">this week's book</a>. Every book:</p>
   <ul>
 {links}
   </ul>
@@ -145,10 +188,13 @@ def main():
             else:
                 shutil.copy2(src, dst)
                 files += 1
-    write_index(out, weeks)
+    facts = {w: book_facts(book_dir, w) for w in weeks}
+    on = today()
+    write_index(out, weeks, facts, on)
 
     print(f'build-pages: {pages} pages and {files} other files into {out}; '
-          f'{links} links now point at {base_url} ({ref})')
+          f'{links} links now point at {base_url} ({ref}); '
+          f'the site root opens {current_week(weeks, facts, on)} ({on.isoformat()})')
     for p in problems:
         print(f'  problem: {p}', file=sys.stderr)
     return 1 if problems else 0

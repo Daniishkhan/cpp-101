@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="book-week-starts" content="2026-11-23">
+<title>C++ from Life to Snake</title>
+<link rel="stylesheet" href="../week1/assets/book.css?v=9">
+<link rel="stylesheet" href="../week1/assets/tutor.css?v=9">
+<script src="../week1/assets/theme.js?v=9"></script>
+<script defer src="assets/book.js?v=9"></script>
+<script defer src="assets/tutor.js?v=9"></script>
+</head>
+<body>
+<nav class="sidebar" aria-label="Chapters"></nav>
+<main>
+<p class="chapter-kicker">Week 3 · Inference from games</p>
+<h1>C++ from Life to Snake</h1>
+<p class="lede">Ten chapters that take you from the Game of Life you finished last week to a Snake you steer from the keyboard: your own types, a body that grows at one end and shrinks at the other, a terminal you borrow and always give back, and a debugger that shows you what your program is really doing.</p>
+
+<h2>What this book is</h2>
+<p>This is the Week 3 book of the 30-week curriculum in <a href="../../../goal.md">goal.md</a>. Two weeks ago you had never written C++; since then you have built Conway's Game of Life by hand, with tests, a benchmark and a CI run, using everything in <a href="../week1/index.html">the Week 1 book</a>. This week's program is <strong>Snake</strong>: a snake that moves one cell every tick, steered with the arrow keys, growing as it eats, getting faster as you score, dying when it hits a wall or itself. The spec, the contract and the tests are in <a href="../../../phase1-terminal/02-snake/README.md">phase1-terminal/02-snake/README.md</a>.</p>
+<p>Life taught you to think in data and loops. Snake adds the three things every real program needs next: <strong>your own types</strong> (a <code>Point</code>, a <code>Game</code>, a <code>Direction</code> that can only ever be one of four values), <strong>input while the program runs</strong> (a terminal in raw mode, and a guarantee that it is put back however the program ends), and a way to <strong>look inside a running program</strong> (lldb, in a 75-minute session on Tuesday).</p>
+<p>The rules have not changed. Every mechanism is taught on a problem one step away from Snake, a traffic light, a queue at a counter, a password prompt, a metronome, and the book never shows you a Snake function. Chapter 9 gives you the milestones and the hint ladders; the code is yours.</p>
+
+<h2>How to read it</h2>
+<p>As before: in order, every example typed into <code>scratch/</code> and run with <code>tools/run.sh</code>, every output compared character by character, check-yourself questions answered before you open the answers. The coloured boxes mean what they meant in Week 1 (first principle, analogy, inference twin, trap, try it, note); <a href="../week1/index.html#how-to-read-it">the Week 1 front page</a> shows them all. Chapters are shorter than Week 1's, because each one has a fixed Read block and you are no longer starting from zero.</p>
+<div class="callout trap"><span class="label">Before Tuesday 24 Nov</span><p>The debugger needs permission to control your programs, and on this Mac it does not have it yet: macOS Developer Mode is off, so the first time lldb starts a program a password dialog appears. The same permission is what lets an AddressSanitizer report name your file and line; without it, a report can stop half-way and hang. Run <code>sudo DevToolsSecurity -enable</code> once in Terminal (it asks for your password), or approve the dialog when it appears. <a href="00-start-here.html">Chapter 0</a> has the details, and a way to fix the sanitizer reports without the password.</p></div>
+
+<h2>Contents</h2>
+<div class="progress"></div>
+<div class="toc-cards" data-auto
+  data-blurb0="What you build, the day-by-day plan, the spec ritual, building the Snake folder, reading the red."
+  data-blurb1="Group values into one new type. Members, defaults, brace initialisation, structs in and out of functions, the defaulted ==."
+  data-blurb2="A type that can only be one of a few named values, and the statement made for choosing between them. Jump tables."
+  data-blurb3="The 75-minute lldb session: breakpoints, stepping, printing a vector and a deque, a conditional breakpoint, the backtrace, ASan."
+  data-blurb4="A queue with two open ends. What a front insertion costs in a vector, how a deque is laid out, sliding windows."
+  data-blurb5="A value, or honestly nothing. has_value, *, value_or, and why -1 is not an answer."
+  data-blurb6="Small structs travel by value, big containers by const reference, changes by reference, random engines always by reference."
+  data-blurb7="When an object is born and when it dies. Constructors, destructors, guards, the terminal's settings, Ctrl-C and a flag."
+  data-blurb8="Line mode off: the bytes of a key, arrow keys, waiting or not waiting for input, deadlines, late ticks, the decode loop."
+  data-blurb9="The seven milestones, hint ladders, the debugging playbook, the benchmark, the strands and the review."
+  data-blurb10="New error messages, the lldb cheat sheet, terminal first aid and the week's glossary."></div>
+<p class="book-sub">The cards above are rendered by <code>assets/book.js</code> from the <code>data-blurb</code> attributes; the chapter list itself lives in that file.</p>
+
+<h2>Around the book</h2>
+<ul>
+<li><a href="../../../phase1-terminal/02-snake/README.md">The challenge README</a>: the Snake spec, the contract, the seven milestones, the acceptance tests, and the decisions of the spec ritual on Fri 20 Nov 2026.</li>
+<li><a href="../week1/index.html">The Week 1 book</a>: everything this book builds on. Links into it are marked "Week 1".</li>
+<li><a href="../../../goal.md">goal.md</a>: the whole plan, and why week 3 looks like this.</li>
+<li><a href="../../tutor.md">docs/tutor.md</a>: the AI tutor in these pages (press <kbd>A</kbd>, or select any text). On these pages it knows the Snake contract and will not write it for you.</li>
+<li><a href="../../../CLAUDE.md">CLAUDE.md</a>: the rules your AI tutor follows here.</li>
+</ul>
+
+<h2>Opening the book</h2>
+<p>Open <code>docs/book/week3/index.html</code> in a browser straight from the folder, or read it online at <a href="https://daniishkhan.github.io/cpp-101/week3/">daniishkhan.github.io/cpp-101/week3/</a>. Both work without a server; the tutor panel then works in its offline form, which composes the question and copies it for you to paste into Claude Code. The live tutor answers beside the text when the page is served by <code>python3 tools/serve-book.py</code> (<a href="../../tutor.md">docs/tutor.md</a>). Progress ticks are stored per browser and per address, separately from the Week 1 book's.</p>
+<p>To check that every example in both books still compiles and prints what it claims:</p>
+<pre class="shell"><code>$ python3 tools/book-check.py
+</code></pre>
+</main>
+</body>
+</html>

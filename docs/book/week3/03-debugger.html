@@ -1,0 +1,595 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>03 · The debugger: lldb — C++ from Life to Snake</title>
+<link rel="stylesheet" href="../week1/assets/book.css?v=9">
+<link rel="stylesheet" href="../week1/assets/tutor.css?v=9">
+<script src="../week1/assets/theme.js?v=9"></script>
+<script defer src="assets/book.js?v=9"></script>
+<script defer src="assets/tutor.js?v=9"></script>
+</head>
+<body>
+<nav class="sidebar" aria-label="Chapters"></nav>
+<main>
+<p class="chapter-kicker">Chapter 03</p>
+<h1>The debugger: lldb</h1>
+<p class="lede">This chapter is a guided session of 75 minutes for Tuesday 24 November. At the end of it you will be able to stop a running program at any line, look at every variable, walk through it one line at a time, stop only when a condition is true, see the chain of calls that led somewhere, and let AddressSanitizer and the debugger together stop a program exactly where it touched memory that is not its own. First on a small toy, then on your own Life tests.</p>
+
+<div class="callout note"><span class="label">In this chapter</span>
+<ul>
+<li>A toy, <code>scratch/walk.cpp</code>, that walks one element off the end of a vector.</li>
+<li>Breakpoints by line and by function; <code>run</code>, <code>next</code>, <code>step</code>, <code>finish</code>, <code>continue</code>.</li>
+<li><code>frame variable</code> and <code>p</code> on a vector, a deque, a struct and an <code>enum class</code> value.</li>
+<li>A conditional breakpoint with <code>breakpoint modify -c</code>; the call stack with <code>bt</code>, <code>up</code> and <code>down</code>.</li>
+<li>The toy under AddressSanitizer and lldb, stopped at the faulting line.</li>
+<li>Your Week 1 Life tests under lldb, one test case at a time, and a bug added on purpose and removed with <code>git restore</code>.</li>
+<li>The rule for this week: one blocker in the log names the lldb command that solved it.</li>
+</ul>
+</div>
+
+<div class="callout note"><span class="label">Before Tuesday</span><p>macOS does not let one program take control of another without permission, and taking control is what a debugger does. On this Mac Developer Mode is off (<code>DevToolsSecurity -status</code> prints <code>Developer mode is currently disabled.</code>), so the first time lldb starts a program, macOS shows a dialog asking for an administrator's password, and lldb waits silently until you answer. Do this once, in Terminal, before Tuesday:</p>
+<pre class="shell"><code>$ sudo DevToolsSecurity -enable
+$ DevToolsSecurity -status
+</code></pre>
+<p>The first asks for your password; the second should now say Developer mode is enabled. Or approve the dialog on Tuesday; it can hide behind other windows, so if lldb seems to hang after <code>run</code>, look for it. AddressSanitizer needs the same permission to turn addresses into file names and line numbers: on this Mac, with Developer mode off, a sanitizer report stopped after its <code>READ of size ...</code> line and hung. Enabling Developer mode fixes both. (For the sanitizers alone, <a href="00-start-here.html#let-the-debugger-in-once-before-tuesday">chapter 0</a> shows a fix without the password: <code>ASAN_SYMBOLIZER_PATH</code>.)</p></div>
+
+<div class="callout note"><span class="label">How to read the transcripts</span><p>Some terminal blocks below were captured on this Mac as printed, with long folder names cut to <code>...</code>. Blocks that show a <em>running</em> program begin with <code>[reconstructed: ...]</code>: the author did not grant the permission above, so they were written from lldb's output format, with every format checked against this Mac's lldb and every value the one the program really computes. <code>NNNNN</code> is a process number, <code>0x…</code> an address that changes between runs, and <code>...</code> marks lines left out.</p></div>
+
+<h2>The session at a glance</h2>
+<table>
+<thead><tr><th>Part</th><th>Minutes</th><th>What you do</th></tr></thead>
+<tbody>
+<tr><td>0 · The toy</td><td>5</td><td>Build <code>walk.cpp</code> for debugging, run it, see a wrong average</td></tr>
+<tr><td>1 · Stopping and stepping</td><td>15</td><td>A breakpoint by line; <code>run</code>, <code>step</code>, <code>frame variable</code>, <code>finish</code>, <code>next</code>, <code>p</code></td></tr>
+<tr><td>2 · Finding the bug</td><td>10</td><td>A breakpoint by function, <code>continue</code>, the variable that gives it away</td></tr>
+<tr><td>3 · Conditions and the call stack</td><td>10</td><td><code>breakpoint modify -c</code>, <code>bt</code>, <code>up</code>, <code>down</code>, run to the end</td></tr>
+<tr><td>4 · AddressSanitizer meets lldb</td><td>10</td><td>The sanitizer stops the toy; lldb shows the faulting line</td></tr>
+<tr><td>5 · Your Life tests</td><td>20</td><td>One test case, a breakpoint in your own function, a bug on purpose</td></tr>
+<tr><td>6 · The rule and the cheat sheet</td><td>5</td><td>What goes in this week's log</td></tr>
+<tr><td></td><td><strong>75</strong></td><td></td></tr>
+</tbody>
+</table>
+<p>Work in a terminal at the root of the repository; every path below starts there. Type each command yourself.</p>
+
+<h2>Why a debugger</h2>
+<p>Until now, when a program surprised you, you had two tools: read the code again, or add a <code>std::println</code>, rebuild and run. Both are guesses: you choose in advance which value to print, and if you chose wrong, you start again. A <strong>debugger</strong> is a program that runs your program under its control. It can stop it at any line, show every variable at that moment, run it one line at a time, and say which function called which to get there. You stop guessing and look.</p>
+<p>Yours is <strong>lldb</strong>, from the same Apple command line tools as clang (<code>lldb --version</code> prints <code>lldb-2100.0.17.203</code> here). It reads the debug information that <code>-g</code> puts in the executable: the names of your variables and functions, and which machine instructions came from which line. <code>-O0</code>, no optimisation (the default when you give no <code>-O</code>), keeps each line as its own code in the order you wrote it, so stepping goes line by line; an optimised build merges lines and hides variables. Your CMake Debug builds have both.</p>
+
+<div class="callout principle"><span class="label">First principle</span><p>A bug is a difference between what you believe the program does and what it does. Reading the code shows you the first; a debugger shows you the second, one line and one variable at a time. When they disagree, the program is right about itself, and your belief is the thing to fix.</p></div>
+
+<div class="callout analogy"><span class="label">Analogy</span><p>A debugger is a pause button and a magnifying glass: stop the film at any frame, study every detail, advance one frame at a time. <em>Where it breaks:</em> pausing a film changes nothing, but pausing a program changes its timing. A bug that depends on time, such as Snake's tick deadlines or week 11's threads, can vanish while you watch.</p></div>
+
+<h2>Part 0 · The toy (5 minutes)</h2>
+<p>Save this as <code>scratch/walk.cpp</code>. It records six temperature readings, keeps the last three, and prints the warmest reading, the average and whether it is getting colder. It has one bug. You may spot it by reading; pretend you have not, because the next one will be in a thousand lines you did not write.</p>
+
+<pre class="code" data-lang="cpp" data-file="walk.cpp" data-check="compile"><code>// walk.cpp: a small program with one bug, for the lldb session (chapter 3).
+#include &lt;cstddef&gt;
+#include &lt;deque&gt;
+#include &lt;print&gt;
+#include &lt;vector&gt;
+
+enum class Trend { Falling, Steady, Rising };
+
+struct Reading {
+    int hour = 0;
+    double celsius = 0.0;
+};
+
+// Rising if the newest of the recent values is above the oldest, Falling if below.
+Trend trend_of(const std::deque&lt;double&gt;&amp; recent) {
+    if (recent.back() &gt; recent.front()) {
+        return Trend::Rising;
+    }
+    if (recent.back() &lt; recent.front()) {
+        return Trend::Falling;
+    }
+    return Trend::Steady;
+}
+
+// The warmest reading of the day.
+Reading warmest(const std::vector&lt;Reading&gt;&amp; readings) {
+    Reading best = readings[0];
+    for (const Reading&amp; r : readings) {
+        if (r.celsius &gt; best.celsius) {
+            best = r;
+        }
+    }
+    return best;
+}
+
+// The mean temperature of all the readings.
+double average(const std::vector&lt;Reading&gt;&amp; readings) {
+    double sum = 0.0;
+    for (std::size_t i = 1; i &lt;= readings.size(); ++i) {
+        sum += readings[i].celsius;
+    }
+    return sum / static_cast&lt;double&gt;(readings.size());
+}
+
+int main() {
+    const std::vector&lt;Reading&gt; readings = {{6, 3.5}, {9, 5.0}, {12, 8.5},
+                                           {15, 9.0}, {18, 6.5}, {21, 4.0}};
+
+    std::deque&lt;double&gt; recent;   // the last three temperatures, oldest first
+    for (const Reading&amp; r : readings) {
+        recent.push_back(r.celsius);
+        if (recent.size() &gt; 3) {
+            recent.pop_front();
+        }
+    }
+
+    const Trend trend = trend_of(recent);
+    const Reading top = warmest(readings);
+    const double mean = average(readings);
+    std::println("warmest: {} degrees at {}:00", top.celsius, top.hour);
+    std::println("average: {:.2f} degrees", mean);
+    std::println("trend:   {}", static_cast&lt;int&gt;(trend));
+    return 0;
+}
+</code></pre>
+
+<p>Everything in it is from chapters 1 and 2 except <code>std::deque&lt;double&gt;</code>, from <code>&lt;deque&gt;</code>: a vector that can also grow and shrink at the front. <code>push_back</code> adds at the back as you know, and <code>pop_front</code> removes the first element, so the loop in <code>main</code> leaves the last three temperatures in <code>recent</code>. <a href="04-deque.html">Chapter 4</a> explains it; today it is something to print. Build with debug information and no sanitizers, and run it. Check that your <code>average</code> starts on line 37 and the call to <code>trend_of</code> is line 57.</p>
+
+<pre class="shell"><code>$ clang++ -std=c++23 -Wall -Wextra -g -O0 scratch/walk.cpp -o scratch/walk
+$ scratch/walk
+warmest: 9 degrees at 15:00
+average: 5.50 degrees
+trend:   0
+</code></pre>
+
+<p>By hand: 3.5 + 5 + 8.5 + 9 + 6.5 + 4 is 36.5, and 36.5 / 6 is 6.08. The program says 5.50, with no crash and no warning. (The trend prints as 0 because <code>std::println</code> cannot print an <code>enum class</code>; 0 is <code>Falling</code>.)</p>
+
+<h2>Part 1 · Stopping and stepping (15 minutes)</h2>
+<p>Start lldb with the program's name. It loads the program without running it and shows its prompt, <code>(lldb)</code>. Set a <strong>breakpoint</strong>, a marker that says "when the program reaches this line, stop before it runs", by file and line, on the call to <code>trend_of</code>:</p>
+
+<pre class="shell"><code>$ lldb scratch/walk
+(lldb) target create "scratch/walk"
+Current executable set to '/Users/you/.../cpp-101/scratch/walk' (arm64).
+(lldb) breakpoint set -f walk.cpp -l 57
+Breakpoint 1: where = walk`main + 288 at walk.cpp:57:25, address = 0x0000000100000a90
+</code></pre>
+
+<p>That was captured: breakpoint 1, in <code>main</code>, at line 57, column 25, and the address of the line's first machine instruction. <code>run</code> starts the program at full speed until it reaches a breakpoint:</p>
+
+<pre class="shell"><code>[reconstructed: written from lldb's output format, not captured]
+(lldb) run
+Process NNNNN launched: '/Users/you/.../cpp-101/scratch/walk' (arm64)
+Process NNNNN stopped
+* thread #1, queue = 'com.apple.main-thread', stop reason = breakpoint 1.1
+    frame #0: 0x0000000100000a90 walk`main at walk.cpp:57:25
+   54           }
+   55       }
+   56
+-&gt; 57       const Trend trend = trend_of(recent);
+   58       const Reading top = warmest(readings);
+   59       const double mean = average(readings);
+   60       std::println("warmest: {} degrees at {}:00", top.celsius, top.hour);
+Target 0: (walk) stopped.
+</code></pre>
+
+<p><code>stop reason = breakpoint 1.1</code> is your breakpoint (its first location); <code>frame #0</code> names the function and line; then seven lines of source with an arrow on line 57.</p>
+
+<div class="callout trap"><span class="label">Trap</span><p>The arrow marks the line that runs <em>next</em>, not the one that just ran. Line 57 has not happened: <code>trend</code> holds whatever bytes were there, and printing it now shows nonsense. Every "but the variable is wrong!" in your first debugging week will be this, at least once.</p></div>
+
+<p><code>step</code> runs until the next line anywhere, going into the function called on this line. <code>frame variable</code> then shows every variable of the current function, here its one parameter:</p>
+
+<pre class="shell"><code>[reconstructed: written from lldb's output format, not captured]
+(lldb) step
+Process NNNNN stopped
+* thread #1, queue = 'com.apple.main-thread', stop reason = step in
+    frame #0: 0x0000000100000598 walk`trend_of(recent=size=3) at walk.cpp:16:9
+   13
+   14   // Rising if the newest of the recent values is above the oldest, Falling if below.
+   15   Trend trend_of(const std::deque&lt;double&gt;&amp; recent) {
+-&gt; 16       if (recent.back() &gt; recent.front()) {
+   17           return Trend::Rising;
+   18       }
+   19       if (recent.back() &lt; recent.front()) {
+Target 0: (walk) stopped.
+(lldb) frame variable
+(const std::deque&lt;double&gt; &amp;) recent = 0x… size=3: {
+  [0] = 9
+  [1] = 6.5
+  [2] = 4
+}
+</code></pre>
+
+<p>You are at the first line of <code>trend_of</code>, and the frame line even shows the argument, <code>recent=size=3</code>. <code>frame variable</code> prints the deque: its type (a <code>const&amp;</code>, so lldb also shows the address it refers to), its size, and each element from 0: 9, 6.5 and 4, oldest first, as intended. (lldb prints 9.0 as <code>9</code>.)</p>
+<p>You need not walk through <code>trend_of</code>. <code>finish</code> runs the rest of the current function, stops when it returns and prints what it returned. <code>next</code> runs one line of the current function, stepping <em>over</em> its calls. <code>p</code> prints a value:</p>
+
+<pre class="shell"><code>[reconstructed: written from lldb's output format, not captured]
+(lldb) finish
+Process NNNNN stopped
+* thread #1, queue = 'com.apple.main-thread', stop reason = step out
+Return value: (Trend) $0 = Falling
+
+    frame #0: 0x0000000100000a98 walk`main at walk.cpp:57:17
+   54           }
+   55       }
+   56
+-&gt; 57       const Trend trend = trend_of(recent);
+   58       const Reading top = warmest(readings);
+   59       const double mean = average(readings);
+   60       std::println("warmest: {} degrees at {}:00", top.celsius, top.hour);
+Target 0: (walk) stopped.
+(lldb) next
+Process NNNNN stopped
+* thread #1, queue = 'com.apple.main-thread', stop reason = step over
+    frame #0: 0x0000000100000aa4 walk`main at walk.cpp:58:25
+   ...
+-&gt; 58       const Reading top = warmest(readings);
+   ...
+(lldb) next
+   ... (the same, with -&gt; on line 59)
+(lldb) p trend
+(const Trend) Falling
+(lldb) p top
+(const Reading)  (hour = 15, celsius = 9)
+</code></pre>
+
+<p>lldb knows the enumeration, so it prints <code>Falling</code> where your program could only print 0 (<code>$0</code> is lldb's name for the value, for later commands). After <code>finish</code> the arrow is still on line 57: the call has returned, but its result is not yet stored in <code>trend</code>, and <code>next</code> finishes the line. Two <code>next</code>s later, <code>warmest</code> has run without you going into it, and <code>p top</code> shows a whole struct, members by name. The deque, the trend and the warmest reading are all right; the bug is further on. (<code>step</code> does not go into the standard library's own functions, such as <code>recent.back()</code>; it steps over them, which is almost always what you want.)</p>
+
+<h2>Part 2 · Finding the bug (10 minutes)</h2>
+<p>The wrong number is the average, so stop in <code>average</code>. A breakpoint set by function name stops at the function's first line, wherever it is called from. <code>continue</code> lets the program run on to the next stop:</p>
+
+<pre class="shell"><code>[reconstructed: written from lldb's output format, not captured]
+(lldb) breakpoint set -n average
+Breakpoint 2: where = walk`average(std::__1::vector&lt;Reading, std::__1::allocator&lt;Reading&gt;&gt; const&amp;) + 16 at walk.cpp:38:12, address = 0x00000001000008bc
+(lldb) continue
+Process NNNNN resuming
+Process NNNNN stopped
+* thread #1, queue = 'com.apple.main-thread', stop reason = breakpoint 2.1
+    frame #0: 0x00000001000008bc walk`average(readings=size=6) at walk.cpp:38:12
+   35
+   36   // The mean temperature of all the readings.
+   37   double average(const std::vector&lt;Reading&gt;&amp; readings) {
+-&gt; 38       double sum = 0.0;
+   39       for (std::size_t i = 1; i &lt;= readings.size(); ++i) {
+   40           sum += readings[i].celsius;
+   41       }
+Target 0: (walk) stopped.
+(lldb) next
+   ... (-&gt; on line 39)
+(lldb) next
+   ... (-&gt; on line 40)
+(lldb) frame variable
+(const std::vector&lt;Reading&gt; &amp;) readings = 0x… size=6: {
+  [0] = (hour = 6, celsius = 3.5)
+  [1] = (hour = 9, celsius = 5)
+  [2] = (hour = 12, celsius = 8.5)
+  [3] = (hour = 15, celsius = 9)
+  [4] = (hour = 18, celsius = 6.5)
+  [5] = (hour = 21, celsius = 4)
+}
+(double) sum = 0
+(std::size_t) i = 1
+</code></pre>
+
+<p>There it is. The loop is about to add its first reading, and <code>i</code> is 1. <code>readings[0]</code>, 3.5 degrees at six o'clock, will never be added: the loop counts from 1, the way people count, and a vector counts from 0. Watch one turn of the loop:</p>
+
+<pre class="shell"><code>[reconstructed: written from lldb's output format, not captured]
+(lldb) next
+   ... (-&gt; on line 41, the closing brace of the loop body)
+(lldb) next
+   ... (-&gt; on line 39: the ++i and the test)
+(lldb) next
+   ... (-&gt; on line 40 again)
+(lldb) frame variable sum i
+(double) sum = 5
+(std::size_t) i = 2
+</code></pre>
+
+<p>One turn is three <code>next</code>s: line 40 (the addition), line 41 (the closing brace, where the compiler put the jump back) and line 39 (the <code>++i</code> and the test <code>i &lt;= readings.size()</code>). <code>sum</code> is now 5 and <code>i</code> is 2. The interesting moment is at the end of the loop, four turns away; in a real program it may be four thousand.</p>
+
+<h2>Part 3 · Conditions and the call stack (10 minutes)</h2>
+<p>A <strong>conditional breakpoint</strong> stops only when an expression you give it is true. Set one on line 40 and give it the condition <code>i == 6</code> with <code>breakpoint modify -c</code> and the breakpoint's number (captured):</p>
+
+<pre class="shell"><code>(lldb) breakpoint set -f walk.cpp -l 40
+Breakpoint 3: where = walk`average(std::__1::vector&lt;Reading, std::__1::allocator&lt;Reading&gt;&gt; const&amp;) + 68 at walk.cpp:40:16, address = 0x00000001000008f0
+(lldb) breakpoint modify -c 'i == 6' 3
+(lldb) breakpoint list 3
+3: file = 'walk.cpp', line = 40, exact_match = 0, locations = 1
+Condition: i == 6
+
+  3.1: where = walk`average(std::__1::vector&lt;Reading, std::__1::allocator&lt;Reading&gt;&gt; const&amp;) + 68 at walk.cpp:40:16, address = walk[0x00000001000008f0], unresolved, hit count = 0
+</code></pre>
+
+<p>("Unresolved" appears because no program was running in the captured session; yours will say "resolved". <code>breakpoint set -f walk.cpp -l 40 -c 'i == 6'</code> does both steps at once.) <code>continue</code>: lldb checks the condition each time line 40 is reached, and stops when it holds.</p>
+
+<pre class="shell"><code>[reconstructed: written from lldb's output format, not captured]
+(lldb) continue
+Process NNNNN resuming
+Process NNNNN stopped
+* thread #1, queue = 'com.apple.main-thread', stop reason = breakpoint 3.1
+    frame #0: 0x00000001000008f0 walk`average(readings=size=6) at walk.cpp:40:16
+   37   double average(const std::vector&lt;Reading&gt;&amp; readings) {
+   38       double sum = 0.0;
+   39       for (std::size_t i = 1; i &lt;= readings.size(); ++i) {
+-&gt; 40           sum += readings[i].celsius;
+   41       }
+   42       return sum / static_cast&lt;double&gt;(readings.size());
+   43   }
+Target 0: (walk) stopped.
+(lldb) frame variable sum i
+(double) sum = 33
+(std::size_t) i = 6
+</code></pre>
+
+<p><code>i</code> is 6 and the loop is about to read <code>readings[6]</code>, but six elements are numbered 0 to 5. The test <code>i &lt;= readings.size()</code> lets the loop run one step too far, the off-by-one of Week 1's chapter 6. <code>sum</code> is 33, the five readings from nine o'clock on. Before you let that line run, see how you got here. <code>bt</code> (<strong>backtrace</strong>) prints the call stack from <a href="../week1/04-functions.html">Week 1, chapter 4</a>, innermost first. <code>up</code> selects the caller's frame, so that <code>frame variable</code> and <code>p</code> show <em>its</em> variables; <code>down</code> comes back.</p>
+
+<pre class="shell"><code>[reconstructed: written from lldb's output format, not captured]
+(lldb) bt
+* thread #1, queue = 'com.apple.main-thread', stop reason = breakpoint 3.1
+  * frame #0: 0x00000001000008f0 walk`average(readings=size=6) at walk.cpp:40:16
+    frame #1: 0x0000000100000ac8 walk`main at walk.cpp:59:25
+    frame #2: 0x… dyld`start + NNNN
+(lldb) up
+frame #1: 0x0000000100000ac8 walk`main at walk.cpp:59:25
+   56
+   57       const Trend trend = trend_of(recent);
+   58       const Reading top = warmest(readings);
+-&gt; 59       const double mean = average(readings);
+   60       std::println("warmest: {} degrees at {}:00", top.celsius, top.hour);
+   61       std::println("average: {:.2f} degrees", mean);
+   62       std::println("trend:   {}", static_cast&lt;int&gt;(trend));
+(lldb) p readings
+(const std::vector&lt;Reading&gt;)  size=6 {
+  [0] = (hour = 6, celsius = 3.5)
+  ...
+  [5] = (hour = 21, celsius = 4)
+}
+(lldb) p recent
+(std::deque&lt;double&gt;)  size=3 {
+  [0] = 9
+  [1] = 6.5
+  [2] = 4
+}
+(lldb) down
+frame #0: 0x00000001000008f0 walk`average(readings=size=6) at walk.cpp:40:16
+   37   double average(const std::vector&lt;Reading&gt;&amp; readings) {
+   38       double sum = 0.0;
+   39       for (std::size_t i = 1; i &lt;= readings.size(); ++i) {
+-&gt; 40           sum += readings[i].celsius;
+   41       }
+   42       return sum / static_cast&lt;double&gt;(readings.size());
+   43   }
+</code></pre>
+
+<p>Frame 0 is <code>average</code>, frame 1 is <code>main</code> at the call on line 59, frame 2 the system code that started <code>main</code>. In <code>main</code>'s frame, <code>p readings</code> shows the vector itself (not a reference, so no address) and <code>p recent</code> the deque. <code>up</code> and <code>down</code> do not move the program, which is still stopped in <code>average</code>; they move your point of view. Now let the bad line run, and finish:</p>
+
+<pre class="shell"><code>[reconstructed: written from lldb's output format, not captured]
+(lldb) next
+   ... (-&gt; on line 41)
+(lldb) frame variable sum
+(double) sum = 33
+(lldb) finish
+Process NNNNN stopped
+* thread #1, queue = 'com.apple.main-thread', stop reason = step out
+Return value: (double) $1 = 5.5
+
+    frame #0: 0x0000000100000ac8 walk`main at walk.cpp:59:18
+   ...
+-&gt; 59       const double mean = average(readings);
+   ...
+(lldb) continue
+Process NNNNN resuming
+warmest: 9 degrees at 15:00
+average: 5.50 degrees
+trend:   0
+Process NNNNN exited with status = 0 (0x00000000)
+(lldb) quit
+</code></pre>
+
+<p><code>sum</code> is still 33. The loop read the 8 bytes after the vector's memory, and on this Mac they happened to be zero; on another day they could be anything. 33 / 6 is the 5.5 that <code>finish</code> reports (<code>$1</code>, since <code>$0</code> was the trend). Both halves of the bug are now things you saw, not guessed: the loop starts at 1 and skips 3.5 degrees, and ends at 6 and reads memory that belongs to nothing.</p>
+
+<div class="callout try"><span class="label">Try it</span><p>Run the session again with <code>breakpoint modify -c 'sum &gt; 20' 3</code>. Before you <code>continue</code>, predict <code>i</code> and <code>sum</code> at the first stop. Then fix the bug by changing only line 39, rebuild, and check that the program prints 6.08.</p></div>
+<details class="answer"><summary>The first stop with sum &gt; 20</summary><p>The condition is checked before line 40 runs, when <code>sum</code> is 0 (i = 1), 5 (i = 2), 13.5 (i = 3), then 22.5 (i = 4): the first stop is <code>i = 4</code>, <code>sum = 22.5</code>. The fix is <code>for (std::size_t i = 0; i &lt; readings.size(); ++i)</code>, or a range-for, which cannot get either end wrong.</p></details>
+
+<h2>Part 4 · AddressSanitizer meets lldb (10 minutes)</h2>
+<p>You found the bad read because you suspected the loop. The sanitizers find it without suspicion. Build the toy with them, as your CMake Debug builds do, and run it on its own:</p>
+
+<pre class="shell"><code>$ clang++ -std=c++23 -Wall -Wextra -g -O0 -fsanitize=address,undefined -fno-omit-frame-pointer \
+      scratch/walk.cpp -o scratch/walk_asan
+$ scratch/walk_asan
+</code></pre>
+<pre class="output"><code>=================================================================
+==27534==ERROR: AddressSanitizer: heap-buffer-overflow on address 0x608000000188 at pc 0x000100095e58 bp 0x00016fd69a50 sp 0x00016fd69a48
+READ of size 8 at 0x608000000188 thread T0
+    #0 0x000100095e54 in average(std::__1::vector&lt;Reading, std::__1::allocator&lt;Reading&gt;&gt; const&amp;) walk.cpp:40:28
+    #1 0x00010009643c in main walk.cpp:59:25
+    #2 0x000186c214e0 in start (/usr/lib/dyld:arm64e+0x204e0)
+
+0x608000000188 is located 8 bytes after 96-byte region [0x608000000120,0x608000000180)
+allocated by thread T0 here:
+    #0 0x000100957f50 in _Znwm (libclang_rt.asan_osx_dynamic.dylib:arm64e+0x4ff50)
+    ...
+    #10 0x000100096204 in main walk.cpp:46:43
+    #11 0x000186c214e0 in start (/usr/lib/dyld:arm64e+0x204e0)
+
+SUMMARY: AddressSanitizer: heap-buffer-overflow walk.cpp:40:28 in average(std::__1::vector&lt;Reading, std::__1::allocator&lt;Reading&gt;&gt; const&amp;)
+Shadow bytes around the buggy address:
+  ...
+==27534==ABORTING
+</code></pre>
+
+<p>Captured on this Mac, cut where marked (your Mac may print <code>walk.cpp:40</code> without the column). Week 1's three questions: what, <code>heap-buffer-overflow</code>, a <code>READ of size 8</code>, one <code>double</code>; where, <code>average</code> at line 40, called from <code>main</code> at line 59; how far, <code>8 bytes after 96-byte region</code>. <a href="01-structs.html">Chapter 1</a> explains both numbers. A <code>Reading</code> is 16 bytes (an <code>int</code>, 4 bytes of padding, a <code>double</code>), and six are 96. <code>readings[6]</code> would start exactly at the end of the block, and its <code>celsius</code> begins 8 bytes in. With lldb attached, you also get to stand at that moment with every variable intact:</p>
+
+<pre class="shell"><code>[reconstructed: written from lldb's output format, not captured]
+$ lldb scratch/walk_asan
+(lldb) target create "scratch/walk_asan"
+Current executable set to '/Users/you/.../cpp-101/scratch/walk_asan' (arm64).
+(lldb) run
+Process NNNNN launched: '/Users/you/.../cpp-101/scratch/walk_asan' (arm64)
+=================================================================
+==NNNNN==ERROR: AddressSanitizer: heap-buffer-overflow on address 0x… at pc 0x… bp 0x… sp 0x…
+READ of size 8 at 0x… thread T0
+    ... (the same report as above) ...
+==NNNNN==ABORTING
+AddressSanitizer report breakpoint hit. Use 'thread info -s' to get extended information about the report.
+Process NNNNN stopped
+* thread #1, queue = 'com.apple.main-thread', stop reason = Heap buffer overflow
+    frame #0: 0x… libclang_rt.asan_osx_dynamic.dylib`__asan::AsanDie()
+libclang_rt.asan_osx_dynamic.dylib`__asan::AsanDie:
+-&gt;  0x… &lt;+0&gt;:  ...
+    ... (a few lines of machine code from inside ASan)
+Target 0: (walk_asan) stopped.
+(lldb) bt
+* thread #1, queue = 'com.apple.main-thread', stop reason = Heap buffer overflow
+  * frame #0: 0x… libclang_rt.asan_osx_dynamic.dylib`__asan::AsanDie()
+    frame #1: 0x… libclang_rt.asan_osx_dynamic.dylib`__sanitizer::Die()
+    frame #2: 0x… libclang_rt.asan_osx_dynamic.dylib`__asan::ScopedInErrorReport::~ScopedInErrorReport()
+    frame #3: 0x… libclang_rt.asan_osx_dynamic.dylib`__asan::ReportGenericError(...)
+    frame #4: 0x… libclang_rt.asan_osx_dynamic.dylib`__asan_report_load8
+    frame #5: 0x… walk_asan`average(readings=size=6) at walk.cpp:40:28
+    frame #6: 0x… walk_asan`main at walk.cpp:59:25
+    frame #7: 0x… dyld`start + NNNN
+(lldb) up 5
+frame #5: 0x… walk_asan`average(readings=size=6) at walk.cpp:40:28
+   37   double average(const std::vector&lt;Reading&gt;&amp; readings) {
+   38       double sum = 0.0;
+   39       for (std::size_t i = 1; i &lt;= readings.size(); ++i) {
+-&gt; 40           sum += readings[i].celsius;
+   41       }
+   42       return sum / static_cast&lt;double&gt;(readings.size());
+   43   }
+(lldb) frame variable i
+(std::size_t) i = 6
+(lldb) quit
+Quitting LLDB will kill one or more processes. Do you really want to proceed: [Y/n] y
+</code></pre>
+
+<p>After its report the sanitizer hands control to lldb, which stops with <code>stop reason = Heap buffer overflow</code>. The stop is inside the sanitizer's own code, which has no debug information, so lldb shows machine code. <code>bt</code> shows the way back: a few frames in <code>libclang_rt.asan_osx_dynamic.dylib</code> (names and count may differ on your Mac), then your <code>average</code>, then <code>main</code>. <code>up 5</code> climbs five frames at once (or repeat <code>up</code> until the frame names <code>walk.cpp</code>), and you are on the faulting line, at column 28 where <code>celsius</code> begins, with <code>i</code> showing 6. <code>quit</code> asks first because the program is still alive.</p>
+<p>That is the pairing to remember. The sanitizer notices the bad access the moment it happens, even when the stray bytes are harmless zeros; the debugger lets you stand on that line and ask questions. Neither needs you to suspect the right line first.</p>
+
+<h2>Part 5 · Your Life tests (20 minutes)</h2>
+<p>Now the same tools on code you wrote, in <code>phase1-terminal/01-life</code>. Its Debug build has <code>-g</code>, no optimisation and the sanitizers, and its test program is an ordinary executable.</p>
+
+<div class="callout trap"><span class="label">Trap</span><p>Commit before you start. At the end of this part you add a bug to <code>src/life.cpp</code> on purpose and remove it with <code>git restore src/life.cpp</code>, which puts the file back to its last commit and throws away <em>every</em> uncommitted change in it, your own included. <code>git status --short</code> must print nothing for that file before you begin.</p></div>
+
+<h3>One test case, one function</h3>
+<p>A doctest program takes <code>-tc="NAME"</code> to run only the test case with that name. In lldb, arguments for your program go after <code>--</code> in <code>process launch</code> (<code>run</code> is its short form). Set a breakpoint on your own <code>count_neighbours</code> and run the torus test from <code>tests/life_test.cpp</code>:</p>
+
+<pre class="shell"><code>$ cd phase1-terminal/01-life
+$ git status --short
+$ cmake --build build
+$ lldb ./build/life_tests
+(lldb) breakpoint set -n count_neighbours
+Breakpoint 1: where = life_tests`count_neighbours(std::__1::vector&lt;unsigned char, std::__1::allocator&lt;unsigned char&gt;&gt; const&amp;, int, int, int, int) + NN at life.cpp:NN:NN, address = 0x…
+(lldb) process launch -- -tc="count_neighbours: edges wrap around (torus)"
+</code></pre>
+
+<pre class="shell"><code>[reconstructed: written from lldb's output format, not captured]
+Process NNNNN launched: '/Users/you/.../cpp-101/phase1-terminal/01-life/build/life_tests' (arm64)
+[doctest] doctest version is "2.5.3"
+[doctest] run with "--help" for options
+Process NNNNN stopped
+* thread #1, queue = 'com.apple.main-thread', stop reason = breakpoint 1.1
+    frame #0: 0x… life_tests`count_neighbours(cells=size=15, width=5, height=3, x=0, y=0) at life.cpp:NN:NN
+   (seven lines of your own life.cpp, with -&gt; on the first line of count_neighbours's body)
+Target 0: (life_tests) stopped.
+(lldb) frame variable width height x y
+(int) width = 5
+(int) height = 3
+(int) x = 0
+(int) y = 0
+(lldb) bt
+* thread #1, queue = 'com.apple.main-thread', stop reason = breakpoint 1.1
+  * frame #0: 0x… life_tests`count_neighbours(cells=size=15, width=5, height=3, x=0, y=0) at life.cpp:NN:NN
+    frame #1: 0x… life_tests`DOCTEST_ANON_FUNC_39() at life_test.cpp:94:5
+    frame #2: 0x… life_tests`doctest::Context::run() at doctest.h:NNNN:NN
+    ...
+(lldb) finish
+Process NNNNN stopped
+* thread #1, queue = 'com.apple.main-thread', stop reason = step out
+Return value: (int) $0 = 1
+
+    frame #0: 0x… life_tests`DOCTEST_ANON_FUNC_39() at life_test.cpp:94:5
+   ...
+-&gt; 94       CHECK(count_neighbours(g, 5, 3, 0, 0) == 1);
+   ...
+</code></pre>
+
+<p>Your screen shows your own source with the arrow on the first line of <code>count_neighbours</code>; the book leaves it out because it is yours. The frame line and <code>frame variable</code> show the arguments of the test's first <code>CHECK</code>: column 0, row 0, on a grid 5 wide and 3 high. In <code>bt</code>, frame 1 is the test case, which doctest turns into a function called <code>DOCTEST_ANON_FUNC_</code> plus a number, at <code>life_test.cpp</code> line 94. <code>finish</code> shows your function's answer and lands on that line, next to the value the <code>CHECK</code> expects: 1, because on a torus the live cell at the far right of row 0 is the left neighbour of column 0. <code>continue</code> would go to the next of the test's four calls; deleting the breakpoint lets the test finish:</p>
+
+<pre class="shell"><code>[reconstructed: written from lldb's output format, not captured]
+(lldb) breakpoint delete 1
+1 breakpoints deleted; 0 breakpoint locations disabled.
+(lldb) continue
+Process NNNNN resuming
+===============================================================================
+[doctest] test cases: 1 | 1 passed | 0 failed | 12 skipped
+[doctest] assertions: 4 | 4 passed | 0 failed |
+[doctest] Status: SUCCESS!
+Process NNNNN exited with status = 0 (0x00000000)
+</code></pre>
+
+<p>Two details. lldb prints the cells of a <code>Cells</code> vector as characters, <code>'\0'</code> for dead and <code>'\x01'</code> for alive, because to the debugger <code>std::uint8_t</code> is a kind of <code>char</code>. And if a <code>CHECK</code> fails while lldb is attached, doctest stops the program at that <code>CHECK</code> (lldb says <code>EXC_BREAKPOINT</code>) so you can look around; <code>continue</code> carries on, and doctest's <code>-nb</code> option turns the stop off.</p>
+
+<div class="callout try"><span class="label">Try it</span><p>Run the test case <code>"step: blinker oscillates with period 2"</code> with a breakpoint on your <code>step</code>. Read <code>width</code> and <code>height</code> with <code>frame variable</code>, then add a conditional breakpoint inside your loop that stops only at the blinker's centre cell, and check what your code does there against the rules in <code>life.hpp</code>.</p></div>
+
+<h3>A bug on purpose</h3>
+<p>Last, give the sanitizer and lldb something to find in your own code. In <code>src/life.cpp</code>, choose any loop that indexes a vector with <code>[]</code>, for example the loop over columns in <code>step</code> or <code>render</code>, and change its <code>&lt;</code> to <code>&lt;=</code>: the toy's mistake. Rebuild with <code>cmake --build build</code>, start <code>lldb ./build/life_tests</code>, and <code>process launch -- -tc="NAME"</code> with a test case that calls that function.</p>
+<p>You should see the sanitizer's report, then lldb stopping with <code>stop reason = Heap buffer overflow</code>. The report says READ or WRITE (a loop that fills a vector writes; one that only looks reads) of size 1, one cell, and "N bytes after" says how far past the end of the grid it landed (0 is the first byte past it). <code>bt</code> shows the sanitizer's frames, then your function in <code>life.cpp</code> at the bad line, then the test case. <code>up</code> to your frame and <code>frame variable</code>: the loop variable is one past its last good value. Note which command showed you what; the log needs it. Then remove the bug and prove it is gone:</p>
+
+<pre class="shell"><code>(lldb) quit
+Quitting LLDB will kill one or more processes. Do you really want to proceed: [Y/n] y
+$ git restore src/life.cpp
+$ git status --short
+$ cmake --build build &amp;&amp; ./build/life_tests
+</code></pre>
+
+<p><code>git status --short</code> prints nothing when the file matches your last commit, and the tests are green again: 13 test cases, all passed.</p>
+
+<h2>Part 6 · The rule and the cheat sheet (5 minutes)</h2>
+<p>This week's rule, from <code>goal.md</code> and the Snake README: <strong>one blocker in your log is solved with lldb, and the log names the command that solved it.</strong> Not "used the debugger": the command and what it showed, in the "Blockers and bugs I slept on" table of <code>docs/log/2026-W48.md</code>. For the toy the row would read: "<code>walk.cpp</code> averaged six readings to 5.50, not 6.08 · <code>breakpoint set -n average</code>, then <code>frame variable</code>: <code>i</code> started at 1; <code>breakpoint modify -c 'i == 6'</code> showed it ending one past the last element". When Snake misbehaves, reach for lldb before <code>std::println</code>, and write the row the same day.</p>
+
+<table>
+<thead><tr><th>Command</th><th>Short form</th><th>What it does</th></tr></thead>
+<tbody>
+<tr><td><code>breakpoint set -f walk.cpp -l 40</code></td><td><code>b walk.cpp:40</code></td><td>Stop before line 40 runs</td></tr>
+<tr><td><code>breakpoint set -n average</code></td><td><code>b average</code></td><td>Stop at the first line of a function</td></tr>
+<tr><td><code>breakpoint modify -c 'i == 6' 3</code></td><td></td><td>Breakpoint 3 stops only when the condition holds</td></tr>
+<tr><td><code>breakpoint list</code>, <code>breakpoint delete 3</code></td><td><code>br list</code></td><td>See the breakpoints; remove one</td></tr>
+<tr><td><code>run</code>, <code>process launch -- ARGS</code></td><td><code>r</code></td><td>Start the program, with arguments after <code>--</code></td></tr>
+<tr><td><code>next</code></td><td><code>n</code></td><td>Run this line; calls count as one step</td></tr>
+<tr><td><code>step</code></td><td><code>s</code></td><td>Run to the next line anywhere, into calls</td></tr>
+<tr><td><code>finish</code></td><td></td><td>Run until this function returns; show the result</td></tr>
+<tr><td><code>continue</code></td><td><code>c</code></td><td>Run until the next stop</td></tr>
+<tr><td><code>frame variable</code>, <code>frame variable i sum</code></td><td><code>v</code>, <code>v i sum</code></td><td>All, or some, of this frame's variables</td></tr>
+<tr><td><code>p EXPRESSION</code></td><td></td><td>Print a variable or an expression, such as <code>p sum / 6</code></td></tr>
+<tr><td><code>bt</code></td><td></td><td>The call stack, innermost first</td></tr>
+<tr><td><code>up</code>, <code>up 5</code>, <code>down</code></td><td></td><td>Look at a caller's frame, or come back</td></tr>
+<tr><td><code>process interrupt</code></td><td>Ctrl-C</td><td>Stop a program that is running away, then <code>bt</code></td></tr>
+<tr><td><code>quit</code></td><td><code>q</code></td><td>Leave lldb</td></tr>
+</tbody>
+</table>
+
+<div class="callout twin"><span class="label">Inference twin</span><p>An inference engine runs one loop thousands of times: a decode step per token, through every layer. When token 437 comes out as nonsense, printing from every step buries you. A conditional breakpoint on the step counter, today's <code>i == 6</code> written as "position equals 437", stops on that token only; <code>frame variable</code> shows its numbers and the length of the KV cache; <code>bt</code> says which layer called which kernel. And a read past the end of a cache buffer is today's heap-buffer-overflow with bigger numbers. <code>goal.md</code> has debugger checkpoints in weeks 7, 11, 17 and 22, each worked with today's commands.</p></div>
+
+<h2>Check yourself</h2>
+<div class="quiz">
+<div class="q"><p>Why build with <code>-g</code> and <code>-O0</code> for debugging?</p><details class="answer"><summary>Answer</summary><p><code>-g</code> stores the names of variables and functions and which instructions came from which line; without it lldb cannot show source or variables by name. <code>-O0</code> keeps each line as its own code in source order and keeps variables where lldb can find them; optimised code merges and reorders lines.</p></details></div>
+<div class="q"><p>The arrow is on line 57, <code>const Trend trend = trend_of(recent);</code>. What does <code>p trend</code> show, and why?</p><details class="answer"><summary>Answer</summary><p>A meaningless value: the arrow marks the line that runs next, so <code>trend</code> has not been assigned. Run the line with <code>next</code>, then print it.</p></details></div>
+<div class="q"><p>What is the difference between <code>next</code>, <code>step</code> and <code>finish</code>?</p><details class="answer"><summary>Answer</summary><p><code>next</code> runs the current line, counting each call on it as one step. <code>step</code> runs to the next line anywhere, so it goes into a function called on this line (not into the standard library's own). <code>finish</code> runs until the current function returns and prints its return value.</p></details></div>
+<div class="q"><p>A loop runs 10,000 times and goes wrong on turn 9,000. How do you stop exactly there?</p><details class="answer"><summary>Answer</summary><p>A conditional breakpoint on a line inside the loop: <code>breakpoint set -f FILE -l LINE</code>, then <code>breakpoint modify -c 'i == 9000' N</code> with its number, then <code>run</code> or <code>continue</code>.</p></details></div>
+<div class="q"><p>You are stopped in <code>average</code> and want the deque <code>recent</code>, which lives in <code>main</code>. What do you type?</p><details class="answer"><summary>Answer</summary><p><code>up</code>, to select <code>main</code>'s frame, then <code>p recent</code> or <code>frame variable recent</code>; <code>down</code> to come back. The program does not move, only your view.</p></details></div>
+<div class="q"><p>Under lldb, a sanitizer report ends with <code>stop reason = Heap buffer overflow</code> and machine code instead of source. Where are you, and how do you reach your line?</p><details class="answer"><summary>Answer</summary><p>Inside the sanitizer's runtime, which has no debug information. <code>bt</code> shows its frames and, below them, yours; <code>up</code> (or <code>up N</code>) until the frame names your file, then <code>frame variable</code>.</p></details></div>
+<div class="q"><p>Why commit <code>src/life.cpp</code> before adding a bug on purpose?</p><details class="answer"><summary>Answer</summary><p>Because <code>git restore src/life.cpp</code> replaces the file with its last committed version, discarding every uncommitted change, not only the deliberate bug.</p></details></div>
+<div class="q"><p>The sanitizer says <code>READ of size 8 ... 8 bytes after 96-byte region</code> for six <code>Reading</code>s. Explain the 96 and the 8.</p><details class="answer"><summary>Answer</summary><p>A <code>Reading</code> is 16 bytes (<code>int</code>, 4 bytes of padding, <code>double</code>), so six take 96. <code>readings[6]</code> would start at the end of the block, and its <code>celsius</code> is 8 bytes into it, so the 8-byte read starts 8 bytes after the region.</p></details></div>
+</div>
+
+<h2>What you can do now</h2>
+<ul>
+<li>Build a program for debugging, start it under lldb, and stop it at a line or a function.</li>
+<li>Move with <code>next</code>, <code>step</code>, <code>finish</code> and <code>continue</code>, knowing which line the arrow means.</li>
+<li>Read a vector, a deque, a struct and an <code>enum class</code> value with <code>frame variable</code> and <code>p</code>.</li>
+<li>Stop only when a condition holds, and walk the call stack with <code>bt</code>, <code>up</code> and <code>down</code>.</li>
+<li>Run a sanitizer build under lldb and get from the sanitizer's stop to your faulting line.</li>
+<li>Debug one doctest case of your own project, and add and remove a deliberate bug safely.</li>
+<li>Write a log entry that names the lldb command that solved a blocker.</li>
+</ul>
+</main>
+</body>
+</html>

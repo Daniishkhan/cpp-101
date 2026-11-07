@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>10 · Appendix: errors, lldb, glossary — C++ from Life to Snake</title>
+<link rel="stylesheet" href="../week1/assets/book.css?v=9">
+<link rel="stylesheet" href="../week1/assets/tutor.css?v=9">
+<script src="../week1/assets/theme.js?v=9"></script>
+<script defer src="assets/book.js?v=9"></script>
+<script defer src="assets/tutor.js?v=9"></script>
+</head>
+<body>
+<nav class="sidebar" aria-label="Chapters"></nav>
+<main>
+<p class="chapter-kicker">Chapter 10</p>
+<h1>Appendix: errors, lldb, glossary</h1>
+<p class="lede">The pages to keep open while you code: the new error messages of this week with what each one means, every lldb command from chapter 3 on one table, what to do when the terminal is left in a strange mode, the week's words, and a preview of week 4.</p>
+
+<div class="callout note"><span class="label">In this chapter</span>
+<ul>
+<li>An error decoder for structs, enums, optionals, the terminal headers and the linker.</li>
+<li>Warnings and sanitizer reports that mean "your switch missed a case".</li>
+<li>The lldb cheat sheet.</li>
+<li>Terminal first aid.</li>
+<li>A glossary of the week's terms.</li>
+<li>What week 4 brings.</li>
+</ul>
+</div>
+
+<p>Week 1's <a href="../week1/15-appendix.html">appendix</a> still applies: how to read any compiler error from its first line, the four stages of a build, and the AddressSanitizer report decoder. This one adds only what is new.</p>
+
+<h2>Error decoder</h2>
+<p>Every message below was produced by Apple clang 21 on this Mac with <code>clang++ -std=c++23 -Wall -Wextra</code>. Read the first line, then the caret.</p>
+
+<h3>A struct without its final semicolon</h3>
+<pre class="code" data-lang="cpp" data-file="no_semicolon.cpp" data-check="error"><code>#include &lt;print&gt;
+
+struct Ticket {
+    int number = 0;
+    int counter = 1;
+}
+
+int main() {
+    Ticket t;
+    std::println("{}", t.number);
+    return 0;
+}
+</code></pre>
+<pre class="output"><code>no_semicolon.cpp:6:2: error: expected ';' after struct
+    6 | }
+      |  ^
+      |  ;
+1 error generated.
+</code></pre>
+<p>A struct's closing brace ends a declaration, and every declaration ends with a semicolon. Function bodies do not need one after their brace; structs and enums do. The fix is the one character the caret shows.</p>
+
+<h3>Comparing two structs</h3>
+<pre class="code" data-lang="cpp" data-file="compare_structs.cpp" data-check="error"><code>#include &lt;print&gt;
+
+struct Ticket {
+    int number = 0;
+    int counter = 1;
+};
+
+int main() {
+    Ticket a{42, 3};
+    Ticket b{42, 3};
+    if (a == b) {
+        std::println("same ticket");
+    }
+    return 0;
+}
+</code></pre>
+<pre class="output"><code>compare_structs.cpp:11:11: error: invalid operands to binary expression ('Ticket' and 'Ticket')
+   11 |     if (a == b) {
+      |         ~ ^  ~
+1 error generated.
+</code></pre>
+<p>"Operands" are the things on either side of an operator. A new type knows no operators at all until you give it some. Either compare the members yourself, or add the one line from <a href="01-structs.html">chapter 1</a>, <code>bool operator==(const Ticket&amp;) const = default;</code>, inside the struct, which asks the compiler to compare member by member. <code>Point</code> in <code>snake.hpp</code> has exactly that line.</p>
+
+<h3>Printing a struct</h3>
+<pre class="code" data-lang="cpp" data-file="print_struct.cpp" data-check="error"><code>#include &lt;print&gt;
+
+struct Ticket {
+    int number = 0;
+    int counter = 1;
+};
+
+int main() {
+    Ticket t{42, 3};
+    std::println("{}", t);
+    return 0;
+}
+</code></pre>
+<pre class="output"><code>In file included from print_struct.cpp:1:
+In file included from .../usr/include/c++/v1/print:46:
+In file included from .../usr/include/c++/v1/format:211:
+.../usr/include/c++/v1/__format/format_functions.h:99:30: error: call to implicitly-deleted default constructor of 'formatter&lt;Ticket, char&gt;'
+   99 |       formatter&lt;_Tp, _CharT&gt; __f;
+      |                              ^
+... (forty more lines of notes)
+</code></pre>
+<p>A long message from deep inside the standard library, which is normal for templates. Do not read it top to bottom. Look for your own type's name: <code>formatter&lt;Ticket, char&gt;</code> means "<code>std::println</code> has no way to turn a <code>Ticket</code> into text". Print the members, or write a function that builds a <code>std::string</code> from the struct and print that. (Teaching <code>std::println</code> to print your type directly is possible, and it is what the test file's printers do for doctest; it needs templates, week 15.)</p>
+
+<h3>An enum class used as a number</h3>
+<pre class="code" data-lang="cpp" data-file="enum_as_int.cpp" data-check="error"><code>#include &lt;print&gt;
+
+enum class Light { Red, Amber, Green };
+
+int main() {
+    Light now = Light::Amber;
+    int code = now;
+    std::println("{}", code);
+    return 0;
+}
+</code></pre>
+<pre class="output"><code>enum_as_int.cpp:7:9: error: cannot initialize a variable of type 'int' with an lvalue of type 'Light'
+    7 |     int code = now;
+      |         ^      ~~~
+1 error generated.
+</code></pre>
+<p>This is the protection you asked for: an <code>enum class</code> never turns into a number by itself. When you really want the number (to print it while debugging), say so with <code>static_cast&lt;int&gt;(now)</code>. An <strong>lvalue</strong>, in the message, is just "something with a name and a place in memory", here the variable <code>now</code>.</p>
+
+<h3>An optional used as its value</h3>
+<pre class="code" data-lang="cpp" data-file="optional_as_int.cpp" data-check="error"><code>#include &lt;optional&gt;
+#include &lt;print&gt;
+
+std::optional&lt;int&gt; first_even(int a, int b) {
+    if (a % 2 == 0) {
+        return a;
+    }
+    if (b % 2 == 0) {
+        return b;
+    }
+    return std::nullopt;
+}
+
+int main() {
+    int found = first_even(3, 8);
+    std::println("{}", found);
+    return 0;
+}
+</code></pre>
+<pre class="output"><code>optional_as_int.cpp:15:9: error: no viable conversion from 'std::optional&lt;int&gt;' to 'int'
+   15 |     int found = first_even(3, 8);
+      |         ^       ~~~~~~~~~~~~~~~~
+1 error generated.
+</code></pre>
+<p>An optional might be empty, so the compiler will not let you pretend it is an <code>int</code>. Keep it as a <code>std::optional&lt;int&gt;</code>, check <code>has_value()</code>, then use <code>*found</code>; or use <code>value_or</code> with a fallback (<a href="05-optional.html">chapter 5</a>).</p>
+
+<h3>The terminal's types without their header</h3>
+<pre class="code" data-lang="cpp" data-file="no_termios.cpp" data-check="error"><code>#include &lt;print&gt;
+#include &lt;unistd.h&gt;
+
+int main() {
+    termios saved{};
+    tcgetattr(STDIN_FILENO, &amp;saved);
+    std::println("saved");
+    return 0;
+}
+</code></pre>
+<pre class="output"><code>no_termios.cpp:5:5: error: unknown type name 'termios'
+    5 |     termios saved{};
+      |     ^
+1 error generated.
+</code></pre>
+<p><code>termios</code>, <code>tcgetattr</code> and <code>tcsetattr</code> live in <code>&lt;termios.h&gt;</code>; <code>read</code> and <code>STDIN_FILENO</code> in <code>&lt;unistd.h&gt;</code>; <code>poll</code> in <code>&lt;poll.h&gt;</code>; <code>std::signal</code> in <code>&lt;csignal&gt;</code>. The <code>.h</code> headers are not part of C++ but of the operating system's own interface (POSIX), which is why their names have no <code>std::</code>.</p>
+
+<h3>Undefined symbols: a source file that is not in the build</h3>
+<pre class="code" data-lang="cpp" data-file="missing_definition.cpp" data-check="error"><code>#include &lt;print&gt;
+#include &lt;string&gt;
+
+std::string latest_message();
+
+int main() {
+    std::println("{}", latest_message());
+    return 0;
+}
+</code></pre>
+<pre class="output"><code>Undefined symbols for architecture arm64:
+  "latest_message()", referenced from:
+      _main in missing_definition-f30757.o
+ld: symbol(s) not found for architecture arm64
+clang++: error: linker command failed with exit code 1 (use -v to see invocation)
+</code></pre>
+<p>Week 1's linker error, with a new way to cause it. The game is built from three files: if a function's definition is in <code>terminal.cpp</code> and <code>terminal.cpp</code> is missing from the <code>add_executable</code> line (or from your <code>clang++</code> command for a scratch check), every file compiles and the link fails. The message names the function; find which file defines it, and check that file is in the list.</p>
+
+<h3>A switch that missed a case</h3>
+<p>This one is not an error, it is two warnings, and they are the reason an <code>enum class</code> switch should have no <code>default</code>:</p>
+<pre class="code" data-lang="cpp" data-file="missed_case.cpp" data-check="fragment"><code>int seconds_of(Light light) {
+    switch (light) {
+    case Light::Red:
+        return 30;
+    case Light::Amber:
+        return 3;
+    }
+}
+</code></pre>
+<pre class="shell"><code>missed_case.cpp:6:13: warning: enumeration value 'Green' not handled in switch [-Wswitch]
+missed_case.cpp:12:1: warning: non-void function does not return a value in all control paths [-Wreturn-type]
+2 warnings generated.
+</code></pre>
+<p>And if you run it anyway with the sanitizers on and the missing case happens:</p>
+<pre class="shell"><code>missed_case.cpp:5:5: runtime error: execution reached the end of a value-returning function without returning a value
+SUMMARY: UndefinedBehaviorSanitizer: undefined-behavior missed_case.cpp:5:5
+</code></pre>
+<p>When the switch has a case for every enumerator and each case returns, clang says nothing, because no valid value can reach the end. That is the property you want: add a fourth colour to the enum later, and every switch that forgot it is reported by name.</p>
+
+<h3>Runtime reports you will meet this week</h3>
+<table>
+<thead><tr><th>Report starts with</th><th>Usually means</th><th>Where it was taught</th></tr></thead>
+<tbody>
+<tr><td><code>AddressSanitizer: heap-buffer-overflow</code></td><td>an index one past the end, in a vector, a deque or a string (in <code>parse_key</code>: reading <code>bytes[2]</code> of a shorter string)</td><td><a href="03-debugger.html">chapter 3</a></td></tr>
+<tr><td><code>AddressSanitizer: heap-use-after-free</code></td><td>a reference or a saved position into a container that has since grown or been destroyed</td><td><a href="06-value-or-reference.html">chapter 6</a></td></tr>
+<tr><td><code>AddressSanitizer: stack-use-after-return</code></td><td>a reference to a local variable, used after its function returned</td><td><a href="07-lifetime-and-raii.html">chapter 7</a></td></tr>
+<tr><td><code>runtime error: execution reached the end of a value-returning function</code></td><td>a switch that missed a case, or a path with no <code>return</code></td><td>above</td></tr>
+<tr><td>the program hangs in a test</td><td>a loop that cannot end: <code>place_food</code> searching a full board for a free cell</td><td><a href="09-build-snake.html">chapter 9</a>, milestone 4</td></tr>
+</tbody>
+</table>
+
+<h2>The lldb cheat sheet</h2>
+<p>Every command from <a href="03-debugger.html">chapter 3</a>, with its long form and the short one you will actually type. Commands can be abbreviated as long as they stay unambiguous.</p>
+<table>
+<thead><tr><th>You want to</th><th>Type</th><th>Short</th></tr></thead>
+<tbody>
+<tr><td>start lldb on a program</td><td><code>lldb ./build/snake_tests</code></td><td></td></tr>
+<tr><td>stop at a line</td><td><code>breakpoint set --file snake.cpp --line 42</code></td><td><code>b snake.cpp:42</code></td></tr>
+<tr><td>stop when a function is entered</td><td><code>breakpoint set --name tick</code></td><td><code>b tick</code></td></tr>
+<tr><td>stop only when a condition holds</td><td><code>breakpoint modify --condition "game.score == 3" 1</code></td><td><code>br m -c "game.score == 3" 1</code></td></tr>
+<tr><td>list or delete breakpoints</td><td><code>breakpoint list</code>, <code>breakpoint delete 1</code></td><td><code>br l</code>, <code>br del 1</code></td></tr>
+<tr><td>run, with arguments for the program</td><td><code>process launch -- -tc="tick*"</code></td><td><code>run -tc="tick*"</code></td></tr>
+<tr><td>run the next line, without going into calls</td><td><code>thread step-over</code></td><td><code>next</code> or <code>n</code></td></tr>
+<tr><td>go into the call on this line</td><td><code>thread step-in</code></td><td><code>step</code> or <code>s</code></td></tr>
+<tr><td>run until this function returns</td><td><code>thread step-out</code></td><td><code>finish</code></td></tr>
+<tr><td>run to the next stop</td><td><code>process continue</code></td><td><code>continue</code> or <code>c</code></td></tr>
+<tr><td>see every local variable</td><td><code>frame variable</code></td><td><code>v</code></td></tr>
+<tr><td>see one variable, a member, an element</td><td><code>frame variable game.body</code></td><td><code>v game.body</code></td></tr>
+<tr><td>evaluate an expression</td><td><code>expression game.body.size()</code></td><td><code>p game.body.size()</code></td></tr>
+<tr><td>how did I get here?</td><td><code>thread backtrace</code></td><td><code>bt</code></td></tr>
+<tr><td>look at the caller's variables</td><td><code>frame select 1</code>, or <code>up</code> and <code>down</code></td><td><code>up</code></td></tr>
+<tr><td>see the code around the stop</td><td><code>source list</code></td><td><code>l</code></td></tr>
+<tr><td>leave</td><td><code>quit</code></td><td><code>q</code></td></tr>
+</tbody>
+</table>
+<p>Two facts worth remembering. A program must be built with <code>-g</code> (every Debug build here is) for lldb to know line numbers and variable names; and with <code>-O0</code>, the Debug default, every variable you wrote really exists, while in a Release build the optimiser may have removed it. And when a sanitizer finds a bug in a program running under lldb, lldb stops on the faulting line, so <code>bt</code> and <code>v</code> work at the exact moment of the crime.</p>
+
+<h2>Terminal first aid</h2>
+<p>In zsh, the shell on your Mac, the first two rows last only until the next prompt: zsh switches echo and line mode back on for itself before printing it. In bash they stay until you fix them. In either shell, a program started on the same command line (<code>./build/snake; cat</code>) finds exactly what the last one left behind, which is how you check a guard.</p>
+<table>
+<thead><tr><th>Symptom</th><th>Cause</th><th>Fix</th></tr></thead>
+<tbody>
+<tr><td>Nothing you type appears; commands still run</td><td>echo was left off</td><td>type <code>reset</code> and Enter, blind; or <code>stty sane</code></td></tr>
+<tr><td>Enter does nothing visible, or each key acts at once</td><td>line mode was left off</td><td>the same</td></tr>
+<tr><td>No cursor</td><td>the hide-cursor code was sent and the show-cursor code never was</td><td><code>tput cnorm</code>, or <code>reset</code></td></tr>
+<tr><td>The prompt appears in the middle of the old frame</td><td>the last line was printed before the guard restored the terminal, or never moved below the board</td><td>print the last line after the guard's block (chapter 9, milestone 6); <code>clear</code></td></tr>
+<tr><td>A game that will not stop</td><td>the loop never checks the Ctrl-C flag, or Ctrl-C was turned into a plain key</td><td>Ctrl-\ sends a different signal that still kills it; or close the window; then <code>reset</code></td></tr>
+</tbody>
+</table>
+<p>Settings belong to one terminal window. Closing the window always throws them away, and a new window always starts normal.</p>
+
+<h2>Glossary</h2>
+<ul>
+<li><strong>Arrow-key escape sequence</strong>: the three bytes a terminal sends for an arrow key, 27 <code>[</code> and a letter (<code>A</code> up, <code>B</code> down, <code>C</code> right, <code>D</code> left).</li>
+<li><strong>Backtrace</strong>: the list of function calls that led to where the program is stopped, innermost first (<code>bt</code>).</li>
+<li><strong>Breakpoint</strong>: a place where the debugger stops the program. <strong>Conditional breakpoint</strong>: one that stops only when an expression is true.</li>
+<li><strong>Canonical mode</strong> (line mode): the terminal collects a whole line, with editing, and hands it over on Enter.</li>
+<li><strong>Case label</strong>: <code>case Value:</code> inside a <code>switch</code>; several labels can share one statement.</li>
+<li><strong>Constructor</strong>: the function, named after the struct, that runs when an object is created. <strong>Destructor</strong>: the one named <code>~Name</code> that runs when it dies.</li>
+<li><strong>Deadline</strong>: the moment by which a tick's work should be done; the next tick starts there, not "150 ms after this one ended".</li>
+<li><strong>Deque</strong>: <code>std::deque</code>, a double-ended queue, cheap to grow and shrink at both ends, stored in fixed-size blocks.</li>
+<li><strong>Designated initialiser</strong>: <code>Date d{.year = 2026, .month = 11}</code>, naming the members you set.</li>
+<li><strong>Developer Mode</strong>: the macOS setting that lets debuggers control your programs without asking each time (<code>DevToolsSecurity</code>).</li>
+<li><strong>Echo</strong>: the terminal printing what you type, as you type it.</li>
+<li><strong>Enumerator</strong>: one of the named values of an enum (<code>Light::Red</code>). <strong>enum class</strong>: an enum whose values are scoped and never turn into numbers by themselves.</li>
+<li><strong>Fallthrough</strong>: running on from one case into the next because a <code>break</code> or <code>return</code> is missing.</li>
+<li><strong>Frame</strong> (in lldb): one function call's place on the call stack, with its own variables.</li>
+<li><strong>Guard</strong>: an object whose only job is to undo something when it dies: restore a setting, show the cursor, close a file.</li>
+<li><strong>Jump table</strong>: a switch compiled into one lookup and one jump. <strong>Compare chain</strong>: a switch compiled into one test per case.</li>
+<li><strong>Late tick</strong> (dropped frame): a tick whose work took longer than its budget.</li>
+<li><strong>Lifetime</strong>: the stretch of the run during which an object exists. <strong>Scope</strong>: the stretch of the source code in which a name can be used.</li>
+<li><strong>Member</strong>: one of the named parts of a struct (<code>d.month</code>).</li>
+<li><strong>Optional</strong>: <code>std::optional&lt;T&gt;</code>, either a <code>T</code> or nothing (<code>std::nullopt</code>).</li>
+<li><strong>RAII</strong> (resource acquisition is initialisation): tying a resource to an object, acquired in its constructor and released in its destructor, so it can never be forgotten.</li>
+<li><strong>Raw mode</strong>: canonical mode and echo off, so each key reaches the program at once and silently.</li>
+<li><strong>Signal</strong>: a message from the operating system to a program; Ctrl-C sends <code>SIGINT</code>. <strong>Signal handler</strong>: a function of yours that runs when one arrives.</li>
+<li><strong>Sliding window</strong>: a fixed-length run of the most recent items, one added at one end and one dropped at the other.</li>
+<li><strong>Struct</strong>: a type you define as a group of named members.</li>
+<li><strong>termios</strong>: the struct that holds a terminal's settings, read with <code>tcgetattr</code> and written with <code>tcsetattr</code>.</li>
+<li><strong>Tick</strong>: one step of the game, and the fixed slice of time it gets.</li>
+<li><strong>VMIN and VTIME</strong>: two of the terminal's control values, saying how many bytes a read waits for and for how long.</li>
+</ul>
+
+<h2>What week 4 brings (Tetris)</h2>
+<p>A preview, so you recognise the names; nothing here is needed this week.</p>
+<p><strong>Classes with invariants.</strong> A Tetris piece must always be one of seven shapes in one of four rotations. A <strong>class</strong> is a struct whose members are hidden behind functions of its own, so nothing outside can put it into a state that breaks that promise. Your <code>Game</code> is a struct: anything can set <code>score</code> to -5. Next week you will see when that matters.</p>
+<p><strong>Constructors and destructors, in depth.</strong> This week you wrote one constructor and one destructor, for a guard. Next week, constructors that take arguments and check them, and the members the compiler writes for you when you write none.</p>
+<p><strong>Copy and move, and a tiny <code>Vec2</code>.</strong> What happens when you copy a <code>RawTerminal</code>? Two destructors restore the same settings. Harmless here, a disaster for a guard that frees memory. Week 4 explains copying and moving, and how a type can forbid being copied. You will also give a two-number type its own <code>+</code> and <code>==</code>.</p>
+<p><strong><code>std::array</code> and rotation.</strong> A piece is four cells in a fixed-size array; rotating it is multiplying each cell by a 2 by 2 matrix. In week 16 the same rotation, applied to pairs of numbers inside a model, is rotary position embedding.</p>
+
+<h2>Check yourself</h2>
+<div class="quiz">
+<div class="q"><p><code>error: invalid operands to binary expression ('Reading' and 'Reading')</code>. What did you write, and what are your two ways out?</p><details class="answer"><summary>Answer</summary><p>An operator, probably <code>==</code>, between two values of your own struct <code>Reading</code>, which knows no operators. Either compare the members you care about yourself, or add <code>bool operator==(const Reading&amp;) const = default;</code> to the struct so the compiler compares every member.</p></details></div>
+<div class="q"><p>A forty-line error ends somewhere inside <code>format_functions.h</code>. Which two words do you look for?</p><details class="answer"><summary>Answer</summary><p>Your own type's name, inside <code>formatter&lt;YourType, char&gt;</code>: it means you passed a value of your struct to <code>std::print</code> or <code>std::println</code>, which cannot turn it into text. Print its members, or a string built from them.</p></details></div>
+<div class="q"><p>Why is a switch over an enum class better without a <code>default</code>?</p><details class="answer"><summary>Answer</summary><p>Because then <code>-Wswitch</code> warns about every enumerator the switch does not handle. With a <code>default</code>, an enumerator added later silently goes to the default, and nothing tells you.</p></details></div>
+<div class="q"><p>Every file compiled, and then: <code>Undefined symbols for architecture arm64: "read_keys()"</code>. Where is the mistake?</p><details class="answer"><summary>Answer</summary><p>Not in the code, but in the build: the file that defines <code>read_keys</code> (<code>terminal.cpp</code>) was not compiled into this program. Check the <code>add_executable</code> line, or the files on your <code>clang++</code> command.</p></details></div>
+<div class="q"><p>In lldb, what is the difference between <code>next</code> and <code>step</code> on a line that calls <code>tick</code>?</p><details class="answer"><summary>Answer</summary><p><code>next</code> runs the whole line, including all of <code>tick</code>, and stops at the following line. <code>step</code> goes into <code>tick</code> and stops at its first line, so you can follow it.</p></details></div>
+<div class="q"><p>In bash, your game crashed and the terminal does not echo. Which command do you type, and why blind? And why does the same crash in zsh leave only a missing cursor?</p><details class="answer"><summary>Answer</summary><p><code>reset</code> (or <code>stty sane</code>) and Enter. You type it blind because echo is exactly the setting the crash left off; the shell still receives your keys, it just does not show them. zsh switches echo and line mode back on before every prompt, so in zsh only the cursor, which no shell setting covers, stays hidden: <code>tput cnorm</code>.</p></details></div>
+</div>
+
+<h2>What you can do now</h2>
+<ul>
+<li>Decode this week's new error messages from their first line, including the ones from deep inside the standard library.</li>
+<li>Use lldb from memory for the eight commands that answer most questions.</li>
+<li>Rescue a terminal in any of the strange states a raw-mode program can leave behind.</li>
+<li>Explain every word of this week's glossary in two sentences, for the retrieval block.</li>
+</ul>
+</main>
+</body>
+</html>

@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>00 · Start here — C++ from Life to Snake</title>
+<link rel="stylesheet" href="../week1/assets/book.css?v=9">
+<link rel="stylesheet" href="../week1/assets/tutor.css?v=9">
+<script src="../week1/assets/theme.js?v=9"></script>
+<script defer src="assets/book.js?v=9"></script>
+<script defer src="assets/tutor.js?v=9"></script>
+</head>
+<body>
+<nav class="sidebar" aria-label="Chapters"></nav>
+<main>
+<p class="chapter-kicker">Chapter 00</p>
+<h1>Start here</h1>
+<p class="lede">By the end of this chapter you will know what Snake has to do, how the week is laid out day by day, what the spec ritual on Friday 20 November decides, how to build the new challenge folder and read its red tests, and the one setting your Mac needs before Tuesday's debugger session. No new C++ yet.</p>
+
+<div class="callout note"><span class="label">In this chapter</span>
+<ul>
+<li>The program you will build, and what changes compared with Life.</li>
+<li>The week, day by day: which chapters feed which milestone.</li>
+<li>The spec ritual: the README is a draft until you have been through it.</li>
+<li>Setup: developer tools for lldb, the build, and 26 tests of which 3 already pass.</li>
+<li>A tour of the challenge folder.</li>
+<li>Terminal first aid, before you ever need it.</li>
+</ul>
+</div>
+
+<h2>What you will build: Snake</h2>
+<p>A snake lives on a walled board. Every <strong>tick</strong>, a fixed slice of time, its head moves one cell forward and the rest of the body follows. You steer it with the arrow keys or <code>w</code> <code>a</code> <code>s</code> <code>d</code>; you cannot stop it. Somewhere on the board is a piece of food. When the head reaches the food, the snake grows by one cell, you score a point, new food appears on a random free cell, and every five points the ticks get shorter, so the snake moves faster. If the head runs into the wall or into the snake's own body, the game is over. Fill the whole board and you win.</p>
+<p>Here is a 12-wide, 5-tall board, exactly as your program will draw it: a <code>#</code> wall around the outside, <code>@</code> for the head, <code>o</code> for the rest of the body, <code>*</code> for the food, and a space for an empty cell.</p>
+<pre class="grid-figure">##############
+#            #
+#   ooo@     #
+#        *   #
+#            #
+#            #
+##############
+score 0   length 4   150 ms per tick</pre>
+<p>The snake is heading right. Its head is in column 6, row 1 (columns and rows count from 0, and row 0 is the top, as in Life). If nothing is pressed, the next tick moves the head to column 7 and the tail leaves column 3. Press the down arrow, and the head goes to column 6, row 2 instead; one tick after that it is next to the food, which is in column 8, row 2.</p>
+<p>That looks like a small change from Life: another grid redrawn in place. It is not, for three reasons, and they are what this week teaches.</p>
+<ul>
+<li><strong>The program has to listen while it runs.</strong> Life never read the keyboard. A terminal normally holds back what you type until you press Enter, and echoes it on the screen. Snake needs every key the moment it is pressed, silently. That means changing the terminal's settings, and then, however the program ends, changing them back. <a href="07-lifetime-and-raii.html">Chapter 7</a> and <a href="08-keys-and-the-loop.html">chapter 8</a>.</li>
+<li><strong>The data has shape.</strong> In Life everything was a number or a vector of numbers, and you passed <code>cells, width, height</code> around as three loose parameters. A snake is a list of positions; a position is two numbers that belong together; a direction is one of exactly four choices; a game is all of that plus a score. C++ lets you make these into types of your own, so the compiler can check that you never pass a width where a height belongs. <a href="01-structs.html">Chapter 1</a> and <a href="02-enum-class-and-switch.html">chapter 2</a>.</li>
+<li><strong>The body moves at both ends.</strong> Every tick a cell is added at the head and one is removed at the tail. A <code>std::vector</code> is cheap at one end only. <a href="04-deque.html">Chapter 4</a> introduces the container made for this.</li>
+</ul>
+<p>And one tool that is not C++ at all: the <strong>debugger</strong>. Until now, when a test failed you read the message and added <code>std::println</code> lines. On Tuesday you learn to stop a running program on any line and look at every variable in it. <a href="03-debugger.html">Chapter 3</a> is that session.</p>
+
+<div class="callout twin"><span class="label">Inference twin</span><p>The Snake loop is a <strong>decode loop</strong>. A language model producing text does one step per token: read the state, compute, emit one token, go again, within a time budget per token. Snake does one step per tick: read the keys, update the game, emit one frame, wait for the next deadline. A tick whose work takes longer than its budget is a dropped frame; in a chat window the same thing is a latency spike. Your program will count them. And there is a second twin hidden in the body: to know whether the head bit the snake, every tick checks it against every cell of the body, so a longer snake costs more per tick, the way a longer context makes every decode step cost more. The benchmark measures that line on Saturday.</p></div>
+
+<h2>The week, day by day</h2>
+<p>The shape of each day is the one you know from the methodology: a Read block of 60 to 90 minutes, a Code block of 120 to 150 minutes, a 30-minute Review (60 on Friday), and 15 to 20 minutes of retrieval and log. Saturday is strand day; Sunday is off.</p>
+<table>
+<thead><tr><th>Day</th><th>Read block</th><th>Code block</th><th>Milestone</th></tr></thead>
+<tbody>
+<tr><td>Mon 23 Nov</td><td>this chapter, <a href="01-structs.html">01 Structs</a>, <a href="02-enum-class-and-switch.html">02 enum class and switch</a></td><td><code>next_head</code>, <code>tick_ms</code></td><td>M1</td></tr>
+<tr><td>Tue 24 Nov</td><td><a href="03-debugger.html">03 The debugger</a> (75 minutes, guided)</td><td><code>render</code></td><td>M2</td></tr>
+<tr><td>Wed 25 Nov</td><td><a href="04-deque.html">04 std::deque</a>, <a href="05-optional.html">05 std::optional</a></td><td><code>on_body</code>, <code>steer</code>, <code>parse_key</code></td><td>M3</td></tr>
+<tr><td>Thu 26 Nov</td><td><a href="06-value-or-reference.html">06 By value or by reference</a>, <a href="07-lifetime-and-raii.html">07 Scope, lifetime and RAII</a></td><td><code>place_food</code>, <code>new_game</code>, <code>tick</code></td><td>M4</td></tr>
+<tr><td>Fri 27 Nov</td><td><a href="08-keys-and-the-loop.html">08 Raw keys and the game loop</a></td><td><code>RawTerminal</code>, <code>read_keys</code>, <code>main</code>; whole-challenge review</td><td>M5, M6</td></tr>
+<tr><td>Sat 28 Nov</td><td colspan="2">Strands: maths (10,000 food draws against the count you expect), measurement (the benchmark and its Experiment; your <code>switch</code> in Compiler Explorer), the write-up</td><td>M7</td></tr>
+</tbody>
+</table>
+<p>Two days are heavier than the others. Thursday's <code>tick</code> is the heart of the game, and every rule of the spec lands in it. Friday joins the keyboard, the game and the clock into one program. If Wednesday evening's check (methodology, "When a week slips") shows you are behind by more than a milestone, decide then, not on Friday night: the README lists what can move to stretch.</p>
+<p><a href="09-build-snake.html">Chapter 9</a> is the challenge itself: each milestone's goal, the tests it turns green, a hint ladder and a definition of done. Read its milestone section at the start of each Code block, not all at once.</p>
+
+<h2>The spec ritual: Friday 20 November</h2>
+<p>Last time the README was frozen before you saw it. This time it is a <strong>draft</strong>, and the week does not start until you have frozen it yourself, in the 20-minute <strong>spec ritual</strong> from <code>docs/methodology.md</code>, on Friday 20 November (the Friday of week 2, after Life's review).</p>
+<p>The draft is complete: the spec, the header contract, the stubs, all 26 tests and the benchmark exist and build. What it is waiting for is your decisions. The README's last section, "Decisions for the spec ritual", lists thirteen choices with a draft answer for each: whether the walls kill or the board wraps like Life's, what an empty cell looks like, how fast the snake gets, how Ctrl-C is handled, which keys count, and so on. Go through them in order, change what you disagree with, and write "frozen 20 Nov 2026" at the top. Claude then rewrites any test whose rule you changed before Monday. After that the spec is fixed, and scope can only shrink, in writing.</p>
+<div class="callout principle"><span class="label">First principle</span><p>A spec you decided is a spec you understand. Each of the thirteen lines is a real design choice with a cost on each side, and every one of them shows up later as a test, a line of <code>tick</code>, or a sentence in your review. Twenty minutes of deciding on Friday saves an hour of "what was this supposed to do?" on Thursday.</p></div>
+
+<h2>Setup</h2>
+<h3>Let the debugger in (once, before Tuesday)</h3>
+<p>A debugger is a program that controls another program: it stops it, reads its memory, steps it one line at a time. macOS guards that power. On this Mac, as it was found on 7 November, <strong>Developer Mode</strong> is off, so the first time lldb starts a program a dialog asks for your password, and in some situations lldb simply waits until you answer. Switch it on once, in Terminal:</p>
+<pre class="shell"><code>$ sudo DevToolsSecurity -enable
+Password:
+Developer mode is now enabled.
+$ DevToolsSecurity -status
+Developer mode is currently enabled.
+</code></pre>
+<p><code>sudo</code> runs one command as the administrator, which is why it asks for your login password (nothing appears as you type it; that is deliberate). If you prefer not to change the setting, approve the dialog the first time it appears on Tuesday instead; it is remembered for a while.</p>
+<p>The same permission matters to AddressSanitizer. When it finds a bug, it turns the raw addresses of its report into file names and line numbers by asking a helper, <code>atos</code>, to look inside your still-running program, and <code>atos</code> needs exactly the permission lldb needs. Without it, a report on this Mac printed its first lines and then hung, waiting for that dialog. Enabling Developer Mode fixes both. If you would rather not, there is a second fix for the sanitizers alone: point them at the symbolizer that came with Homebrew's LLVM, which reads the program file instead of the running program and needs no permission. Add this line to <code>~/.zshrc</code> and open a new terminal window:</p>
+<pre class="shell"><code>export ASAN_SYMBOLIZER_PATH=/opt/homebrew/opt/llvm/bin/llvm-symbolizer
+</code></pre>
+<p>lldb itself still needs Developer Mode or the dialog.</p>
+
+<h3>Build the Snake folder and read the red</h3>
+<p>The challenge folder is <code>phase1-terminal/02-snake</code>. Its <code>CMakeLists.txt</code> is Life's, with one new idea: the game is made from three source files, while the tests and the benchmark need only one. Configure, build, and run the tests exactly as you did for Life:</p>
+<pre class="shell"><code>$ cd phase1-terminal/02-snake
+$ cmake -S . -B build -G Ninja
+$ cmake --build build
+$ ./build/snake_tests
+...
+===============================================================================
+[doctest] test cases:  26 |  3 passed |  23 failed | 0 skipped
+[doctest] assertions: 224 | 93 passed | 131 failed |
+[doctest] Status: FAILURE!
+</code></pre>
+<p>Twenty-six test cases, one small claim each, in milestone order. List them with <code>./build/snake_tests -ltc</code>; the names are written so you can filter on any one of them with <code>-tc="..."</code>, as in <a href="../week1/12-testing.html">Week 1 chapter 12</a>. Here are the first few failures, which are milestone 1's:</p>
+<pre class="shell"><code>TEST CASE:  next_head: one step in each direction (y grows downwards)
+
+tests/snake_test.cpp:132: ERROR: CHECK( next_head({5, 5}, Direction::Up) == Point{5, 4} ) is NOT correct!
+  values: CHECK( {5, 5} == {5, 4} )
+</code></pre>
+<p>Read the <code>values:</code> line. The test asked where the head goes when it moves up from column 5, row 5, and expected column 5, row 4 (up makes the row number smaller). The stub answered column 5, row 5: it does not move the head at all. Notice that doctest prints a <code>Point</code> as <code>{5, 4}</code>. That is not automatic; a few lines at the top of the test file teach it how, and you may read them, but you do not need to understand them yet.</p>
+
+<h3>Three tests that pass by accident</h3>
+<p>Twenty-three cases fail, which is right. Three pass, which is the lesson Week 1's setup taught you with <code>step: does not modify current</code>, three times over. Find them before you read on: run each case on its own with <code>-tc</code>, or read the output for the cases that are missing from it.</p>
+<details class="answer"><summary>Show which three, and why</summary>
+<p><code>steer: a request to reverse is ignored</code>: every check in it expects <code>steer</code> to keep the old heading, and the stub always returns the old heading. <code>parse_key: no key or a key the game does not use</code>: every check expects "nothing", and the stub always returns nothing. <code>tick: nothing changes once the game is over</code>: the stub <code>tick</code> changes nothing, ever. Each of the three describes something a correct program must <em>not</em> do, and a program that does nothing at all never does it. Keep them in mind: when you start changing <code>steer</code>, <code>parse_key</code> and <code>tick</code>, these are the tests that can turn red, and that is the moment they start to mean something.</p>
+</details>
+<p>The program itself builds too. It prints one line and exits, like Life's stub did:</p>
+<pre class="shell"><code>$ ./build/snake
+snake: not implemented yet (0 arguments given)
+</code></pre>
+
+<h2>A tour of the challenge folder</h2>
+<table>
+<thead><tr><th>File</th><th>What it is</th><th>Yours?</th></tr></thead>
+<tbody>
+<tr><td><code>README.md</code></td><td>The spec: what the program does, the contract, the milestones, the acceptance checklist, the ritual's decisions</td><td>you freeze it</td></tr>
+<tr><td><code>src/snake.hpp</code></td><td>The game's contract: three <code>enum class</code> types, the <code>Point</code> and <code>Game</code> structs, the <code>Body</code> alias, nine function declarations with a comment each</td><td>given; signatures fixed</td></tr>
+<tr><td><code>src/snake.cpp</code></td><td>Nine stubs, marked <code>TODO(you)</code> with their milestone</td><td>you write it</td></tr>
+<tr><td><code>src/terminal.hpp</code></td><td>The keyboard's contract: the <code>RawTerminal</code> guard and <code>read_keys</code></td><td>given</td></tr>
+<tr><td><code>src/terminal.cpp</code></td><td>Their stubs</td><td>you write it</td></tr>
+<tr><td><code>src/main.cpp</code></td><td>A stub with the plan of the program in a comment</td><td>you write it</td></tr>
+<tr><td><code>tests/snake_test.cpp</code></td><td>26 doctest cases</td><td>given</td></tr>
+<tr><td><code>bench/bench_snake.cpp</code></td><td>Times <code>tick</code> against the snake's length and <code>render</code> against the board's size; with <code>draws</code>, counts 10,000 food positions for Saturday's maths</td><td>given; calls your functions</td></tr>
+<tr><td><code>BENCH.md</code></td><td>The tables and the Experiment you fill in on Saturday</td><td>you fill it in</td></tr>
+</tbody>
+</table>
+<p>Open <code>src/snake.hpp</code> now and read it top to bottom, even though half its syntax is new. Every word in it is explained by Wednesday. Notice its shape: the types first, then the functions in milestone order, each with a comment that says what it must do and gives examples. The comments are the spec in miniature; when a test fails, the comment above the function is the first place to look (methodology, "Hand-code first, then review").</p>
+<p>Notice also what is <em>not</em> there. There is no <code>main</code> in the header, and nothing in <code>snake.hpp</code> touches the terminal or the clock. Every function in it takes a value and returns a value, or changes a <code>Game</code> it was handed. That is why 26 tests can check the whole game without a keyboard: the part of the program that can be tested is kept apart from the part that cannot, the lesson of <a href="../week1/10-headers-and-files.html">Week 1 chapter 10</a> applied on purpose.</p>
+
+<h2>Terminal first aid</h2>
+<p>This week, for the first time, your program changes how the terminal behaves. While Snake runs, the terminal does not echo what you type, hands over each key the moment it is pressed, and hides the cursor. If your program stops without putting that back (a crash, a sanitizer report, a bug in the guard you are writing), something is left behind.</p>
+<p>What you see depends on the shell. <strong>zsh</strong>, the shell Terminal runs on your Mac, protects itself: before it prints its next prompt, it switches echo and line mode back on, so you can type normally again. Nothing switches the cursor back on, though: the prompt returns without one. In <strong>bash</strong>, the usual shell on Linux, nothing is repaired: you type and nothing appears, or each key acts at once.</p>
+<p>Nothing is broken either way. <code>tput cnorm</code> brings the cursor back. <code>reset</code> puts every setting back to normal and clears the screen; if nothing echoes, type it blind and press Enter. If the window is truly stuck, close it and open a new one; settings belong to a window, not to your Mac. <a href="07-lifetime-and-raii.html">Chapter 7</a> explains what happened, and the guard you write on Friday is what makes it never happen again.</p>
+<div class="callout try"><span class="label">Try it</span><p>Practise now, while nothing is at stake. Type <code>stty -echo; cat</code> and press Enter. Type <code>hi</code> and press Enter: you did not see the letters as you typed them, but <code>cat</code> repeats the line once Enter arrives. That is echo off with line mode still on, the first part of what Snake's guard will do. Press Ctrl-D to end <code>cat</code>, then type anything at the prompt: your letters show again, because zsh switched echo back on before printing the prompt. That repair is why, this week, you check what a program left behind with a second program on the same command line, as <code>cat</code> was here.</p></div>
+
+<h2>What is new this week, and what is not</h2>
+<p>New C++, in the order you meet it: <code>struct</code>, <code>enum class</code> and <code>switch</code>, <code>std::deque</code>, <code>std::optional</code>, deliberate choices between values and references, scope and lifetime, constructors and destructors used as guards, and a few calls that talk to the terminal directly. New tools: lldb. New maths for Saturday: what to expect when you draw 10,000 random cells, and how far from it you should be surprised.</p>
+<p>Not new: the method. One milestone at a time, red to green, a commit per milestone, a review after each, the log at the end of each day (this week's is <code>docs/log/2026-W48.md</code>), five rows of <code>CONCEPTS.md</code> out loud. The book still never shows you the challenge's code; the tutor in these pages still will not write it. Press <kbd>A</kbd> to open the tutor; on this book's pages it knows the Snake contract and answers with a hint rung when you ask for a function.</p>
+<p>One habit is new: this week's log must name one blocker that the debugger solved, and the lldb command that solved it (goal.md, week 3). You will know how by Tuesday afternoon.</p>
+
+<h2>Check yourself</h2>
+<div class="quiz">
+<div class="q"><p>The snake's head is at column 3, row 4, moving up. Where is it after one tick, if no key is pressed?</p><details class="answer"><summary>Answer</summary><p>Column 3, row 3. Rows count downwards from the top, so moving up makes the row number one smaller, and with no key pressed the heading stays up.</p></details></div>
+<div class="q"><p>Why can 26 tests check the whole game without anyone pressing a key?</p><details class="answer"><summary>Answer</summary><p>Because the game's rules live in <code>snake.hpp</code> as functions that take values and return values (or change a <code>Game</code> they are handed), with nothing in them that reads the keyboard or the clock. The keyboard and the clock are in <code>terminal.cpp</code> and <code>main.cpp</code>, which the test program does not even link.</p></details></div>
+<div class="q"><p>A test passes before you have written anything. What does that tell you about the function, and about the test?</p><details class="answer"><summary>Answer</summary><p>Nothing good about the function: it is a stub. About the test: it checks something a correct function must not do (reverse, react to an unknown key, change a finished game), and a function that does nothing never does it. Such a test only starts protecting you once the function does something.</p></details></div>
+<div class="q"><p>When is the Snake spec frozen, and what may change after that?</p><details class="answer"><summary>Answer</summary><p>At the end of your 20-minute spec ritual on Friday 20 November 2026. After that the spec only shrinks: a requirement can move to stretch, in writing, with the date, in the README and the log. It is never quietly redefined.</p></details></div>
+<div class="q"><p>Your program crashed in the middle of a game. The prompt is back and you can type, but there is no cursor. Why can you type, why is the cursor missing, and what do you type?</p><details class="answer"><summary>Answer</summary><p>zsh switched echo and line mode back on before it printed the prompt. The cursor is a different kind of thing: hiding it was a message sent to the terminal window, not a setting the shell keeps, so nothing sends the message that shows it again. <code>tput cnorm</code> (or <code>reset</code>) does. In bash, echo would still be off as well, and you would type <code>reset</code> blind.</p></details></div>
+<div class="q"><p>What do you need to do before Tuesday's lldb session, and why?</p><details class="answer"><summary>Answer</summary><p>Run <code>sudo DevToolsSecurity -enable</code> once, or be ready to approve a password dialog the first time lldb starts a program. macOS only lets a debugger control other programs when you have allowed it, and Developer Mode is off on this Mac.</p></details></div>
+</div>
+
+<h2>What you can do now</h2>
+<ul>
+<li>Say in a few sentences what Snake does, and what makes it harder than Life.</li>
+<li>Find the chapters that feed each day's milestone, and plan the week around the two heavy days.</li>
+<li>Prepare for the spec ritual: read the README's thirteen decisions and have an opinion on each.</li>
+<li>Build the Snake folder, read its 23 red tests, and explain the 3 that pass by accident.</li>
+<li>Rescue a terminal a crashed program left behind: <code>tput cnorm</code> for the cursor, <code>reset</code> for everything.</li>
+</ul>
+</main>
+</body>
+</html>

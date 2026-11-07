@@ -1,0 +1,681 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>01 · Structs: your own types — C++ from Life to Snake</title>
+<link rel="stylesheet" href="../week1/assets/book.css?v=9">
+<link rel="stylesheet" href="../week1/assets/tutor.css?v=9">
+<script src="../week1/assets/theme.js?v=9"></script>
+<script defer src="assets/book.js?v=9"></script>
+<script defer src="assets/tutor.js?v=9"></script>
+</head>
+<body>
+<nav class="sidebar" aria-label="Chapters"></nav>
+<main>
+<p class="chapter-kicker">Chapter 01</p>
+<h1>Structs: your own types</h1>
+<p class="lede">At the end of this chapter you will be able to invent a type of your own: a calendar date, a colour, a weather reading. You will bundle values that belong together under one name, build one in a single line, pass it to functions and get it back, keep many of them in a <code>std::vector</code>, and say exactly how many bytes it takes and where each part sits. Every value in Snake is one of these.</p>
+
+<div class="callout note"><span class="label">In this chapter</span>
+<ul>
+<li>The problem: values that always travel together, passed as loose numbers that can be swapped silently.</li>
+<li><code>struct</code>, members, default member values, and the <code>.</code> that reaches a member.</li>
+<li>Building a value with braces, and with designated initialisers that name each member.</li>
+<li>What a struct is in memory: <code>sizeof</code>, members side by side in order, and padding.</li>
+<li>Structs as parameters and return values; printing one; comparing two with a defaulted <code>==</code>.</li>
+<li>A struct inside a struct, and many structs in a <code>std::vector</code>.</li>
+<li>The two structs Snake gives you, <code>Point</code> and <code>Game</code>, and the struct at the heart of every tensor.</li>
+</ul>
+</div>
+
+<h2>The problem: numbers that travel together</h2>
+<p>Look again at one line of the Life contract in <code>phase1-terminal/01-life/src/life.hpp</code>:</p>
+<pre class="code" data-lang="cpp" data-file="life_signature.cpp" data-check="fragment"><code>int count_neighbours(const Cells&amp; cells, int width, int height, int x, int y);
+</code></pre>
+<p>Five parameters. Three of them, <code>cells</code>, <code>width</code> and <code>height</code>, are one thing, the grid, and every function in <code>life.hpp</code> takes them together. Four of the five are <code>int</code>s, so the compiler cannot tell <code>width</code> from <code>height</code> or <code>x</code> from <code>y</code>. Swap two in a call and the program compiles, runs and computes the wrong thing: <a href="../week1/07-flat-grid.html">chapter 7 of the Week 1 book</a> called it "the bug that only a non-square grid catches".</p>
+<p>A calendar date has the same problem in a smaller space. Here is a function that takes a date as three loose numbers:</p>
+
+<pre class="code" data-lang="cpp" data-file="loose_date.cpp" data-check="run"><code>#include &lt;print&gt;
+
+// A date passed as three loose whole numbers.
+void print_date(int year, int month, int day) {
+    std::println("year {}, month {}, day {}", year, month, day);
+}
+
+int main() {
+    const int year = 2026;
+    const int month = 11;
+    const int day = 23;
+    print_date(year, month, day);   // the order the function expects
+    print_date(day, month, year);   // the wrong order: no error, no warning
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="loose_date.cpp"><code>year 2026, month 11, day 23
+year 23, month 11, day 2026
+</code></pre>
+
+<p>The second call is nonsense, year 23, month 11, day 2026, and nothing complained. The compiler checked what it could: three <code>int</code> arguments for three <code>int</code> parameters. The meaning, "this <code>int</code> is a year", lives only in the parameter names and in your head. Names are for people; the compiler matches types. What you want is one value of a new type, <code>Date</code>, holding the three numbers under their names, so that <code>print_date</code> takes one <code>Date</code> and there is no order left to get wrong.</p>
+
+<div class="callout principle"><span class="label">First principle</span><p>A type is a promise the compiler can check. An <code>int</code> promises "a whole number" and nothing more. When three numbers mean one thing, make a type that says so, and the compiler starts checking your meaning instead of only your arithmetic.</p></div>
+
+<h2>Your first struct</h2>
+<p>A <strong>struct</strong> is a type you define by listing the values it is made of. Each value has a type and a name and is called a <strong>member</strong>. Here is <code>Date</code> in a complete program:</p>
+
+<pre class="code" data-lang="cpp" data-file="first_struct.cpp" data-check="run"><code>#include &lt;print&gt;
+
+struct Date {
+    int year = 2026;
+    int month = 1;
+    int day = 1;
+};
+
+int main() {
+    Date start;   // a new Date: every member starts at its default value
+    std::println("year {}, month {}, day {}", start.year, start.month, start.day);
+
+    start.month = 11;   // change two members; year keeps its value
+    start.day = 23;
+    std::println("year {}, month {}, day {}", start.year, start.month, start.day);
+
+    Date other;   // a second Date, with its own three members
+    std::println("other is still month {}", other.month);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="first_struct.cpp"><code>year 2026, month 1, day 1
+year 2026, month 11, day 23
+other is still month 1
+</code></pre>
+
+<p><code>struct Date {</code> says "here is a new type called <code>Date</code>". Inside the braces, each member is declared exactly like a variable (<a href="../week1/02-values-and-types.html">Week 1, chapter 2</a>): a type, a name, a starting value. <code>};</code> closes the definition, and the semicolon is required. The definition creates no variable and takes no memory; it describes a shape. From now on <code>Date</code> is a type, used like <code>int</code> or <code>std::string</code>; this course gives the types you define a capital letter (<code>Date</code>, <code>Cells</code>, <code>Point</code>).</p>
+<p>The <code>= 2026</code>, <code>= 1</code> and <code>= 1</code> are <strong>default member values</strong> (the standard calls them "default member initialisers"). Every <code>Date</code> starts with them unless you say otherwise, so <code>Date start;</code> holds 2026, 1 and 1. The dot is <strong>member access</strong>: <code>start.month</code> is "the <code>month</code> inside <code>start</code>", and it can be read and assigned like any variable, because it is one. <code>other</code> has its own three members: two <code>Date</code>s share the definition, never the values.</p>
+
+<div class="callout analogy"><span class="label">Analogy</span><p>A struct is a paper form: "Year: ____ Month: ____ Day: ____". The definition is the blank form, each variable is one filled-in copy, and a member is one labelled box. <em>Where it breaks:</em> the labels are not printed on the copies. In memory a <code>Date</code> is only its three numbers in a fixed order; the names exist while the compiler reads your code and are gone from the program it produces.</p></div>
+
+<h3>Always give members a default value</h3>
+<p>The default values are not decoration. Here is the same struct without them:</p>
+
+<pre class="code" data-lang="cpp" data-file="bare.cpp" data-check="compile"><code>#include &lt;print&gt;
+
+struct Bare {
+    int year;    // no default value
+    int month;
+    int day;
+};
+
+int main() {
+    Bare b;      // nothing was put in the three boxes
+    std::println("year {}, month {}, day {}", b.year, b.month, b.day);
+    return 0;
+}
+</code></pre>
+<pre class="shell"><code>$ clang++ -std=c++23 -Wall -Wextra bare.cpp -o bare &amp;&amp; ./bare
+year -210075392, month 1, day -210075560
+$ tools/run.sh bare.cpp
+year 8, month 0, day 48
+</code></pre>
+
+<p>Two builds on this Mac, two sets of nonsense, and no warning: <code>-Wall -Wextra</code> does not catch an uninitialised member, and the sanitizers do not either, because reading a byte nobody wrote is not an out-of-bounds access. It is the uninitialised <code>int</code> of Week 1's chapter 2 again: a box holding whatever bytes were last left there. Your numbers will differ, and may even look plausible, which is worse.</p>
+
+<div class="callout trap"><span class="label">Trap</span><p>Give every member a default value: <code>int year = 0;</code>, never <code>int year;</code>. Then a struct variable can never hold garbage, however it was made. The structs in <code>phase1-terminal/02-snake/src/snake.hpp</code> follow this rule.</p></div>
+
+<div class="callout trap"><span class="label">Trap</span><p>The semicolon after a struct's closing brace is the most-forgotten character of this week. Leave it out and the error appears on the line <em>after</em> the struct:</p>
+<pre class="code" data-lang="cpp" data-file="missing_semicolon.cpp" data-check="error"><code>#include &lt;print&gt;
+
+struct Date {
+    int year = 2026;
+    int month = 1;
+    int day = 1;
+}
+
+int main() {
+    Date d;
+    std::println("{}", d.year);
+    return 0;
+}
+</code></pre>
+<pre class="output"><code>missing_semicolon.cpp:7:2: error: expected ';' after struct
+    7 | }
+      |  ^
+      |  ;
+1 error generated.
+</code></pre>
+<p>The compiler needs the <code>;</code> because <code>struct Date { ... } today;</code> is legal (it defines the type and a variable in one go), so after <code>}</code> it is still waiting to see how the statement ends. Here clang says exactly what it wants; when another error points at the first line after a struct and makes no sense, look one line up. Functions need no <code>;</code> after their <code>}</code>; structs do.</p></div>
+
+<h2>Building a value: braces and names</h2>
+<p>Creating a <code>Date</code> and then assigning its members one by one is slow and easy to leave half done. You can give the values when the variable is made, in braces: <strong>brace initialisation</strong>. For a struct it comes in two styles:</p>
+
+<pre class="code" data-lang="cpp" data-file="brace_init.cpp" data-check="run"><code>#include &lt;print&gt;
+
+struct Date {
+    int year = 2026;
+    int month = 1;
+    int day = 1;
+};
+
+int main() {
+    Date a{2026, 11, 23};                            // in the order the members are declared
+    Date b{2027};                                    // year only; month and day keep their defaults
+    Date c{};                                        // nothing given: all three defaults
+    Date d{.year = 2026, .month = 12, .day = 25};    // each value names its member
+    Date e{.month = 3};                              // named, and the others keep their defaults
+
+    std::println("a: {}-{}-{}", a.year, a.month, a.day);
+    std::println("b: {}-{}-{}", b.year, b.month, b.day);
+    std::println("c: {}-{}-{}", c.year, c.month, c.day);
+    std::println("d: {}-{}-{}", d.year, d.month, d.day);
+    std::println("e: {}-{}-{}", e.year, e.month, e.day);
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="brace_init.cpp"><code>a: 2026-11-23
+b: 2027-1-1
+c: 2026-1-1
+d: 2026-12-25
+e: 2026-3-1
+</code></pre>
+
+<p>In the first style the values go to the members by position, in the order the members are declared. Give fewer values than members and the rest keep their defaults: <code>b</code> is the first of January 2027, and <code>c</code>, with empty braces, is all defaults.</p>
+<p>The second style is the <strong>designated initialiser</strong>: each value carries the name of its member, <code>.month = 12</code>. Members you leave out keep their defaults, as <code>e</code> shows. It is longer and impossible to misread, and it solves this chapter's first problem: <code>Date{.year = 2026, .month = 11, .day = 23}</code> cannot be built in the wrong order by accident. Positional braces can: <code>Date{23, 11, 2026}</code> compiles as happily as the loose call did. Use short positional braces when the order is obvious, names everywhere else.</p>
+<p>Braces refuse two mistakes that assignment would let through: too many values, and a value that would lose information on the way in, such as a <code>double</code> going into an <code>int</code> member. Losing information like that is called <strong>narrowing</strong>.</p>
+
+<pre class="code" data-lang="cpp" data-file="too_many.cpp" data-check="error"><code>#include &lt;print&gt;
+
+struct Date {
+    int year = 2026;
+    int month = 1;
+    int day = 1;
+};
+
+int main() {
+    Date a{2026, 11, 23, 9};     // four values for three members
+    Date b{2026, 11, 23.5};      // a double where an int lives
+    std::println("{} {}", a.day, b.day);
+    return 0;
+}
+</code></pre>
+<pre class="output"><code>too_many.cpp:10:26: error: excess elements in struct initializer
+   10 |     Date a{2026, 11, 23, 9};     // four values for three members
+      |                          ^
+too_many.cpp:11:22: error: type 'double' cannot be narrowed to 'int' in initializer list [-Wc++11-narrowing]
+   11 |     Date b{2026, 11, 23.5};      // a double where an int lives
+      |                      ^~~~
+too_many.cpp:11:22: note: insert an explicit cast to silence this issue
+   11 |     Date b{2026, 11, 23.5};      // a double where an int lives
+      |                      ^~~~
+      |                      static_cast&lt;int&gt;( )
+too_many.cpp:11:22: warning: implicit conversion from 'double' to 'int' changes value from 23.5 to 23 [-Wliteral-conversion]
+   11 |     Date b{2026, 11, 23.5};      // a double where an int lives
+      |           ~          ^~~~
+1 warning and 2 errors generated.
+</code></pre>
+
+<p>"Excess elements" is the first; "cannot be narrowed" is the second: 23.5 would have become 23 without a word, so braces stop it, and clang even shows the <code>static_cast</code> you would write if you meant it. Designated initialisers add one rule: the names must come in the order the members are declared. Out of order is a warning in clang, and the warning is right, because the values are not filled in the order your code suggests:</p>
+
+<pre class="code" data-lang="cpp" data-file="designated_order.cpp" data-check="fragment"><code>#include &lt;print&gt;
+
+struct Date {
+    int year = 2026;
+    int month = 1;
+    int day = 1;
+};
+
+int main() {
+    Date d{.day = 23, .month = 11};   // named, but in the wrong order
+    std::println("{}-{}-{}", d.year, d.month, d.day);
+    return 0;
+}
+</code></pre>
+<pre class="output"><code>designated_order.cpp:10:32: warning: ISO C++ requires field designators to be specified in declaration order; field 'day' will be initialized after field 'month' [-Wreorder-init-list]
+   10 |     Date d{.day = 23, .month = 11};   // named, but in the wrong order
+      |                       ~~~~~~~~~^~
+designated_order.cpp:10:19: note: previous initialization for field 'day' is here
+   10 |     Date d{.day = 23, .month = 11};   // named, but in the wrong order
+      |                   ^~
+1 warning generated.
+</code></pre>
+
+<div class="callout try"><span class="label">Try it</span><p>Make <code>Date odd{2026, 13, 45};</code> and print it. It compiles: a struct makes sure each number lands in the right box, not that it makes sense there. A type that refuses a 13th month needs rules that run whenever the value changes, which is what a <strong>class</strong> adds in week 4. Then add a fourth member, <code>int hour = 0;</code>, at the end of <code>Date</code>, and check that every line of <code>brace_init.cpp</code> still compiles.</p></div>
+
+<h2>What a struct is in memory</h2>
+<p>A struct is not a new kind of storage. It is its members, laid down one after another in the order you declared them. Ask the compiler with <code>sizeof</code>, and with one more tool: <code>offsetof(Type, member)</code>, from <code>&lt;cstddef&gt;</code>, which answers "how many bytes from the start of a <code>Type</code> does this member begin?" It is a question for learning, not something everyday code needs.</p>
+
+<pre class="code" data-lang="cpp" data-file="date_bytes.cpp" data-check="run"><code>#include &lt;cstddef&gt;
+#include &lt;print&gt;
+
+struct Date {
+    int year = 2026;
+    int month = 1;
+    int day = 1;
+};
+
+int main() {
+    std::println("sizeof(int)  = {}", sizeof(int));
+    std::println("sizeof(Date) = {}", sizeof(Date));
+    std::println("year  starts at byte {}", offsetof(Date, year));
+    std::println("month starts at byte {}", offsetof(Date, month));
+    std::println("day   starts at byte {}", offsetof(Date, day));
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="date_bytes.cpp"><code>sizeof(int)  = 4
+sizeof(Date) = 12
+year  starts at byte 0
+month starts at byte 4
+day   starts at byte 8
+</code></pre>
+
+<pre class="grid-figure">  a Date in memory: 12 bytes
+
+  byte   0   1   2   3   4   5   6   7   8   9  10  11
+       +---------------+---------------+---------------+
+       |     year      |     month     |      day      |
+       |     2026      |      11       |      23       |
+       +---------------+---------------+---------------+
+</pre>
+
+<p>Twelve bytes, three 4-byte <code>int</code>s side by side. No hidden header, no names, no bookkeeping. When you write <code>d.month</code>, the compiler turns it into "the four bytes that start 4 bytes into <code>d</code>". A member name is an agreement about an offset, as <code>y * width + x</code> was an agreement about an index in Week 1's chapter 7. That is why a struct costs nothing at run time: reaching a member is the same work as reaching a plain variable.</p>
+
+<h3>Padding: the gaps the compiler adds</h3>
+<p>Members are side by side, but not always touching. Here is a playing card with a one-byte suit letter and a four-byte rank:</p>
+
+<pre class="code" data-lang="cpp" data-file="card_padding.cpp" data-check="run"><code>#include &lt;cstddef&gt;
+#include &lt;print&gt;
+
+struct Card {
+    char suit = 'S';   // 'S', 'H', 'D' or 'C': 1 byte
+    int rank = 1;      // 1 (ace) to 13 (king): 4 bytes
+};
+
+int main() {
+    std::println("sizeof(char) + sizeof(int) = {}", sizeof(char) + sizeof(int));
+    std::println("sizeof(Card)               = {}", sizeof(Card));
+    std::println("suit starts at byte {}", offsetof(Card, suit));
+    std::println("rank starts at byte {}", offsetof(Card, rank));
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="card_padding.cpp"><code>sizeof(char) + sizeof(int) = 5
+sizeof(Card)               = 8
+suit starts at byte 0
+rank starts at byte 4
+</code></pre>
+
+<p>Five bytes of members, eight bytes of struct. <code>rank</code> starts at byte 4, not byte 1, and the three bytes in between are <strong>padding</strong>: bytes the compiler inserts and never uses. The reason is <strong>alignment</strong>. The processor reads a 4-byte <code>int</code> fastest (some processors, only) at an address that is a multiple of 4, so the compiler puts every <code>int</code> member at an offset that is a multiple of 4, and an 8-byte <code>double</code> at a multiple of 8. It pads the end of a struct too when needed, so that every element of a vector of them starts on the right boundary. That is all you need now. Week 6 measures what padding and member order cost across a hundred thousand values; until then, remember that <code>sizeof</code> a struct is at least the sum of its members, and sometimes more.</p>
+
+<h3>A struct that holds a vector</h3>
+<p>The Life grid would make a natural struct: the cells and their two dimensions under one name. Here is the same idea with Week 1's checkerboard picture:</p>
+
+<pre class="code" data-lang="cpp" data-file="picture_size.cpp" data-check="run"><code>#include &lt;cstdint&gt;
+#include &lt;print&gt;
+#include &lt;vector&gt;
+
+struct Picture {
+    std::vector&lt;std::uint8_t&gt; pixels;   // width * height bytes, row by row
+    int width = 0;
+    int height = 0;
+};
+
+int main() {
+    Picture small{std::vector&lt;std::uint8_t&gt;(12, 0), 4, 3};
+    Picture big{std::vector&lt;std::uint8_t&gt;(1000000, 0), 1000, 1000};
+    std::println("small: {} pixels, sizeof = {}", small.pixels.size(), sizeof(small));
+    std::println("big:   {} pixels, sizeof = {}", big.pixels.size(), sizeof(big));
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="picture_size.cpp"><code>small: 12 pixels, sizeof = 32
+big:   1000000 pixels, sizeof = 32
+</code></pre>
+
+<p>Twelve pixels or a million, the <code>Picture</code> is 32 bytes. Week 1's <code>swap_cheap.cpp</code> told you why: a <code>std::vector</code> variable is a 24-byte handle that says where its elements are, and the elements live in a separate block. The struct holds the handle and two <code>int</code>s; the pixels are elsewhere. A container member brings its handle, not its contents.</p>
+
+<h2>Structs in and out of functions</h2>
+<p>A struct type can be a parameter type and a return type like any other. Here is the date problem, solved:</p>
+
+<pre class="code" data-lang="cpp" data-file="struct_param.cpp" data-check="run"><code>#include &lt;print&gt;
+
+struct Date {
+    int year = 2026;
+    int month = 1;
+    int day = 1;
+};
+
+// One parameter instead of three: there is no order left to get wrong.
+void print_date(Date d) {
+    std::println("year {}, month {}, day {}", d.year, d.month, d.day);
+}
+
+// The parameter is a copy. Changing it changes nothing outside.
+void try_to_reset(Date d) {
+    d.day = 1;
+    std::println("inside try_to_reset: day {}", d.day);
+}
+
+// A struct can be returned like an int: the whole value comes back.
+Date christmas(int year) {
+    return {.year = year, .month = 12, .day = 25};
+}
+
+int main() {
+    Date today{.year = 2026, .month = 11, .day = 23};
+    print_date(today);
+    try_to_reset(today);
+    std::println("after try_to_reset: day {}", today.day);
+
+    Date next = christmas(today.year);
+    print_date(next);
+    print_date(christmas(2027));
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="struct_param.cpp"><code>year 2026, month 11, day 23
+inside try_to_reset: day 1
+after try_to_reset: day 23
+year 2026, month 12, day 25
+year 2027, month 12, day 25
+</code></pre>
+
+<p>Three things to see. <code>print_date(today)</code> takes one argument, and the year cannot go where the day should, because the members travel inside the value. A struct parameter is passed <strong>by value</strong>, like an <code>int</code> (<a href="../week1/05-references-and-const.html">Week 1, chapter 5</a>): the function gets its own copy of every member, so <code>try_to_reset</code> changes its copy and <code>today.day</code> is still 23. To change the caller's date, take a <code>Date&amp;</code> or, often clearer, return the new date. And <code>christmas</code> returns a whole <code>Date</code>: since the return type is written in the function's first line, <code>return {...};</code> needs no type name before the braces.</p>
+<p>A function that takes structs and builds a new one from them is the everyday shape. Here it mixes two colours:</p>
+
+<pre class="code" data-lang="cpp" data-file="colour_mix.cpp" data-check="run"><code>#include &lt;print&gt;
+
+struct Colour {
+    int red = 0;     // each channel from 0 to 255
+    int green = 0;
+    int blue = 0;
+};
+
+// Halfway between two colours: the average of each channel.
+Colour mix(Colour a, Colour b) {
+    return {(a.red + b.red) / 2, (a.green + b.green) / 2, (a.blue + b.blue) / 2};
+}
+
+void print_colour(Colour c) {
+    std::println("({}, {}, {})", c.red, c.green, c.blue);
+}
+
+int main() {
+    const Colour red{255, 0, 0};
+    const Colour blue{0, 0, 255};
+    const Colour white{255, 255, 255};
+
+    print_colour(mix(red, blue));                 // purple
+    print_colour(mix(red, white));                // pink
+    print_colour(mix(mix(red, white), white));    // paler pink
+    std::println("sizeof(Colour) = {}", sizeof(Colour));
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="colour_mix.cpp"><code>(127, 0, 127)
+(255, 127, 127)
+(255, 191, 191)
+sizeof(Colour) = 12
+</code></pre>
+
+<p><code>mix</code> receives two copies, reads their members and returns a third value built with positional braces; nothing outside it changes. Copying a 12-byte <code>Colour</code> costs about as much as copying three <code>int</code>s, which is nothing. Copying a <code>Picture</code> by value copies its million pixels too. Pass structs that hold containers by <code>const&amp;</code>, as you passed big vectors in week 1, and small structs by value; <a href="06-value-or-reference.html">chapter 6</a> measures the difference and makes the choice deliberate.</p>
+
+<div class="callout try"><span class="label">Try it</span><p>Add <code>Colour darker(Colour c)</code> to <code>colour_mix.cpp</code>, with every channel halved, and predict <code>darker(white)</code> and <code>darker(darker(white))</code> before you print them. Then write <code>void try_to_darken(Colour c)</code> that halves its parameter's channels and returns nothing, call it on <code>white</code>, print <code>white</code>, and explain the output in one sentence.</p></div>
+
+<h2>Printing a struct</h2>
+<p><code>std::println</code> can print numbers, characters, <code>bool</code>s and strings. It has never heard of your <code>Date</code>:</p>
+
+<pre class="code" data-lang="cpp" data-file="print_struct.cpp" data-check="error"><code>#include &lt;print&gt;
+
+struct Date {
+    int year = 2026;
+    int month = 1;
+    int day = 1;
+};
+
+int main() {
+    Date today{2026, 11, 23};
+    std::println("today is {}", today);
+    return 0;
+}
+</code></pre>
+<pre class="output"><code>In file included from print_struct.cpp:1:
+...
+.../c++/v1/__format/format_functions.h:99:30: error: call to implicitly-deleted default constructor of 'formatter&lt;Date, char&gt;'
+...
+print_struct.cpp:11:18: error: call to consteval function 'std::basic_format_string&lt;char, Date &amp;&gt;::basic_format_string&lt;char[12]&gt;' is not a constant expression
+   11 |     std::println("today is {}", today);
+      |                  ^
+...
+.../c++/v1/__format/format_arg_store.h:175:17: error: static assertion failed due to requirement '__arg != __arg_t::__none': the supplied type is not formattable
+...
+8 errors generated.
+</code></pre>
+
+<p>The real message is 182 lines, cut above where you see <code>...</code>; almost all of it comes from inside the library's <code>&lt;format&gt;</code> code. Do what you did with long errors in week 1: find the line that names <em>your</em> file (<code>print_struct.cpp:11:18</code>) and the plainest English nearby, here <code>formatter&lt;Date, char&gt;</code> and "the supplied type is not formattable". Teaching <code>std::println</code> a new type needs templates, week 15. (The top of <code>tests/snake_test.cpp</code> does the same job for doctest, under "how failures print your types"; you only need to read what it prints.) The fix this week is a function that turns the struct into a <code>std::string</code>:</p>
+
+<pre class="code" data-lang="cpp" data-file="to_text.cpp" data-check="run"><code>#include &lt;print&gt;
+#include &lt;string&gt;
+
+struct Date {
+    int year = 2026;
+    int month = 1;
+    int day = 1;
+};
+
+// "2026-11-03": year, then month and day with two digits each.
+std::string to_text(Date d) {
+    std::string text = std::to_string(d.year) + "-";
+    if (d.month &lt; 10) {
+        text += "0";
+    }
+    text += std::to_string(d.month) + "-";
+    if (d.day &lt; 10) {
+        text += "0";
+    }
+    text += std::to_string(d.day);
+    return text;
+}
+
+int main() {
+    const Date bonfire{2026, 11, 5};
+    const Date today{2026, 11, 23};
+    std::println("bonfire night: {}", to_text(bonfire));
+    std::println("today:         {}", to_text(today));
+    std::println("{} is {} characters long", to_text(today), to_text(today).size());
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="to_text.cpp"><code>bonfire night: 2026-11-05
+today:         2026-11-23
+2026-11-23 is 10 characters long
+</code></pre>
+
+<p>Nothing new: <code>std::to_string</code> and <code>+=</code> from <a href="../week1/08-strings-and-args.html">Week 1, chapter 8</a>, and two <code>if</code>s for the leading zeros. You write the format once, and every date in the program prints the same way.</p>
+
+<h2>Comparing two structs</h2>
+<p>You would expect two dates with the same members to be equal. Ask the compiler:</p>
+
+<pre class="code" data-lang="cpp" data-file="compare_error.cpp" data-check="error"><code>#include &lt;print&gt;
+
+struct Date {
+    int year = 2026;
+    int month = 1;
+    int day = 1;
+};
+
+int main() {
+    const Date a{2026, 12, 25};
+    const Date b{2026, 12, 25};
+    if (a == b) {
+        std::println("same day");
+    }
+    return 0;
+}
+</code></pre>
+<pre class="output"><code>compare_error.cpp:12:11: error: invalid operands to binary expression ('const Date' and 'const Date')
+   12 |     if (a == b) {
+      |         ~ ^  ~
+1 error generated.
+</code></pre>
+
+<p>A <strong>binary expression</strong> is an operator with a value on each side, here <code>a == b</code> ("binary" means two, not ones and zeros), and the two values are its <strong>operands</strong>. "Invalid operands" means: for these types there is no <code>==</code>. The compiler does not assume that equal means "every member equal", because for some types it means something else. For a struct of plain values it means exactly that, and one line inside the struct asks the compiler to write the comparison:</p>
+
+<pre class="code" data-lang="cpp" data-file="compare.cpp" data-check="run"><code>#include &lt;print&gt;
+
+struct Date {
+    int year = 2026;
+    int month = 1;
+    int day = 1;
+    bool operator==(const Date&amp;) const = default;   // on trust: the compiler writes ==
+};
+
+int main() {
+    const Date a{2026, 12, 25};
+    const Date b{.year = 2026, .month = 12, .day = 25};
+    const Date c{2026, 12, 26};
+
+    std::println("a == b: {}", a == b);
+    std::println("a == c: {}", a == c);
+    std::println("a != c: {}", a != c);
+    std::println("a is christmas 2026: {}", a == Date{2026, 12, 25});
+    std::println("sizeof(Date) = {}", sizeof(Date));
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="compare.cpp"><code>a == b: true
+a == c: false
+a != c: true
+a is christmas 2026: true
+sizeof(Date) = 12
+</code></pre>
+
+<p>Take the line on trust this week; operators are week 4. Read it as "the operator <code>==</code>, comparing with another <code>const Date&amp;</code>, not changing this one (<code>const</code>), written by the compiler (<code>= default</code>)". The compiler's version compares <code>year</code>, then <code>month</code>, then <code>day</code>, and answers <code>true</code> only if all three match. <code>!=</code> comes with it: the compiler rewrites <code>a != c</code> as "not <code>a == c</code>". <code>sizeof(Date)</code> is still 12, because the line adds code, not data. And <code>Date{2026, 12, 25}</code> in the fourth line is a <code>Date</code> made on the spot with no name: the type name followed by braces builds a value wherever one is needed. Only <code>==</code> and <code>!=</code> come with that line; <code>a &lt; b</code> is still "invalid operands" until week 4.</p>
+
+<h2>A struct inside a struct</h2>
+<p>A member can have any type, including a struct of your own. A weather station sends a reading every day: when it was taken, and how warm it was.</p>
+
+<pre class="code" data-lang="cpp" data-file="nested.cpp" data-check="run"><code>#include &lt;cstddef&gt;
+#include &lt;print&gt;
+
+struct Date {
+    int year = 2026;
+    int month = 1;
+    int day = 1;
+};
+
+// One reading from a weather station: when, and how warm.
+struct Reading {
+    Date date;               // a struct inside a struct
+    double celsius = 0.0;
+};
+
+int main() {
+    Reading r{{2026, 11, 23}, 7.5};
+    std::println("{}-{}-{}: {} degrees", r.date.year, r.date.month, r.date.day, r.celsius);
+
+    r.date.day = 24;         // read the dots left to right: r, its date, that date's day
+    r.celsius = 6.0;
+    std::println("{}-{}-{}: {} degrees", r.date.year, r.date.month, r.date.day, r.celsius);
+
+    const Reading named{.date = {.year = 2026, .month = 11, .day = 25}, .celsius = 4.5};
+    std::println("named: day {}, {} degrees", named.date.day, named.celsius);
+
+    std::println("sizeof(Date)    = {}", sizeof(Date));
+    std::println("sizeof(Reading) = {}", sizeof(Reading));
+    std::println("celsius starts at byte {}", offsetof(Reading, celsius));
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="nested.cpp"><code>2026-11-23: 7.5 degrees
+2026-11-24: 6 degrees
+named: day 25, 4.5 degrees
+sizeof(Date)    = 12
+sizeof(Reading) = 24
+celsius starts at byte 16
+</code></pre>
+
+<p>Dots chain: <code>r.date.day</code> is <code>r</code>, then its member <code>date</code>, then that date's <code>day</code>. Braces nest the same way: in <code>Reading r{{2026, 11, 23}, 7.5}</code> the inner braces build the <code>Date</code>. The last lines show padding again: 12 bytes of <code>Date</code> plus an 8-byte <code>double</code> is 20, but the <code>double</code> must start at a multiple of 8, so it begins at byte 16 and the struct is 24. The inner struct is not stored somewhere else: its 12 bytes are inside the <code>Reading</code>, at the front.</p>
+
+<h2>Many structs: a vector of them</h2>
+<p>A <code>std::vector</code> holds any type, so a week of readings is a <code>std::vector&lt;Reading&gt;</code>:</p>
+
+<pre class="code" data-lang="cpp" data-file="readings_week.cpp" data-check="run"><code>#include &lt;print&gt;
+#include &lt;vector&gt;
+
+struct Date {
+    int year = 2026;
+    int month = 1;
+    int day = 1;
+};
+
+struct Reading {
+    Date date;
+    double celsius = 0.0;
+};
+
+int main() {
+    std::vector&lt;Reading&gt; week = {
+        {{2026, 11, 23}, 7.5},
+        {{2026, 11, 24}, 6.0},
+        {{2026, 11, 25}, 4.5},
+    };
+    week.push_back({{2026, 11, 26}, -1.5});            // a frosty Thursday
+    week.push_back(Reading{{2026, 11, 27}, 3.0});      // the same, with the type written out
+
+    double total = 0.0;
+    Reading coldest = week[0];
+    for (const Reading&amp; r : week) {                    // const&amp;: look at each, copy none
+        total += r.celsius;
+        if (r.celsius &lt; coldest.celsius) {
+            coldest = r;                               // copies every member, Date included
+        }
+    }
+
+    const double average = total / static_cast&lt;double&gt;(week.size());
+    std::println("{} readings, average {:.2f} degrees", week.size(), average);
+    std::println("coldest: day {} at {} degrees", coldest.date.day, coldest.celsius);
+    std::println("the readings take {} bytes, side by side", week.size() * sizeof(Reading));
+    return 0;
+}
+</code></pre>
+<pre class="output" data-for="readings_week.cpp"><code>5 readings, average 3.90 degrees
+coldest: day 26 at -1.5 degrees
+the readings take 120 bytes, side by side
+</code></pre>
+
+<p>Only the element type is new. <code>push_back({{2026, 11, 26}, -1.5})</code> builds a <code>Reading</code> on the spot (the vector knows its element type, so the braces need no name). The loop is a range-for by <code>const&amp;</code>, as in week 1: <code>r</code> is another name for each element in turn, not a copy, and <code>const</code> promises not to change it. Inside, <code>coldest = r;</code> assigns one struct to another, which copies every member, the nested <code>Date</code> included. The last line counts the bytes: 5 readings of 24 bytes, 120 bytes in one block, each <code>Reading</code> right after the one before. That layout is an <strong>array of structs</strong>; week 6 meets its opposite, the struct of arrays, and measures when each wins.</p>
+
+<div class="callout try"><span class="label">Try it</span><p>Extend <code>readings_week.cpp</code>: find the warmest reading too, and count the days below zero. Change the loop to <code>for (Reading r : week)</code>, by value, and check that the output is identical: the program now copies 24 bytes per day for nothing. Then give <code>Date</code> the defaulted <code>==</code> line and print "Thursday was frosty" when a reading's date equals <code>Date{2026, 11, 26}</code>.</p></div>
+
+<h2>The two structs Snake gives you</h2>
+<p>Open <code>phase1-terminal/02-snake/src/snake.hpp</code> and find <code>struct Point</code>. You can now read every line of it: two <code>int</code> members, <code>x</code> and <code>y</code>, defaulting to 0, and the defaulted <code>==</code>, so two points are equal when both coordinates are. It is 8 bytes. The tests build points the way this chapter built dates: <code>Point{5, 4}</code> is a point made on the spot, column 5, row 4, compared with the compiler's <code>==</code>.</p>
+<p>Below it, <code>struct Game</code> holds everything the game remembers from one tick to the next: <code>width</code> and <code>height</code> (the loose-parameters problem, solved), <code>body</code>, <code>heading</code>, <code>food</code> (a <code>Point</code> inside a struct, like the <code>Date</code> inside a <code>Reading</code>), <code>score</code> and <code>state</code>. Two member types are not yours yet: <code>Direction</code> and <code>State</code> are <code>enum class</code> types (<a href="02-enum-class-and-switch.html">chapter 2</a>), and <code>Body</code> is a <code>std::deque</code> of points (<a href="04-deque.html">chapter 4</a>). Every member has a default, so <code>Game g;</code> is a well-defined empty game; the helper <code>game_with</code> near the top of <code>tests/snake_test.cpp</code> builds one member by member, exactly like <code>first_struct.cpp</code>.</p>
+<p>Notice what the header does not contain: member functions, apart from <code>==</code>. These structs are bundles of data, and the game's behaviour lives in free functions that take them as parameters. That is the style of this week.</p>
+
+<div class="callout twin"><span class="label">Inference twin</span><p>Every tensor library is built on a struct that is nothing but data. In ggml, the C library under llama.cpp, it is <code>struct ggml_tensor</code>, and its key members are the four things that turn a flat block of numbers into a tensor: the element type (<code>type</code>), the number of elements along each dimension (<code>ne</code>, the shape), the distance in bytes between neighbours along each dimension (<code>nb</code>, the strides of Week 1's chapter 7), and where the numbers are (<code>data</code>). It is this chapter's <code>Picture</code> grown up: a small header that says what the bytes mean, with the bytes elsewhere. The second twin is smaller. A weight in llama.cpp's Q8_0 format is stored in blocks, and each block is a struct, <code>block_q8_0</code>: one 2-byte scale followed by 32 one-byte integers, 34 bytes for 32 weights, about 1.06 bytes per weight instead of 4 for a <code>float</code>. A weight matrix is a long array of those structs, side by side, like your vector of readings. You build that struct in week 9 and compute with arrays of it in week 19; <code>sizeof</code> and padding matter on both days.</p></div>
+
+<h2>Check yourself</h2>
+<div class="quiz">
+<div class="q"><p>What does <code>Date d{2026, 11};</code> leave in <code>d.day</code>, with this chapter's <code>Date</code>?</p><details class="answer"><summary>Answer</summary><p>1, its default value. Positional braces fill the first members in declaration order, and the members they do not reach keep their defaults.</p></details></div>
+<div class="q"><p><code>struct Rgb { int red = 0; int green = 0; int blue = 0; };</code> What is <code>sizeof(Rgb)</code>, and at which byte does <code>blue</code> start?</p><details class="answer"><summary>Answer</summary><p>12 bytes: three 4-byte <code>int</code>s side by side in declaration order, with no padding, because each already starts at a multiple of 4. <code>blue</code> starts at byte 8.</p></details></div>
+<div class="q"><p><code>struct Card { char suit = 'S'; int rank = 1; };</code> holds 5 bytes of members, but <code>sizeof(Card)</code> is 8. Where are the other 3 bytes, and why?</p><details class="answer"><summary>Answer</summary><p>They are padding between <code>suit</code> (byte 0) and <code>rank</code> (byte 4). The compiler places a 4-byte <code>int</code> at an offset that is a multiple of 4, because the processor reads it fastest, on some machines only, at such an address.</p></details></div>
+<div class="q"><p>After <code>void set_day(Date d, int day) { d.day = day; }</code> and the call <code>set_day(today, 1);</code>, what is <code>today.day</code>? Give two ways to really change it.</p><details class="answer"><summary>Answer</summary><p>Unchanged: <code>d</code> is a copy. Either take a reference, <code>void set_day(Date&amp; d, int day)</code>, or return the changed copy, <code>Date with_day(Date d, int day) { d.day = day; return d; }</code>, and write <code>today = with_day(today, 1);</code>.</p></details></div>
+<div class="q"><p><code>std::println("{}", today);</code> fails with a long error. What is it really saying, and what do you write instead?</p><details class="answer"><summary>Answer</summary><p>There is no formatter for your type: <code>std::println</code> knows numbers, characters, <code>bool</code>s and strings, not <code>Date</code>. Print the members, or write a function such as <code>to_text(Date)</code> that returns a <code>std::string</code> and print that.</p></details></div>
+<div class="q"><p>Which line makes <code>a == b</code> compile for two <code>Date</code>s, where does it go, and what does the comparison check?</p><details class="answer"><summary>Answer</summary><p><code>bool operator==(const Date&amp;) const = default;</code>, inside the struct with the members. The compiler compares <code>year</code> with <code>year</code>, <code>month</code> with <code>month</code> and <code>day</code> with <code>day</code>, and the answer is <code>true</code> only if every pair is equal. <code>!=</code> comes with it; <code>&lt;</code> does not.</p></details></div>
+<div class="q"><p>You forget the <code>;</code> after a struct's closing brace and the error points at <code>int main() {</code>. Why that line?</p><details class="answer"><summary>Answer</summary><p>Because a variable may be named right after the brace (<code>struct Date { ... } today;</code>), so the compiler cannot know the statement is broken until it reaches the next line. It reports the problem there and asks for the <code>;</code> after the brace.</p></details></div>
+<div class="q"><p>Why is <code>sizeof</code> of <code>struct Reading { Date date; double celsius = 0.0; };</code> 24 and not 20, and how do you reach the month of a reading <code>r</code>?</p><details class="answer"><summary>Answer</summary><p>The <code>Date</code> takes bytes 0 to 11; a <code>double</code> must start at a multiple of 8, so <code>celsius</code> takes bytes 16 to 23, after 4 bytes of padding. The month is <code>r.date.month</code>.</p></details></div>
+</div>
+
+<h2>What you can do now</h2>
+<ul>
+<li>Explain, with the swapped date, why values that belong together should be one type.</li>
+<li>Define a struct with a default value for every member, create variables of it, and read and change members with <code>.</code>.</li>
+<li>Build values with positional braces and with designated initialisers, and say which mistakes braces refuse (too many values, narrowing) and which they do not (a 13th month).</li>
+<li>Predict <code>sizeof</code> a small struct, find its padding, and explain why a struct holding a vector stays small.</li>
+<li>Pass structs by value, return them, and choose <code>const&amp;</code> for structs that hold containers.</li>
+<li>Print a struct with a <code>to_text</code>-style function, and make <code>==</code> work with the defaulted operator line.</li>
+<li>Nest structs, keep them in a <code>std::vector</code>, and loop over them by <code>const&amp;</code>.</li>
+<li>Read <code>Point</code> and <code>Game</code> in <code>snake.hpp</code> line by line, and say which chapter teaches each member's type.</li>
+</ul>
+</main>
+</body>
+</html>
